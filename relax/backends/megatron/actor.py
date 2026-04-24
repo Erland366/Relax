@@ -66,16 +66,6 @@ logging.getLogger("megatron").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-def _log_train_boundary(message: str, rollout_id: int, **fields) -> None:
-    if not is_megatron_main_rank():
-        return
-    field_text = ", ".join(f"{key}={value}" for key, value in fields.items())
-    if field_text:
-        logger.info(f"train_actor rollout={rollout_id}: {message} ({field_text})")
-    else:
-        logger.info(f"train_actor rollout={rollout_id}: {message}")
-
-
 class MegatronTrainRayActor(TrainRayActor):
     def init(
         self,
@@ -502,11 +492,6 @@ class MegatronTrainRayActor(TrainRayActor):
     def train_actor(self, rollout_id: int, rollout_data: RolloutBatch) -> None:
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
-        _log_train_boundary(
-            "prepared data iterator",
-            rollout_id,
-            num_microbatches=num_microbatches,
-        )
 
         if self.args.use_rollout_routing_replay:
             self.fill_routing_replay(data_iterator, num_microbatches, rollout_data)
@@ -566,28 +551,16 @@ class MegatronTrainRayActor(TrainRayActor):
 
                 # Calculate adv and returns. Need to performed before training (instead of on the fly),
                 # because we may need normalize the whole rollout.
-                _log_train_boundary("computing advantages and returns", rollout_id)
                 compute_advantages_and_returns(self.args, rollout_data)
-                _log_train_boundary("advantages and returns ready", rollout_id)
 
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args)
 
-            _log_train_boundary("logging rollout stats", rollout_id)
             log_rollout_data(rollout_id, self.args, rollout_data)
-            _log_train_boundary("rollout stats logged", rollout_id)
-
-            # Persist the exact batch before entering native train kernels so a
-            # failing step-0 ROCm crash still leaves replayable inputs behind.
-            train_dump_utils.save_debug_train_data(
-                self.args, rollout_id=rollout_id, rollout_data=rollout_data, tokenizer=self.tokenizer
-            )
-            _log_train_boundary("saved debug train batch", rollout_id)
 
             # Train
             if self.args.use_routing_replay:
                 os.environ["ROUTING_REPLAY_STAGE"] = "replay_backward"
-            _log_train_boundary("entering megatron train", rollout_id)
             with timer("actor_train"):
                 train(
                     rollout_id,
@@ -597,7 +570,6 @@ class MegatronTrainRayActor(TrainRayActor):
                     data_iterator,
                     num_microbatches,
                 )
-            _log_train_boundary("megatron train completed", rollout_id)
 
             self.prof.step(rollout_id=rollout_id)
 

@@ -334,7 +334,7 @@ def post_process_env(args, env):
             log_env[key] = "<redacted>"
         else:
             log_env[key] = value
-    logger.info(f"Ray runtime env: {log_env}")
+    logger.debug(f"Ray runtime env: {log_env}")
     return env
 
 
@@ -424,8 +424,7 @@ async def transfer_batch_to_data_system(
         global CURRENT_ROLLOUT_BATCH
         CURRENT_ROLLOUT_BATCH.extend(batch_samples)
         rollout_batch = convert_samples_to_train_data(args, batch_samples)
-        logger.info(f"Prepared rollout batch {batch_count} with {rollout_batch.numel()} samples for transfer")
-        logger.info(f"Transferring batch rollout_batch: {rollout_batch}")
+        logger.debug(f"Prepared rollout batch {batch_count} with {rollout_batch.numel()} samples for transfer")
         metadata = await data_system_client.async_put(data=rollout_batch, partition_id=f"train_{rollout_id}")
 
         # Store total_lengths in custom_meta so that the TransferQueue sampler
@@ -437,7 +436,7 @@ async def transfer_batch_to_data_system(
                 metadata.update_custom_meta(custom_meta)
                 await data_system_client.async_set_custom_meta(metadata)
 
-        logger.info(f"Batch {batch_count} transferred successfully for rollout_id: {rollout_id}")
+        logger.debug(f"Batch {batch_count} transferred successfully for rollout_id: {rollout_id}")
     except Exception as e:
         logger.error(f"Error transferring batch {batch_count}: {e}")
         raise

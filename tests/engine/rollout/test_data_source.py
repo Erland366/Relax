@@ -8,7 +8,6 @@ restructuring.
 Run with: pytest tests/engine/rollout/test_data_source.py -v
 """
 
-import builtins
 import json
 import os
 import tempfile
@@ -159,48 +158,6 @@ class TestDataSourceIntegration:
         data_source_module.RolloutDataSource(args)
 
         assert events == ["blocker", "enter", "tokenizer", "processor", "dataset", "exit"]
-
-    def test_trace_megatron_imports_context_noops_when_disabled(self, monkeypatch):
-        from relax.engine.rollout import data_source as data_source_module
-
-        records = []
-
-        def fake_error(message, *args):
-            records.append(message % args)
-
-        monkeypatch.delenv(data_source_module._TRACE_MEGATRON_IMPORTS_ENV_VAR, raising=False)
-        monkeypatch.setattr(data_source_module.logger, "error", fake_error)
-
-        with data_source_module._trace_megatron_imports_during_data_source_init():
-            __import__("math")
-
-        assert records == []
-
-    def test_trace_megatron_imports_context_logs_matching_imports(self, monkeypatch):
-        from relax.engine.rollout import data_source as data_source_module
-
-        records = []
-
-        def fake_error(message, *args):
-            records.append(message % args)
-
-        original_import = builtins.__import__
-
-        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-            if name == "megatron.core":
-                raise ModuleNotFoundError(name)
-            return original_import(name, globals, locals, fromlist, level)
-
-        monkeypatch.setenv(data_source_module._TRACE_MEGATRON_IMPORTS_ENV_VAR, "1")
-        monkeypatch.setattr(data_source_module.logger, "error", fake_error)
-        monkeypatch.setattr(data_source_module.builtins, "__import__", fake_import)
-
-        with pytest.raises(ModuleNotFoundError):
-            with data_source_module._trace_megatron_imports_during_data_source_init():
-                __import__("megatron.core")
-
-        assert len(records) == 1
-        assert "Megatron import traced during RolloutDataSource init: megatron.core" in records[0]
 
     def test_build_data_source_config_keeps_only_rollout_fields(self):
         from argparse import Namespace
