@@ -23,7 +23,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = get_logger(__name__)
 
 
-@ray.remote
+@ray.remote(enable_task_events=False)
 class GenRMManager:
     """Manager for GenRM engines.
 
@@ -136,7 +136,7 @@ def init_genrm_engines(args, pg, all_genrm_engines, engine_addr_and_ports=None):
 
     pg, reordered_bundle_indices, reordered_gpu_ids = pg
 
-    GenRMRayActor = ray.remote(GenRMEngine)
+    GenRMRayActor = ray.remote(enable_task_events=False)(GenRMEngine)
 
     genrm_engines = []
     for i in range(num_engines):

@@ -15,6 +15,9 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        megatron_bridge_utils.install_rocm_bridge_modelopt_shims()
+        megatron_bridge_utils.install_rocm_bridge_peft_shims()
+        megatron_bridge_utils.install_rocm_bridge_qwen3_local_mapping_patch()
         from megatron.bridge import AutoBridge
 
         self._bridge = AutoBridge.from_hf_pretrained(self.args.hf_checkpoint, trust_remote_code=True)

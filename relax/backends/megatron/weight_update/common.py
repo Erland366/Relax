@@ -41,6 +41,9 @@ def all_gather_param(args, name: str, param: torch.nn.Parameter) -> torch.Tensor
         tp_size = mpu.get_tensor_model_parallel_world_size()
         tp_group = mpu.get_tensor_model_parallel_group()
 
+    if tp_size == 1:
+        return param.data
+
     # NOTE(wuhuan): qwen3.5 GDN
     if "self_attention.conv1d.weight" in name:
         config = get_hf_config(args.hf_checkpoint).text_config
@@ -144,6 +147,11 @@ def all_gather_params_async(
             else:
                 tp_size = mpu.get_tensor_model_parallel_world_size()
                 tp_group = mpu.get_tensor_model_parallel_group()
+
+            if tp_size == 1:
+                gather_tasks.append((info, param.data, None, None, None))
+                handles.append(None)
+                continue
 
             param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
             handle = dist.all_gather(param_partitions, param.data, group=tp_group, async_op=True)

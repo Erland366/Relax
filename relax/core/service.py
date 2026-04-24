@@ -2,7 +2,9 @@
 
 import threading
 import time
+from enum import Enum
 from argparse import Namespace
+from copy import deepcopy
 from typing import Any, Optional
 
 import ray
@@ -17,6 +19,30 @@ from relax.utils.utils import get_serve_url, recovery_load_path
 
 
 logger = get_logger(__name__)
+
+
+def build_service_config(role: str, config: Namespace) -> Namespace:
+    if role != "rollout":
+        return config
+
+    return Namespace(
+        **{
+            key: value.value if isinstance(value, Enum) else value
+            for key, value in vars(config).items()
+        }
+    )
+
+
+def build_service_runtime_env(role: str, config: Namespace, runtime_env: Optional[dict]) -> Optional[dict]:
+    service_runtime_env = {"env_vars": {}} if runtime_env is None else deepcopy(runtime_env)
+
+    if "env_vars" not in service_runtime_env or not isinstance(service_runtime_env["env_vars"], dict):
+        service_runtime_env["env_vars"] = {}
+
+    if role == "rollout" and getattr(config, "sglang_model_impl", "").lower() == "transformers":
+        service_runtime_env["env_vars"]["RELAX_SGLANG_BLOCK_MEGATRON_IMPORTS"] = "1"
+
+    return service_runtime_env
 
 
 class Service:
@@ -76,13 +102,15 @@ class Service:
         Args:
             pgs: Placement group tuple or None.
         """
+        service_config = build_service_config(self.role, self.config)
+        service_runtime_env = build_service_runtime_env(self.role, self.config, self.runtime_env)
         if self.data_source is not None:
-            self.service = self.cls.options(ray_actor_options={"runtime_env": self.runtime_env}).bind(
-                self.healthy, pgs, self.config, data_source=self.data_source, runtime_env=self.runtime_env
+            self.service = self.cls.options(ray_actor_options={"runtime_env": service_runtime_env}).bind(
+                self.healthy, pgs, service_config, data_source=self.data_source, runtime_env=service_runtime_env
             )
         else:
-            self.service = self.cls.options(ray_actor_options={"runtime_env": self.runtime_env}).bind(
-                self.healthy, pgs, self.num_gpus, self.config, self.role, runtime_env=self.runtime_env
+            self.service = self.cls.options(ray_actor_options={"runtime_env": service_runtime_env}).bind(
+                self.healthy, pgs, self.num_gpus, service_config, self.role, runtime_env=service_runtime_env
             )
         logger.info(f"[{self.role}] Deploying service...")
         self.handle = serve.run(self.service, name=self.role, route_prefix=f"/{self.role}")

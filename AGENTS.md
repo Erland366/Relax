@@ -4,6 +4,19 @@ Relax 是一个基于 Ray Serve 的大模型强化学习训练框架，支持 Me
 
 **Tech stack**: Python 3.8+ · PyTorch · Megatron · SGLang · Ray / Ray Serve
 
+## Project Goal For This Fork
+
+这个仓库从 `../relax` 拆出，原因是原项目上已经连续调试数天但仍未跑通。
+当前 fork 的主目标不是继续在原环境上堆补丁，而是隔离变量，优先验证问题是否来自现有 Megatron 路径本身。
+
+因此，这个项目当前的核心方向是：
+
+- 在 AMD / ROCm 机器上尝试使用 ROCm 版本的 Megatron（例如 `ROCm/Megatron-LM`）替代原先的 Megatron 路径
+- 保持与原 `relaxrl` 环境隔离，避免为 ROCm Megatron bring-up 污染已有可用环境
+- 优先回答一个具体问题：Relax 在 AMD 机器上跑不通，根因是否在 Megatron 集成层，而不是 Ray / SGLang / 训练脚本的其他部分
+
+除非用户明确要求，否则与这个验证目标无关的改动应视为低优先级。
+
 ## Project Structure
 
 ```

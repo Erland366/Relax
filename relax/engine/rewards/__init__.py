@@ -25,6 +25,11 @@ logger = get_logger(__name__)
 _shared_session: aiohttp.ClientSession | None = None
 
 
+def _compute_dapo_reward(response: str, label, metadata: dict | None = None) -> float:
+    del metadata
+    return compute_score_dapo(response, label)
+
+
 def _get_shared_session() -> aiohttp.ClientSession:
     global _shared_session
     if _shared_session is None or _shared_session.closed:
@@ -147,13 +152,18 @@ class RewardExecutor:
         "dapo-genrm": lambda args, sample: async_compute_score_genrm(args, sample),
     }
 
+    # Cheap local reward functions should stay in-process so rollout does not
+    # turn a small CPU check into dozens of Ray actor RPCs.
+    _LOCAL_SYNC_RM_DISPATCH = {
+        "dapo": _compute_dapo_reward,
+    }
+
     # CPU-bound / thread-unsafe rm_types dispatched to the Ray worker pool.
     _SYNC_RM_TYPES = frozenset(
         {
             "deepscaler",
             "openr1mm",
             "multiple_choice",
-            "dapo",
             "math",
             "f1",
             "gpqa",
@@ -190,6 +200,10 @@ class RewardExecutor:
             async_handler = self._ASYNC_RM_DISPATCH.get(rm_type)
             if async_handler is not None:
                 return await async_handler(args, sample)
+
+            local_sync_handler = self._LOCAL_SYNC_RM_DISPATCH.get(rm_type)
+            if local_sync_handler is not None:
+                return await asyncio.to_thread(local_sync_handler, response, label, metadata)
 
             # --- sync rm types: dispatch to worker pool ------------------
             # Default to sync path for any non-empty rm_type not in async dispatch

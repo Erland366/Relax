@@ -1,0 +1,46 @@
+{
+  "domain": "research",
+  "version": "1.0.0",
+  "created": "2026-04-15",
+  "updated": "2026-04-24",
+  "skills": {
+    "domain-advisor": {
+      "type": "core",
+      "description": "Plan experiments using past knowledge"
+    },
+    "domain-retrospective": {
+      "type": "core",
+      "description": "Document findings as reusable skills"
+    },
+    "megatron-bridge-rocm-overrides": {
+      "type": "result",
+      "description": "Check ROCm-sensitive Megatron-Bridge overrides and fallback behavior"
+    },
+    "rocm-inductor-triton-cluster-dims": {
+      "type": "result",
+      "description": "Diagnose later-stage ROCm TorchInductor/Triton cluster_dims failures"
+    },
+    "rocm-relax-bringup": {
+      "type": "result",
+      "description": "Bring Relax on MI210 from ROCm startup failures into repeated real training steps"
+    },
+    "ray-rollout-import-isolation": {
+      "type": "result",
+      "description": "Keep Megatron out of Ray Serve rollout and control-plane startup until SGLang transformers is ready"
+    },
+    "megatron-hybrid-device-optimizer-rocm": {
+      "type": "result",
+      "description": "Debug and preserve the bf16 ROCm HybridDeviceOptimizer CPU-offload path"
+    },
+    "ray-stale-live-state-triage": {
+      "type": "result",
+      "description": "Distinguish a genuinely running Relax job from a stale Ray live state after the actor has died"
+    }
+  },
+  "paths": {
+    "reports": "training_reports/",
+    "experiment_log": "references/experiment-log.md",
+    "troubleshooting": "references/troubleshooting.md",
+    "templates": "templates/"
+  }
+}

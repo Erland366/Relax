@@ -231,6 +231,33 @@ def _resolve_to_ip(addr: str) -> str:
         return "127.0.0.1"
 
 
+def _append_no_proxy_entries(value: str | None, entries: list[str]) -> str:
+    combined = []
+    seen = set()
+    for item in [value or "", *entries]:
+        for part in item.split(","):
+            candidate = part.strip()
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            combined.append(candidate)
+    return ",".join(combined)
+
+
+def _get_local_no_proxy_entries() -> list[str]:
+    entries = ["127.0.0.1", "localhost", "::1"]
+
+    master_addr = os.getenv("MASTER_ADDR")
+    if master_addr:
+        entries.extend([master_addr, _resolve_to_ip(master_addr)])
+
+    host_name = socket.gethostname()
+    if host_name:
+        entries.extend([host_name, _resolve_to_ip(host_name)])
+
+    return list(dict.fromkeys(entry for entry in entries if entry))
+
+
 def post_process_env(args, env):
     """Set and return environment variables required for rollout workers.
 
@@ -242,10 +269,48 @@ def post_process_env(args, env):
     if "env_vars" not in env or not isinstance(env["env_vars"], dict):
         env["env_vars"] = {}
 
+    # Treat configs/env.yaml as default values and allow explicit shell env
+    # vars to override the same keys for host-specific runtime fixes.
+    for key in list(env["env_vars"]):
+        if key in os.environ and os.environ[key] != "":
+            env["env_vars"][key] = os.environ[key]
+
+    # Ray runtime_env only receives keys explicitly listed here. Forward the
+    # shell proxy configuration so external services such as W&B keep the same
+    # network reachability inside Ray jobs and Serve replicas.
+    for key in (
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ):
+        value = os.environ.get(key)
+        if value:
+            env["env_vars"][key] = value
+
+    # Ray only reads these runtime control knobs from process environment at
+    # worker startup, so forward them explicitly when debugging cluster-level
+    # stalls from the shell launcher.
+    for key in (
+        "RAY_task_events_report_interval_ms",
+        "RAY_grpc_client_keepalive_time_ms",
+        "RAY_grpc_client_keepalive_timeout_ms",
+    ):
+        value = os.environ.get(key)
+        if value:
+            env["env_vars"][key] = value
+
+    no_proxy_entries = _get_local_no_proxy_entries()
+    env["env_vars"]["no_proxy"] = _append_no_proxy_entries(env["env_vars"].get("no_proxy"), no_proxy_entries)
+    env["env_vars"]["NO_PROXY"] = _append_no_proxy_entries(env["env_vars"].get("NO_PROXY"), no_proxy_entries)
+
     env["env_vars"]["TQ_PRE_ALLOC_SAMPLE_NUM"] = str(args.rollout_batch_size * args.n_samples_per_prompt)
     env["env_vars"]["TQ_ZERO_COPY_SERIALIZATION"] = "true"
     env["env_vars"]["SLIME_HOST_IP"] = _resolve_to_ip(os.getenv("MASTER_ADDR", "127.0.0.1"))
-
     if os.getenv("RAY_DEBUG", "0") == "1":
         env["env_vars"]["RAY_DEBUG_POST_MORTEM"] = "1"
         env["env_vars"]["RAY_DEBUG"] = "1"
@@ -262,7 +327,14 @@ def post_process_env(args, env):
     python_paths = list(dict.fromkeys(python_paths))
 
     env["env_vars"]["PYTHONPATH"] = ":".join(python_paths)
-    logger.info(f"Ray runtime env: {env['env_vars']}")
+
+    log_env = {}
+    for key, value in env["env_vars"].items():
+        if "proxy" in key.lower():
+            log_env[key] = "<redacted>"
+        else:
+            log_env[key] = value
+    logger.info(f"Ray runtime env: {log_env}")
     return env
 
 

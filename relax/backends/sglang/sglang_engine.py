@@ -1,24 +1,26 @@
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 
 import dataclasses
+import importlib
+import importlib.abc
 import ipaddress
 import multiprocessing
 import os
 import signal
+import sys
 import threading
 import time
-from typing import Optional
+import types
+from builtins import __import__ as _builtin_import
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Optional
 from urllib.parse import quote
 
 import ray
 import requests
-import sglang_router
 from packaging.version import parse
-from sglang.srt.server_args import ServerArgs
-from sglang.srt.utils import kill_process_tree
 from urllib3.exceptions import NewConnectionError
 
-from relax.distributed.checkpoint_service.client.engine import create_client
 from relax.distributed.ray.ray_actor import RayActor
 from relax.utils.async_utils import run
 from relax.utils.http_utils import get_host_info
@@ -26,6 +28,295 @@ from relax.utils.logging_utils import get_logger
 
 
 logger = get_logger(__name__)
+
+
+_MEGATRON_ISOLATION_ENV_VAR = "RELAX_SGLANG_BLOCK_MEGATRON_IMPORTS"
+_PROCESS_MEGATRON_IMPORT_BLOCKER = None
+_PROCESS_MEGATRON_PATH_PRUNED = False
+_PROCESS_MEGATRON_IMPORTS_BLOCKED = False
+_MEGATRON_BLOCKED_PREFIXES = ("megatron.core",)
+
+
+if TYPE_CHECKING:
+    from sglang.srt.server_args import ServerArgs
+
+
+def _get_server_args_cls():
+    from sglang.srt.server_args import ServerArgs
+
+    return ServerArgs
+
+
+def _get_sglang_router():
+    import sglang_router
+
+    return sglang_router
+
+
+def _kill_process_tree(pid: int) -> None:
+    from sglang.srt.utils import kill_process_tree
+
+    kill_process_tree(pid)
+
+
+def _create_checkpoint_client(**kwargs):
+    from relax.distributed.checkpoint_service.client.engine import create_client
+
+    return create_client(**kwargs)
+
+
+def _is_megatron_checkout_path(path_entry: str) -> bool:
+    normalized = os.path.normpath(path_entry)
+    parts = normalized.split(os.sep)
+    return "Megatron-LM" in parts
+
+
+def _filtered_pythonpath_without_megatron(pythonpath: str | None) -> str | None:
+    if not pythonpath:
+        return pythonpath
+
+    path_entries = pythonpath.split(os.pathsep)
+    filtered_entries = [entry for entry in path_entries if not _is_megatron_checkout_path(entry)]
+    return os.pathsep.join(filtered_entries)
+
+
+def _env_requests_megatron_isolation() -> bool:
+    return os.environ.get(_MEGATRON_ISOLATION_ENV_VAR) == "1"
+
+
+def _remove_megatron_from_current_process(enabled: bool) -> bool:
+    if not enabled:
+        return False
+
+    changed = False
+
+    original_pythonpath = os.environ.get("PYTHONPATH")
+    filtered_pythonpath = _filtered_pythonpath_without_megatron(original_pythonpath)
+    if filtered_pythonpath != original_pythonpath:
+        if filtered_pythonpath:
+            os.environ["PYTHONPATH"] = filtered_pythonpath
+        else:
+            os.environ.pop("PYTHONPATH", None)
+        changed = True
+
+    original_sys_path = list(sys.path)
+    filtered_sys_path = [entry for entry in original_sys_path if not _is_megatron_checkout_path(entry)]
+    if filtered_sys_path != original_sys_path:
+        sys.path[:] = filtered_sys_path
+        changed = True
+
+    return changed
+
+
+def _prune_megatron_import_state(enabled: bool, *, source: str) -> bool:
+    global _PROCESS_MEGATRON_PATH_PRUNED
+
+    if not enabled or _PROCESS_MEGATRON_PATH_PRUNED:
+        return False
+
+    changed = _remove_megatron_from_current_process(True)
+
+    original_meta_path = list(sys.meta_path)
+    original_path_hooks = list(sys.path_hooks)
+    original_sys_path = list(sys.path)
+    original_path_importer_cache = dict(sys.path_importer_cache)
+    blocked_modules = [
+        name for name in list(sys.modules) if any(name == prefix or name.startswith(f"{prefix}.") for prefix in _MEGATRON_BLOCKED_PREFIXES)
+    ]
+    editable_finder_modules = [
+        name
+        for name in list(sys.modules)
+        if name.startswith("__editable___megatron_core_") and name.endswith("_finder")
+    ]
+
+    for name in blocked_modules + editable_finder_modules:
+        sys.modules.pop(name, None)
+
+    filtered_meta_path = [finder for finder in original_meta_path if not _is_megatron_editable_finder(finder)]
+    if filtered_meta_path != original_meta_path:
+        sys.meta_path[:] = filtered_meta_path
+        changed = True
+
+    filtered_path_hooks = [hook for hook in original_path_hooks if not _is_megatron_editable_finder(hook)]
+    if filtered_path_hooks != original_path_hooks:
+        sys.path_hooks[:] = filtered_path_hooks
+        changed = True
+
+    filtered_sys_path = [entry for entry in original_sys_path if not _is_megatron_editable_path_entry(entry)]
+    if filtered_sys_path != original_sys_path:
+        sys.path[:] = filtered_sys_path
+        changed = True
+
+    filtered_importer_cache = {
+        key: value for key, value in original_path_importer_cache.items() if not _is_megatron_editable_path_entry(key)
+    }
+    if filtered_importer_cache != original_path_importer_cache:
+        sys.path_importer_cache.clear()
+        sys.path_importer_cache.update(filtered_importer_cache)
+        changed = True
+
+    if blocked_modules or editable_finder_modules:
+        changed = True
+
+    if changed:
+        logger.info("Removed Megatron-LM from %s PYTHONPATH and sys.path", source)
+    _PROCESS_MEGATRON_PATH_PRUNED = True
+    return True
+
+
+def _install_process_megatron_isolation(enabled: bool, *, source: str, block_imports: bool) -> bool:
+    global _PROCESS_MEGATRON_IMPORT_BLOCKER, _PROCESS_MEGATRON_IMPORTS_BLOCKED
+
+    changed = _prune_megatron_import_state(enabled, source=source)
+    if not enabled or not block_imports or _PROCESS_MEGATRON_IMPORTS_BLOCKED:
+        return changed
+
+    _PROCESS_MEGATRON_IMPORT_BLOCKER = _blocked_megatron_imports(True)
+    _PROCESS_MEGATRON_IMPORT_BLOCKER.__enter__()
+    logger.info("Installed Megatron import blocker in %s", source)
+    _PROCESS_MEGATRON_IMPORTS_BLOCKED = True
+    return True
+
+
+def _is_megatron_editable_finder(obj: object) -> bool:
+    module_name = getattr(type(obj), "__module__", "") or getattr(obj, "__module__", "")
+    return module_name.startswith("__editable___megatron_core_")
+
+
+def _is_megatron_editable_path_entry(path_entry: object) -> bool:
+    if not isinstance(path_entry, str):
+        return False
+    return "__editable__.megatron_core-" in path_entry and ".__path_hook__" in path_entry
+
+
+def _is_blocked_megatron_module(fullname: str) -> bool:
+    return any(fullname == prefix or fullname.startswith(f"{prefix}.") for prefix in _MEGATRON_BLOCKED_PREFIXES)
+
+
+class _MegatronImportBlocker(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if _is_blocked_megatron_module(fullname):
+            raise ModuleNotFoundError(f"Blocked import of {fullname} for SGLang transformers backend")
+        return None
+
+
+@contextmanager
+def _blocked_megatron_imports(enabled: bool):
+    if not enabled:
+        yield
+        return
+
+    blocker = _MegatronImportBlocker()
+    original_meta_path = list(sys.meta_path)
+    original_path_hooks = list(sys.path_hooks)
+    original_sys_path = list(sys.path)
+    original_path_importer_cache = dict(sys.path_importer_cache)
+    original_import = _builtin_import
+    original_import_module = importlib.import_module
+    blocked_modules = {
+        name: module
+        for name, module in list(sys.modules.items())
+        if _is_blocked_megatron_module(name)
+    }
+    editable_finder_modules = {
+        name: module
+        for name, module in list(sys.modules.items())
+        if name.startswith("__editable___megatron_core_") and name.endswith("_finder")
+    }
+    for name in blocked_modules:
+        sys.modules.pop(name, None)
+    for name in editable_finder_modules:
+        sys.modules.pop(name, None)
+
+    original_megatron_module = sys.modules.get("megatron")
+    megatron_stub = types.ModuleType("megatron")
+    megatron_stub.__path__ = []
+    sys.modules["megatron"] = megatron_stub
+
+    def _blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if _is_blocked_megatron_module(name):
+            raise ModuleNotFoundError(f"Blocked import of {name} for SGLang transformers backend")
+        return original_import(name, globals, locals, fromlist, level)
+
+    def _blocked_import_module(name, package=None):
+        if _is_blocked_megatron_module(name):
+            raise ModuleNotFoundError(f"Blocked import of {name} for SGLang transformers backend")
+        return original_import_module(name, package)
+
+    import builtins
+
+    builtins.__import__ = _blocked_import
+    importlib.import_module = _blocked_import_module
+
+    sys.meta_path[:] = [finder for finder in original_meta_path if not _is_megatron_editable_finder(finder)]
+    sys.path_hooks[:] = [hook for hook in original_path_hooks if not _is_megatron_editable_finder(hook)]
+    sys.path[:] = [entry for entry in original_sys_path if not _is_megatron_editable_path_entry(entry)]
+    sys.path_importer_cache.clear()
+    sys.path_importer_cache.update(
+        {
+            key: value
+            for key, value in original_path_importer_cache.items()
+            if not _is_megatron_editable_path_entry(key)
+        }
+    )
+    sys.meta_path.insert(0, blocker)
+    try:
+        yield
+    finally:
+        import builtins
+
+        builtins.__import__ = original_import
+        importlib.import_module = original_import_module
+        sys.meta_path[:] = original_meta_path
+        sys.path_hooks[:] = original_path_hooks
+        sys.path[:] = original_sys_path
+        sys.path_importer_cache.clear()
+        sys.path_importer_cache.update(original_path_importer_cache)
+        if original_megatron_module is None:
+            sys.modules.pop("megatron", None)
+        else:
+            sys.modules["megatron"] = original_megatron_module
+        sys.modules.update(blocked_modules)
+        sys.modules.update(editable_finder_modules)
+
+
+@contextmanager
+def _temporary_pythonpath_without_megatron(enabled: bool):
+    """Temporarily remove local Megatron-LM checkouts from ``PYTHONPATH``.
+
+    SGLang's Transformers backend should not accidentally discover a local
+    Megatron checkout and switch into Megatron-FSDP code paths during rollout
+    engine startup. Because the SGLang server is launched via Python
+    ``multiprocessing``, we must filter both ``PYTHONPATH`` and the current
+    interpreter's ``sys.path`` so the spawned child cannot inherit the local
+    checkout through either mechanism.
+    """
+    if not enabled:
+        yield
+        return
+
+    original_pythonpath = os.environ.get("PYTHONPATH")
+    original_sys_path = list(sys.path)
+
+    changed = _remove_megatron_from_current_process(True)
+
+    if changed:
+        logger.info("Removed Megatron-LM from PYTHONPATH and sys.path for SGLang transformers backend")
+    try:
+        yield
+    finally:
+        if original_pythonpath is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = original_pythonpath
+        sys.path[:] = original_sys_path
+
+
+_install_process_megatron_isolation(
+    _env_requests_megatron_isolation(),
+    source="sglang_engine module import",
+    block_imports=True,
+)
 
 
 def get_base_gpu_id(args, rank):
@@ -60,41 +351,58 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
 
 
 def _patched_run_scheduler_process(*args, **kwargs):
-    """Wrapper around SGLang's ``run_scheduler_process`` that applies the async
-    D→H monkey-patch before the scheduler creates the model runner (and thus
-    the routed-experts capturer).
+    """Run the scheduler entrypoint under the same Megatron isolation used by
+    the top-level SGLang server process.
 
-    This function is used as ``run_scheduler_process_func`` when ``--optimize-
-    routing-replay`` is enabled.  It runs inside the spawned scheduler
-    subprocess.
+    SGLang launches scheduler workers via ``multiprocessing`` with the
+    ``spawn`` start method, so those workers start in fresh interpreters that
+    do not inherit the parent process' temporary import blocker.  If we only
+    guard the top-level ``launch_server`` call, the scheduler can still import
+    the editable ``megatron_core`` package from the environment and switch into
+    Megatron-FSDP code paths.  Apply the blocker again here before importing
+    SGLang's scheduler module.
     """
-    from relax.backends.sglang.routing_replay_patch import apply_patch
+    server_args = args[0]
+    enabled = server_args.model_impl.lower() == "transformers"
+    optimize_routing_replay = os.environ.get("RELAX_OPTIMIZE_ROUTING_REPLAY", "0") == "1"
 
-    apply_patch()
+    with _blocked_megatron_imports(enabled), _temporary_pythonpath_without_megatron(enabled):
+        if optimize_routing_replay:
+            from relax.backends.sglang.routing_replay_patch import apply_patch
 
-    from sglang.srt.managers.scheduler import run_scheduler_process
+            apply_patch()
 
-    return run_scheduler_process(*args, **kwargs)
+        from sglang.srt.managers.scheduler import run_scheduler_process
+
+        return run_scheduler_process(*args, **kwargs)
 
 
-def _launch_server_with_patch(server_args: ServerArgs):
+def _launch_server_with_patch(server_args):
     """Top-level picklable target for ``multiprocessing.Process`` when the
     async D→H optimisation is enabled.
 
     Passes ``_patched_run_scheduler_process`` into ``launch_server`` so that
     every scheduler subprocess applies the monkey-patch.
     """
-    from sglang.srt.entrypoints.http_server import launch_server
+    enabled = server_args.model_impl.lower() == "transformers"
+    with _blocked_megatron_imports(enabled), _temporary_pythonpath_without_megatron(enabled):
+        from sglang.srt.entrypoints.http_server import launch_server
 
-    launch_server(
-        server_args,
-        run_scheduler_process_func=_patched_run_scheduler_process,
-    )
+        launch_server(
+            server_args,
+            run_scheduler_process_func=_patched_run_scheduler_process,
+        )
 
 
-def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
-    from sglang.srt.entrypoints.http_server import launch_server
+def _launch_server(server_args):
+    enabled = server_args.model_impl.lower() == "transformers"
+    with _blocked_megatron_imports(enabled), _temporary_pythonpath_without_megatron(enabled):
+        from sglang.srt.entrypoints.http_server import launch_server
 
+        launch_server(server_args, run_scheduler_process_func=_patched_run_scheduler_process)
+
+
+def launch_server_process(server_args) -> multiprocessing.Process:
     multiprocessing.set_start_method("spawn", force=True)
     server_args.host = server_args.host.strip("[]")
 
@@ -103,19 +411,30 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
         logger.info("Launching SGLang server with async D→H routing-replay patch")
         target_func = _launch_server_with_patch
     else:
-        target_func = launch_server
+        target_func = _launch_server
 
-    p = multiprocessing.Process(target=target_func, args=(server_args,))
-    p.start()
+    with _temporary_pythonpath_without_megatron(server_args.model_impl.lower() == "transformers"):
+        p = multiprocessing.Process(target=target_func, args=(server_args,))
+        p.start()
 
     if server_args.node_rank != 0:
         return
 
-    _wait_server_healthy(
-        base_url=server_args.url(),
-        api_key=server_args.api_key,
-        is_process_alive=lambda: p.is_alive(),
-    )
+    try:
+        _wait_server_healthy(
+            base_url=server_args.url(),
+            api_key=server_args.api_key,
+            is_process_alive=lambda: p.is_alive(),
+        )
+    except BaseException:
+        # Failed SGLang startup can leave scheduler / detokenizer descendants
+        # alive after the engine actor exits. Tear down the full tree here
+        # before propagating the init error back to Ray.
+        try:
+            _kill_process_tree(p.pid)
+        except Exception:
+            pass
+        raise
 
     return p
 
@@ -198,8 +517,18 @@ class SGLangEngine(RayActor):
         self.num_gpus_per_engine = num_gpus_per_engine
         self._evicted = threading.Event()
         self._is_weight_updating: bool = False
+        self._isolated_from_megatron = False
+        self._megatron_import_blocker = None
+        self._isolate_from_megatron_if_needed()
         if register_sigterm_handler:
             self._register_sigterm_handler()
+
+    def _isolate_from_megatron_if_needed(self) -> None:
+        if self._isolated_from_megatron:
+            return
+        enabled = self.args.sglang_model_impl.lower() == "transformers" or _env_requests_megatron_isolation()
+        _install_process_megatron_isolation(enabled, source="SGLangEngine process", block_imports=True)
+        self._isolated_from_megatron = True
 
     def set_weight_updating(self, is_updating: bool) -> None:
         """Set whether a weight update is currently in progress.
@@ -350,7 +679,7 @@ class SGLangEngine(RayActor):
             # Resolve effective num_gpus_per_engine for this engine
             effective_num_gpus = self.num_gpus_per_engine or self.args.rollout_num_gpus_per_engine
             self.checkpoint_engine_client = run(
-                create_client(
+                _create_checkpoint_client(
                     args=self.args,
                     coordinator_url=self.args.coordinator_url,
                     role="rollout",
@@ -393,7 +722,7 @@ class SGLangEngine(RayActor):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         if getattr(self.args, "optimize_routing_replay", False):
             os.environ["RELAX_OPTIMIZE_ROUTING_REPLAY"] = "1"
-        self.process = launch_server_process(ServerArgs(**server_args_dict))
+        self.process = launch_server_process(_get_server_args_cls()(**server_args_dict))
 
         bootstrap_port = (
             server_args_dict.get("disaggregation_bootstrap_port") if self.worker_type == "prefill" else None
@@ -499,7 +828,7 @@ class SGLangEngine(RayActor):
         self.unregister_from_router()
         # external rollout has no process
         if hasattr(self, "process"):
-            kill_process_tree(self.process.pid)
+            _kill_process_tree(self.process.pid)
 
     def __del__(self):
         """Safety net: kill SGLang child processes when the actor is garbage-
@@ -512,7 +841,7 @@ class SGLangEngine(RayActor):
         process = getattr(self, "process", None)
         if process is not None and process.is_alive():
             try:
-                kill_process_tree(process.pid)
+                _kill_process_tree(process.pid)
             except Exception:
                 pass
 
@@ -542,6 +871,7 @@ class SGLangEngine(RayActor):
 
         worker_url = f"http://{self.server_host}:{self.server_port}"
         try:
+            sglang_router = _get_sglang_router()
             if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
                 if self.worker_type != "regular":
                     msg = "pd disaggregation is not supported in old router or slime router."
@@ -578,6 +908,7 @@ class SGLangEngine(RayActor):
 
         worker_url = f"http://{self.server_host}:{self.server_port}"
         try:
+            sglang_router = _get_sglang_router()
             if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/remove_worker?url={worker_url}",
@@ -909,7 +1240,7 @@ def _compute_genrm_server_args(
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 
     unused_keys = set(kwargs.keys())
-    for attr in dataclasses.fields(ServerArgs):
+    for attr in dataclasses.fields(_get_server_args_cls()):
         if worker_type == "decode" and attr.name == "enable_hierarchical_cache":
             continue
         if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:
@@ -988,7 +1319,7 @@ def _compute_server_args(
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 
     unused_keys = set(kwargs.keys())
-    for attr in dataclasses.fields(ServerArgs):
+    for attr in dataclasses.fields(_get_server_args_cls()):
         if worker_type == "decode" and attr.name == "enable_hierarchical_cache":
             continue
         if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:

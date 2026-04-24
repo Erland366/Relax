@@ -33,9 +33,34 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .data import DataIterator, get_batch
 from .loss import loss_function
 from .model_provider import get_model_provider_func, wrap_model_provider_with_freeze
+from .optimizer_utils import (
+    apply_single_rank_rocm_cpu_offload_optimizer_config,
+    apply_single_rank_rocm_cpu_offload_safety_args,
+    normalize_single_rank_optimizer_args,
+    patch_megatron_cpu_offload_optimizer_for_rocm,
+    refresh_hybrid_device_optimizer_param_groups,
+)
 
 
 logger = get_logger(__name__)
+
+
+def _is_train_boundary_logging_rank() -> bool:
+    return (
+        mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+        and mpu.get_tensor_model_parallel_rank() == 0
+        and mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1
+    )
+
+
+def _log_train_one_step_boundary(message: str, rollout_id: int, step_id: int, **fields) -> None:
+    if not _is_train_boundary_logging_rank():
+        return
+    field_text = ", ".join(f"{key}={value}" for key, value in fields.items())
+    if field_text:
+        logger.info(f"train_one_step rollout={rollout_id} step={step_id}: {message} ({field_text})")
+    else:
+        logger.info(f"train_one_step rollout={rollout_id} step={step_id}: {message}")
 
 
 def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer) -> OptimizerParamScheduler:
@@ -109,6 +134,8 @@ def setup_model_and_optimizer(
     """
     assert not args.moe_use_upcycling
     assert args.load is not None or args.pretrained_checkpoint is not None
+    normalize_single_rank_optimizer_args(args, role)
+    apply_single_rank_rocm_cpu_offload_safety_args(args, role)
 
     model = get_model(
         wrap_model_provider_with_freeze(get_model_provider_func(args, role), args),
@@ -146,14 +173,20 @@ def setup_model_and_optimizer(
         kwargs["use_precision_aware_optimizer"] = True
         kwargs["store_param_remainders"] = False
         logger.info(f"FP16 mode enabled. Optimizer config: {kwargs}")
+    apply_single_rank_rocm_cpu_offload_optimizer_config(args, role, kwargs)
     config = OptimizerConfig(**kwargs)
     config.timers = None
 
+    patch_megatron_cpu_offload_optimizer_for_rocm(args, role)
     optimizer = get_megatron_optimizer(
         config=config,
         model_chunks=model,
         use_gloo_process_groups=args.enable_gloo_process_groups,
     )
+    # Megatron's mixed-precision wrapper can replace the wrapped optimizer's
+    # param_groups with fp32 main params. Rebuild HybridDeviceOptimizer once so
+    # its CPU-offload bookkeeping matches those live param groups.
+    refresh_hybrid_device_optimizer_param_groups(optimizer)
     opt_param_scheduler = get_optimizer_param_scheduler(args, optimizer)
     return model, optimizer, opt_param_scheduler
 
@@ -452,6 +485,12 @@ def train_one_step(
 
     # Forward pass.
     forward_backward_func = get_forward_backward_func()
+    _log_train_one_step_boundary(
+        "starting forward_backward",
+        rollout_id,
+        step_id,
+        num_microbatches=num_microbatches,
+    )
     losses_reduced = forward_backward_func(
         forward_step_func=forward_step,
         data_iterator=data_iterator,
@@ -462,6 +501,7 @@ def train_one_step(
         decoder_seq_length=args.decoder_seq_length,
         forward_only=False,
     )
+    _log_train_one_step_boundary("finished forward_backward", rollout_id, step_id)
 
     valid_step = True
     # NOTE(jiajia): FP16 precision does not perform NaN validation on loss and gradients, as this validation process would result in duplicate gradient scaling (grad scale).
@@ -485,11 +525,21 @@ def train_one_step(
 
     if valid_step:
         # Update parameters.
+        _log_train_one_step_boundary("starting optimizer.step", rollout_id, step_id)
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
+        _log_train_one_step_boundary(
+            "finished optimizer.step",
+            rollout_id,
+            step_id,
+            update_successful=update_successful,
+            grad_norm=grad_norm,
+            num_zeros_in_grad=num_zeros_in_grad,
+        )
 
         # Update learning rate.
         assert update_successful
         opt_param_scheduler.step(increment=args.global_batch_size)
+        _log_train_one_step_boundary("scheduler step completed", rollout_id, step_id)
 
     # release grad
     for model_chunk in model:
@@ -498,6 +548,7 @@ def train_one_step(
 
     if mpu.is_pipeline_last_stage(ignore_virtual=True):
         # Average loss across microbatches.
+        _log_train_one_step_boundary("reducing losses", rollout_id, step_id)
         keys = losses_reduced[0]["keys"]
         values = None
         for x in losses_reduced:
@@ -513,6 +564,7 @@ def train_one_step(
         num_samples_or_tokens = values[0]
         for key, value in zip(keys, values[1:], strict=False):
             loss_reduced[key] = value * mpu.get_context_parallel_world_size() / num_samples_or_tokens
+        _log_train_one_step_boundary("loss reduction completed", rollout_id, step_id, keys=keys)
         return loss_reduced, grad_norm
     return {}, grad_norm
 
@@ -764,6 +816,15 @@ def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
     )
 
     try:
+        from relax.utils.megatron_bridge_utils import (
+            install_rocm_bridge_modelopt_shims,
+            install_rocm_bridge_peft_shims,
+            install_rocm_bridge_qwen3_local_mapping_patch,
+        )
+
+        install_rocm_bridge_modelopt_shims()
+        install_rocm_bridge_peft_shims()
+        install_rocm_bridge_qwen3_local_mapping_patch()
         from megatron.bridge import AutoBridge
 
         from relax.utils.megatron_bridge_utils import patch_megatron_model

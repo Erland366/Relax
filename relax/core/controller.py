@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 import concurrent.futures
+import importlib
 import os
 import threading
 import time
@@ -30,6 +31,49 @@ ACTOR_ROLLOUT_PG_ROLES = [ROLES.actor, ROLES.rollout, "genrm"]
 
 def register_extra_roles(config, algo: dict) -> list[str]:
     return register_genrm(config, algo)
+
+
+def build_data_source_actor_config(config: Namespace, data_source_cls) -> Namespace:
+    module = importlib.import_module(data_source_cls.__module__)
+    build_config = getattr(module, "build_data_source_config", None)
+    if build_config is None:
+        logger.warning(
+            "Data source module %s does not define build_data_source_config; using full config for actor creation",
+            data_source_cls.__module__,
+        )
+        return config
+
+    data_source_config = build_config(config)
+    assert isinstance(data_source_config, Namespace), (
+        f"build_data_source_config must return argparse.Namespace, got {type(data_source_config)}"
+    )
+    return data_source_config
+
+
+def order_service_creation(roles_to_create, colocate: bool, fully_async: bool):
+    """Return the service creation order for the current runtime mode.
+
+    On the non-colocated serial path, rollout startup can spend minutes inside
+    SGLang initialization. If the actor is created first, the Megatron worker
+    sits resident and idle during that window and can die before rollout is
+    ready. Reordering rollout before actor keeps the actor out of that long
+    bring-up phase while preserving existing colocated and fully-async
+    behavior.
+    """
+
+    ordered = list(roles_to_create)
+    if fully_async or colocate:
+        return ordered
+
+    actor_index = next((i for i, (role, *_rest) in enumerate(ordered) if role == ROLES.actor), None)
+    rollout_index = next((i for i, (role, *_rest) in enumerate(ordered) if role == ROLES.rollout), None)
+    if actor_index is None or rollout_index is None or rollout_index < actor_index:
+        return ordered
+
+    rollout_entry = ordered.pop(rollout_index)
+    actor_index = next(i for i, (role, *_rest) in enumerate(ordered) if role == ROLES.actor)
+    ordered.insert(actor_index, rollout_entry)
+    return ordered
 
 
 class Controller:
@@ -249,7 +293,8 @@ class Controller:
                 continue
             if hasattr(ROLES, "rollout") and role == ROLES.rollout:
                 data_source_cls = load_function(self.config.data_source_path)
-                data_source = ray.remote(num_cpus=1)(data_source_cls).remote(self.config)
+                data_source_config = build_data_source_actor_config(self.config, data_source_cls)
+                data_source = ray.remote(num_cpus=1, enable_task_events=False)(data_source_cls).remote(data_source_config)
             else:
                 data_source = None
             # Optional roles (e.g. reference) may be absent from resource config
@@ -264,6 +309,8 @@ class Controller:
             logger.info(f"Service {role} start creating.")
 
             roles_to_create.append((role, cls, num_gpus, data_source))
+
+        roles_to_create = order_service_creation(roles_to_create, colocate=colocate, fully_async=self.config.fully_async)
 
         self._validate_gpu_resources(roles_to_create, colocate, ACTOR_ROLLOUT_PG_ROLES)
 

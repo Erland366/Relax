@@ -45,9 +45,10 @@ def init_wandb_primary(args):
 
     # Prepare wandb init parameters
     # add random 6 length string with characters
+    rank = getattr(args, "rank", 0)
     if args.wandb_random_suffix:
         group = args.wandb_group + "_" + wandb.util.generate_id()
-        run_name = f"{group}-RANK_{args.rank}"
+        run_name = f"{group}-RANK_{rank}"
     else:
         group = args.wandb_group
         run_name = args.wandb_group
@@ -134,7 +135,6 @@ def init_wandb_secondary(args, router_addr=None):
         "id": wandb_run_id,
         "entity": args.wandb_team,
         "project": args.wandb_project,
-        "config": args.__dict__,
         "resume": "allow",
         "reinit": True,
         "settings": wandb.Settings(**settings_kwargs),

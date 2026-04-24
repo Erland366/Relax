@@ -10,9 +10,9 @@ _SourceGetter = Callable[[], Iterable[tuple[str, torch.Tensor]]]
 
 class TensorBackuper(ABC):
     @staticmethod
-    def create(source_getter, single_tag):
+    def create(source_getter, single_tag, *, pin_memory: bool = True):
         if single_tag is None:
-            return _TensorBackuperNormal(source_getter=source_getter)
+            return _TensorBackuperNormal(source_getter=source_getter, pin_memory=pin_memory)
         else:
             return _TensorBackuperNoop(source_getter=source_getter, single_tag=single_tag)
 
@@ -41,9 +41,10 @@ class TensorBackuper(ABC):
 
 
 class _TensorBackuperNormal(TensorBackuper):
-    def __init__(self, source_getter):
+    def __init__(self, source_getter, *, pin_memory: bool):
         super().__init__(source_getter=source_getter)
         self._backups: dict[str, dict[str, torch.Tensor]] = defaultdict(dict)
+        self._pin_memory = pin_memory
 
     @property
     def backup_tags(self):
@@ -57,7 +58,11 @@ class _TensorBackuperNormal(TensorBackuper):
         backup_dict = self._backups[tag]
         for name, param in self._source_getter():
             if name not in backup_dict:
-                backup_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
+                backup_dict[name] = torch.empty_like(
+                    param,
+                    device=torch.device("cpu"),
+                    pin_memory=self._pin_memory,
+                )
             backup_dict[name].copy_(param.detach(), non_blocking=True)
         torch.cuda.synchronize()
 

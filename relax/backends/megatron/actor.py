@@ -20,7 +20,7 @@ from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
 from relax.distributed.checkpoint_service.client.engine import create_client
-from relax.distributed.ray.train_actor import TrainRayActor
+from relax.distributed.ray.train_actor import TrainRayActor, should_sleep_train_actor_after_init
 from relax.utils import tracking_utils
 from relax.utils.async_utils import run
 from relax.utils.data.stream_dataloader import (
@@ -55,6 +55,7 @@ from .data import (
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
+from .optimizer_utils import should_disable_pinned_host_weight_backups
 from .weight_update.common import named_params_and_buffers
 from .weight_update.update_weight_from_distributed import UpdateWeightFromDistributed
 from .weight_update.update_weight_from_tensor import UpdateWeightFromTensor
@@ -63,6 +64,16 @@ from .weight_update.update_weight_from_tensor import UpdateWeightFromTensor
 logging.getLogger("megatron").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+
+def _log_train_boundary(message: str, rollout_id: int, **fields) -> None:
+    if not is_megatron_main_rank():
+        return
+    field_text = ", ".join(f"{key}={value}" for key, value in fields.items())
+    if field_text:
+        logger.info(f"train_actor rollout={rollout_id}: {message} ({field_text})")
+    else:
+        logger.info(f"train_actor rollout={rollout_id}: {message}")
 
 
 class MegatronTrainRayActor(TrainRayActor):
@@ -140,6 +151,7 @@ class MegatronTrainRayActor(TrainRayActor):
         (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
             args, role
         )
+        self._is_sleeping = False
 
         start_rollout_id = loaded_rollout_id + 1
 
@@ -151,6 +163,12 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.vocab_size is None:
             self.args.vocab_size = self.tokenizer.vocab_size
         if not self.args.fully_async:
+            use_pinned_host_weight_backups = not should_disable_pinned_host_weight_backups(args, role)
+            logger.info(
+                "Initializing weight backup state for %s path (pinned_host_weight_backups=%s)",
+                role,
+                use_pinned_host_weight_backups,
+            )
             self.weights_backuper = TensorBackuper.create(
                 source_getter=lambda: named_params_and_buffers(
                     self.args,
@@ -159,25 +177,37 @@ class MegatronTrainRayActor(TrainRayActor):
                     translate_gpu_to_cpu=not self.args.enable_weights_backuper,
                 ),
                 single_tag=None if args.enable_weights_backuper else "actor",
+                pin_memory=use_pinned_host_weight_backups,
             )
             self._active_model_tag: str | None = "actor"
+            logger.info("Backing up actor weights after Megatron initialization")
             self.weights_backuper.backup("actor")
+            logger.info("Finished backing up actor weights")
 
             if with_ref:
+                logger.info("Loading ref checkpoint into actor-side backup state")
                 self.load_other_checkpoint("ref", args.ref_load)
+                logger.info("Finished loading ref checkpoint into actor-side backup state")
 
             # Load teacher model for Megatron-based on-policy distillation
             if with_opd_teacher:
+                logger.info("Loading teacher checkpoint into actor-side backup state")
                 self.load_other_checkpoint("teacher", args.opd_teacher_load)
+                logger.info("Finished loading teacher checkpoint into actor-side backup state")
 
             if self.args.keep_old_actor:
                 # Load old_actor checkpoint
+                logger.info("Loading old_actor checkpoint into actor-side backup state")
                 self.load_other_checkpoint("old_actor", args.load)
+                logger.info("Finished loading old_actor checkpoint into actor-side backup state")
                 # Create rollout_actor as a copy of current actor
                 if args.update_weights_interval == 1:
+                    logger.info("Creating rollout_actor backup snapshot from current actor weights")
                     self.weights_backuper.backup("rollout_actor")
+                    logger.info("Finished creating rollout_actor backup snapshot")
 
             update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
+            logger.info("Creating %s for actor weight sync", update_weight_cls.__name__)
             self.weight_updater = update_weight_cls(
                 self.args,
                 self.model,
@@ -187,6 +217,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 else self.args.model_name,
                 quantization_config=getattr(self.hf_config, "quantization_config", None),
             )
+            logger.info("Finished creating %s for actor weight sync", update_weight_cls.__name__)
         else:
             is_pp_src_rank = (
                 mpu.get_data_parallel_rank(with_context_parallel=True) == 0
@@ -233,7 +264,11 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.offload_train:
             # recover to actor in the end.
             self._switch_model("actor")
-            self.sleep()
+            if should_sleep_train_actor_after_init(self.args):
+                logger.info("Sleeping actor after init to free colocated resources before rollout startup")
+                self.sleep()
+            else:
+                logger.info("Leaving actor resident after init until rollout-manager hookup completes")
 
         self.rollout_engines = None
 
@@ -255,6 +290,7 @@ class MegatronTrainRayActor(TrainRayActor):
         clear_memory(clear_host_memory=True)
         print_memory("before offload model")
         destroy_process_groups()
+        self._is_sleeping = True
 
         if self._torch_memory_saver_enabled:
             torch_memory_saver.pause()
@@ -271,6 +307,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         clear_memory()
         reload_process_groups(timeout_minutes=self.args.distributed_timeout_minutes)
+        self._is_sleeping = False
         print_memory("after wake_up model")
 
     def _switch_model(self, target_tag: str) -> None:
@@ -465,6 +502,11 @@ class MegatronTrainRayActor(TrainRayActor):
     def train_actor(self, rollout_id: int, rollout_data: RolloutBatch) -> None:
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
+        _log_train_boundary(
+            "prepared data iterator",
+            rollout_id,
+            num_microbatches=num_microbatches,
+        )
 
         if self.args.use_rollout_routing_replay:
             self.fill_routing_replay(data_iterator, num_microbatches, rollout_data)
@@ -524,16 +566,28 @@ class MegatronTrainRayActor(TrainRayActor):
 
                 # Calculate adv and returns. Need to performed before training (instead of on the fly),
                 # because we may need normalize the whole rollout.
+                _log_train_boundary("computing advantages and returns", rollout_id)
                 compute_advantages_and_returns(self.args, rollout_data)
+                _log_train_boundary("advantages and returns ready", rollout_id)
 
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args)
 
+            _log_train_boundary("logging rollout stats", rollout_id)
             log_rollout_data(rollout_id, self.args, rollout_data)
+            _log_train_boundary("rollout stats logged", rollout_id)
+
+            # Persist the exact batch before entering native train kernels so a
+            # failing step-0 ROCm crash still leaves replayable inputs behind.
+            train_dump_utils.save_debug_train_data(
+                self.args, rollout_id=rollout_id, rollout_data=rollout_data, tokenizer=self.tokenizer
+            )
+            _log_train_boundary("saved debug train batch", rollout_id)
 
             # Train
             if self.args.use_routing_replay:
                 os.environ["ROUTING_REPLAY_STAGE"] = "replay_backward"
+            _log_train_boundary("entering megatron train", rollout_id)
             with timer("actor_train"):
                 train(
                     rollout_id,
@@ -543,6 +597,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     data_iterator,
                     num_microbatches,
                 )
+            _log_train_boundary("megatron train completed", rollout_id)
 
             self.prof.step(rollout_id=rollout_id)
 
@@ -988,6 +1043,7 @@ class MegatronTrainRayActor(TrainRayActor):
         print_memory("after update_weights")
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
+        logger.info("Loading checkpoint for model_tag=%s from path=%s", model_tag, path)
         old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune
         self.args.load = path
         self.args.no_load_optim = True
@@ -1009,12 +1065,15 @@ class MegatronTrainRayActor(TrainRayActor):
             checkpointing_context={},
             skip_load_to_model_and_opt=False,
         )
+        logger.info("Finished loading checkpoint weights for model_tag=%s", model_tag)
         self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune = old_args
 
         if old_ckpt_step is not None:
             self.args.ckpt_step = old_ckpt_step
 
+        logger.info("Backing up checkpoint state for model_tag=%s", model_tag)
         self.weights_backuper.backup(model_tag)
+        logger.info("Finished backing up checkpoint state for model_tag=%s", model_tag)
         self._active_model_tag = model_tag
 
     def all_consumed(self, task_name, rollout_id):

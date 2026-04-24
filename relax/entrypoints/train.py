@@ -13,6 +13,7 @@ from ray import serve
 from relax.core.controller import Controller
 from relax.utils.arguments import parse_args
 from relax.utils.logging_utils import get_logger
+from relax.utils.tracking_utils import init_tracking
 from relax.utils.utils import post_process_env
 
 
@@ -59,6 +60,7 @@ def main(args):
         runtime_env = yaml.safe_load(file)
 
     runtime_env = post_process_env(args, runtime_env)
+    init_tracking(args, primary=True)
     if not ray.is_initialized():
         # this is for local ray cluster
         ray.init(runtime_env=runtime_env)

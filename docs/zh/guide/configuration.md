@@ -540,3 +540,6 @@ env_vars:
   GLOO_SOCKET_IFNAME: "eth0"
   TP_SOCKET_IFNAME: "eth0"
 ```
+
+`configs/env.yaml` 中的值会作为默认值使用；如果 Shell 环境里已经设置了同名变量，
+Relax 会优先保留 Shell 中的值。

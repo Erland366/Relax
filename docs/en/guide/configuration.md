@@ -540,3 +540,6 @@ env_vars:
   GLOO_SOCKET_IFNAME: "eth0"
   TP_SOCKET_IFNAME: "eth0"
 ```
+
+Values in `configs/env.yaml` are treated as defaults. If the same variable is
+already set in the shell environment, Relax keeps the shell value.

@@ -42,7 +42,7 @@ def _get_head_node_id():
     return ray.get_runtime_context().get_node_id()
 
 
-@ray.remote(num_gpus=0.1)
+@ray.remote(num_gpus=0.1, enable_task_events=False)
 class InfoActor:
     def get_ip_and_gpu_id(self):
         return ray.util.get_node_ip_address(), ray.get_gpu_ids()[0]

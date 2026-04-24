@@ -6,11 +6,9 @@ from typing import Any, Dict
 
 import torch
 import transfer_queue as tq
-from megatron.core import mpu
 from ray import serve
 from tensordict import TensorDict
 
-from relax.backends.megatron.loss import apply_opd_kl_to_advantages
 from relax.components.base import Base
 from relax.utils.async_utils import run as run_
 from relax.utils.training.ppo_utils import (
@@ -154,6 +152,8 @@ class Advantages(Base):
             # TODO: optimize this
             old_rewards = rewards
             rewards = []
+            from megatron.core import mpu
+
             for reward, k in zip(old_rewards, kl, strict=False):
                 k *= -self.config.kl_coef
                 cp_rank = mpu.get_context_parallel_rank()
@@ -195,6 +195,8 @@ class Advantages(Base):
             returns = [torch.zeros_like(r) for r in returns]
 
         if getattr(self.config, "use_opd", False):
+            from relax.backends.megatron.loss import apply_opd_kl_to_advantages
+
             apply_opd_kl_to_advantages(
                 args=self.config,
                 rollout_data=rollout_data,

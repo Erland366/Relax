@@ -19,6 +19,26 @@ from relax.utils.memory_utils import clear_memory, print_memory
 logger = get_logger(__name__)
 
 
+def should_sleep_train_actor_after_init(args) -> bool:
+    """Return whether the train actor should offload itself after init.
+
+    In fully async mode, the actor must sleep after init because later weight
+    sync paths expect the train backend to wake on demand. In sync colocated
+    mode, the actor and rollout share the same GPUs, so keeping the actor
+    resident through rollout startup can destabilize backend bring-up and waste
+    GPU memory. Non-colocated sync mode can keep the actor resident to avoid an
+    unnecessary wake-up before rollout-manager hookup.
+    """
+
+    if not getattr(args, "offload_train", False):
+        return False
+
+    if getattr(args, "fully_async", False):
+        return True
+
+    return bool(getattr(args, "colocate", False))
+
+
 def get_local_gpu_id():
     cvd = os.environ.get("CUDA_VISIBLE_DEVICES", None)
     if cvd is None:
@@ -122,7 +142,14 @@ class TrainRayActor(RayActor):
         raise NotImplementedError
 
     def set_rollout_manager(self, rollout_manager):
+        if self.args.offload_train and getattr(self, "_is_sleeping", False):
+            logger.info("Waking actor before set_rollout_manager because offload_train is enabled")
+            self.wake_up()
+
         self.rollout_manager = rollout_manager
+        if not self.args.fully_async:
+            return
+
         if not self.args.debug_rollout_only and self.args.rank == 0:
             ray.get(self.rollout_manager.set_train_parallel_config.remote(self.train_parallel_config))
         # Retrieve the distributed lock that serialises DCS weight sync with

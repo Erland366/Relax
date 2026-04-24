@@ -1,12 +1,19 @@
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 
 import abc
+import builtins
 import copy
+import importlib
 import os
+import sys
+import traceback
+from argparse import Namespace
+from contextlib import contextmanager
 from pathlib import Path
 
 import torch
 
+from relax.backends.sglang.sglang_engine import _blocked_megatron_imports, _install_process_megatron_isolation
 from relax.utils.data.data import Dataset
 from relax.utils.data.processing_utils import load_processor, load_tokenizer
 from relax.utils.logging_utils import get_logger
@@ -16,6 +23,141 @@ from relax.utils.types import Sample
 
 
 logger = get_logger(__name__)
+_TRACE_MEGATRON_IMPORTS_ENV_VAR = "RELAX_TRACE_ROLLOUT_DATA_SOURCE_MEGATRON_IMPORTS"
+_PROCESS_MEGATRON_IMPORT_TRACE_INSTALLED = False
+_DATA_SOURCE_CONFIG_FIELDS = (
+    "apply_chat_template",
+    "apply_chat_template_kwargs",
+    "audio_sample_rate",
+    "buffer_filter_path",
+    "dump_details",
+    "frame_factor",
+    "hf_checkpoint",
+    "image_max_token_num",
+    "image_min_token_num",
+    "input_key",
+    "label_key",
+    "load",
+    "metadata_key",
+    "multimodal_keys",
+    "n_samples_per_prompt",
+    "prompt_data",
+    "rollout_global_dataset",
+    "rollout_max_prompt_len",
+    "rollout_seed",
+    "rollout_shuffle",
+    "save",
+    "sglang_model_impl",
+    "streaming_buffer_size",
+    "system_prompt",
+    "tool_key",
+    "use_audio_in_video",
+    "use_streaming_dataset",
+    "video_fps",
+    "video_fps_max_frames",
+    "video_fps_min_frames",
+    "video_max_token_num",
+    "video_min_token_num",
+)
+
+
+def _is_running_in_ray_default_worker() -> bool:
+    if not sys.argv:
+        return False
+    return os.path.basename(sys.argv[0]) == "default_worker.py"
+
+
+def _maybe_isolate_rollout_data_source_worker_at_import() -> bool:
+    if not _is_running_in_ray_default_worker():
+        return False
+    return _install_process_megatron_isolation(
+        True,
+        source="Rollout data source worker import",
+        block_imports=False,
+    )
+
+
+def _isolate_rollout_data_source_from_megatron(args) -> bool:
+    enabled = getattr(args, "sglang_model_impl", "").lower() == "transformers"
+    return _install_process_megatron_isolation(enabled, source="Rollout data source process", block_imports=False)
+
+
+def _block_megatron_during_data_source_setup(args):
+    enabled = getattr(args, "sglang_model_impl", "").lower() == "transformers"
+    return _blocked_megatron_imports(enabled)
+
+
+@contextmanager
+def _trace_megatron_imports_during_data_source_init():
+    if os.environ.get(_TRACE_MEGATRON_IMPORTS_ENV_VAR) != "1":
+        yield
+        return
+
+    original_import = builtins.__import__
+    original_import_module = importlib.import_module
+    traced = set()
+
+    def _maybe_log_import(name: str) -> None:
+        if not (name == "megatron" or name.startswith("megatron.")) or name in traced:
+            return
+        traced.add(name)
+        logger.error("Megatron import traced during RolloutDataSource init: %s\n%s", name, "".join(traceback.format_stack(limit=25)))
+
+    def _tracing_import(name, globals=None, locals=None, fromlist=(), level=0):
+        _maybe_log_import(name)
+        return original_import(name, globals, locals, fromlist, level)
+
+    def _tracing_import_module(name, package=None):
+        _maybe_log_import(name)
+        return original_import_module(name, package)
+
+    builtins.__import__ = _tracing_import
+    importlib.import_module = _tracing_import_module
+    try:
+        yield
+    finally:
+        builtins.__import__ = original_import
+        importlib.import_module = original_import_module
+
+
+def _install_global_megatron_import_trace_if_requested() -> bool:
+    global _PROCESS_MEGATRON_IMPORT_TRACE_INSTALLED
+
+    if os.environ.get(_TRACE_MEGATRON_IMPORTS_ENV_VAR) != "1" or _PROCESS_MEGATRON_IMPORT_TRACE_INSTALLED:
+        return False
+
+    original_import = builtins.__import__
+    original_import_module = importlib.import_module
+    traced = set()
+
+    def _maybe_log_import(name: str) -> None:
+        if not (name == "megatron" or name.startswith("megatron.")) or name in traced:
+            return
+        traced.add(name)
+        logger.error("Megatron import traced during data_source module import/actor bootstrap: %s\n%s", name, "".join(traceback.format_stack(limit=30)))
+
+    def _tracing_import(name, globals=None, locals=None, fromlist=(), level=0):
+        _maybe_log_import(name)
+        return original_import(name, globals, locals, fromlist, level)
+
+    def _tracing_import_module(name, package=None):
+        _maybe_log_import(name)
+        return original_import_module(name, package)
+
+    builtins.__import__ = _tracing_import
+    importlib.import_module = _tracing_import_module
+    _PROCESS_MEGATRON_IMPORT_TRACE_INSTALLED = True
+    logger.info("Installed Megatron import trace hooks for data_source module import/actor bootstrap")
+    return True
+
+
+def build_data_source_config(args) -> Namespace:
+    values = {field: getattr(args, field) for field in _DATA_SOURCE_CONFIG_FIELDS if hasattr(args, field)}
+    return Namespace(**values)
+
+
+_maybe_isolate_rollout_data_source_worker_at_import()
+_install_global_megatron_import_trace_if_requested()
 
 
 def _create_dataset(args, tokenizer, processor, multimodal_config=None):
@@ -108,37 +250,40 @@ class DataSource(abc.ABC):
 # TODO may further refactor data-loading part later
 class RolloutDataSource(DataSource):
     def __init__(self, args):
-        self.args = args
+        with _trace_megatron_imports_during_data_source_init():
+            self.args = args
+            _isolate_rollout_data_source_from_megatron(args)
 
-        self.epoch_id = 0
-        self.sample_group_index = 0
-        self.sample_index = 0
-        self.sample_offset = 0
-        # TODO remove this
-        self.metadata = {}
+            self.epoch_id = 0
+            self.sample_group_index = 0
+            self.sample_index = 0
+            self.sample_offset = 0
+            # TODO remove this
+            self.metadata = {}
 
-        # Check if using streaming dataset
-        self._use_streaming = getattr(args, "use_streaming_dataset", False)
-        self.dataset = None
+            # Check if using streaming dataset
+            self._use_streaming = getattr(args, "use_streaming_dataset", False)
+            self.dataset = None
 
-        if args.rollout_global_dataset:
-            tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
-            processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
+            if args.rollout_global_dataset:
+                with _block_megatron_during_data_source_setup(args):
+                    tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+                    processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
-            # TODO move (during the refactor)
-            if (d := args.dump_details) is not None:
-                tokenizer.save_pretrained(Path(d) / "tokenizer")
-                if processor:
-                    processor.save_pretrained(Path(d) / "processor")
+                    # TODO move (during the refactor)
+                    if (d := args.dump_details) is not None:
+                        tokenizer.save_pretrained(Path(d) / "tokenizer")
+                        if processor:
+                            processor.save_pretrained(Path(d) / "processor")
 
-            # Initialize multimodal config from args
-            multimodal_config = MultimodalConfig.from_args(args)
+                    # Initialize multimodal config from args
+                    multimodal_config = MultimodalConfig.from_args(args)
 
-            # Use factory function to create dataset
-            self.dataset = _create_dataset(args, tokenizer, processor, multimodal_config)
+                    # Use factory function to create dataset
+                    self.dataset = _create_dataset(args, tokenizer, processor, multimodal_config)
 
-            if self.args.rollout_shuffle:
-                self.dataset.shuffle(self.epoch_id)
+                    if self.args.rollout_shuffle:
+                        self.dataset.shuffle(self.epoch_id)
 
     def lengths(self):
         return len(self.dataset)

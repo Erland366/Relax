@@ -19,9 +19,13 @@ import ray
 import transfer_queue as tq
 import yaml
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
-from relax.backends.sglang.sglang_engine import SGLangEngine
+from relax.backends.sglang.sglang_engine import (
+    SGLangEngine,
+    _MEGATRON_ISOLATION_ENV_VAR,
+    _filtered_pythonpath_without_megatron,
+    _install_process_megatron_isolation,
+)
 from relax.engine.rollout.base_types import call_rollout_fn
 from relax.utils import tracking_utils
 from relax.utils.health_monitor import RolloutHealthMonitor
@@ -52,6 +56,20 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = get_logger(__name__)
+
+
+# Mirror the SGLang memory tag strings locally. Importing
+# ``sglang.srt.constants`` at module import time pulls in ``sglang.__init__``,
+# which eagerly imports the full public API and can trigger Megatron discovery
+# long before the rollout worker actually launches an SGLang engine.
+GPU_MEMORY_TYPE_KV_CACHE = "kv_cache"
+GPU_MEMORY_TYPE_WEIGHTS = "weights"
+GPU_MEMORY_TYPE_CUDA_GRAPH = "cuda_graph"
+
+
+def _isolate_rollout_process_from_megatron(args, *, source: str) -> bool:
+    enabled = getattr(args, "sglang_model_impl", "").lower() == "transformers"
+    return _install_process_megatron_isolation(enabled, source=source, block_imports=True)
 
 
 @dataclasses.dataclass
@@ -412,6 +430,31 @@ class EngineGroup:
         """Node-0 engines only (for multi-node serving)."""
         return self.all_engines[:: self.nodes_per_engine]
 
+    def _build_engine_runtime_env_vars(self) -> dict[str, str]:
+        env_vars = dict.fromkeys(NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, "1") | {
+            key: os.environ.get(key, default_val)
+            for key, default_val in {
+                "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
+                "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
+                "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
+                "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
+                "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
+            }.items()
+        }
+
+        pythonpath = os.environ.get("PYTHONPATH")
+        if pythonpath:
+            if self.args.sglang_model_impl.lower() == "transformers":
+                env_vars["PYTHONPATH"] = _filtered_pythonpath_without_megatron(pythonpath)
+            else:
+                env_vars["PYTHONPATH"] = pythonpath
+
+        env_vars[_MEGATRON_ISOLATION_ENV_VAR] = "1" if self.args.sglang_model_impl.lower() == "transformers" else "0"
+
+        return env_vars
+
     def start_engines(self, port_cursors: dict[int, int] | None = None) -> tuple[list, dict[int, int]]:
         """Create Ray actors, allocate ports, and fire ``engine.init()``
         without waiting.
@@ -434,7 +477,7 @@ class EngineGroup:
 
         pg, reordered_bundle_indices, reordered_gpu_ids = self.pg
 
-        RolloutRayActor = ray.remote(SGLangEngine)
+        RolloutRayActor = ray.remote(enable_task_events=False)(SGLangEngine)
 
         rollout_engines = []
         for i in range(len(self.all_engines)):
@@ -455,18 +498,7 @@ class EngineGroup:
                 placement_group_bundle_index=reordered_bundle_indices[gpu_index],
             )
 
-            env_vars = dict.fromkeys(NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, "1") | {
-                key: os.environ.get(key, default_val)
-                for key, default_val in {
-                    "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
-                    "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-                    "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-                    "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
-                    "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
-                    "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
-                    "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
-                }.items()
-            }
+            env_vars = self._build_engine_runtime_env_vars()
 
             rollout_engine = RolloutRayActor.options(
                 num_cpus=num_cpus,
@@ -713,6 +745,7 @@ class RolloutServer:
 
 
 @ray.remote(
+    enable_task_events=False,
     concurrency_groups={
         "health_monitoring": 1,
         "scale_out": 8,
@@ -732,6 +765,7 @@ class RolloutManager(ReloadableMixin):
     def __init__(self, args, pg, data_source=None):
         self.pg = pg
         self.args = args
+        _isolate_rollout_process_from_megatron(self.args, source="RolloutManager process")
 
         init_tracking(args, primary=False)
 
@@ -1736,7 +1770,7 @@ class RolloutManager(ReloadableMixin):
                 # Create SGLangEngine actor (connecting mode).
                 # No GPU needed: this actor is an RPC proxy to the external engine;
                 # NCCL weight sync is orchestrated via HTTP to the remote SGLang process.
-                RolloutRayActor = ray.remote(SGLangEngine)
+                RolloutRayActor = ray.remote(enable_task_events=False)(SGLangEngine)
                 engine = RolloutRayActor.options(
                     num_cpus=0.2,
                     num_gpus=0.2,

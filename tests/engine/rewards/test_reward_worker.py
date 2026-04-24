@@ -269,6 +269,20 @@ class TestRewardExecutorSingleSample:
         with pytest.raises(NotImplementedError, match="totally_unknown_type"):
             await async_rm(args, sample)
 
+    @pytest.mark.asyncio
+    async def test_execute_dapo_stays_local(self, monkeypatch):
+        args = _make_args(rm_type="dapo")
+        sample = _make_sample(response="Answer: 7", label="7")
+
+        monkeypatch.setattr(
+            RewardExecutor,
+            "_ensure_workers",
+            lambda self: (_ for _ in ()).throw(AssertionError("dapo should not initialize RewardWorker actors")),
+        )
+
+        result = await async_rm(args, sample)
+        assert result == {"score": 1.0, "acc": True, "pred": "7"}
+
 
 @requires_full_pipeline
 class TestBatchedAsyncRM:
@@ -304,6 +318,28 @@ class TestBatchedAsyncRM:
         args = _make_args()
         rewards = await batched_async_rm(args, [])
         assert rewards == []
+
+    @pytest.mark.asyncio
+    async def test_batch_dapo_stays_local(self, monkeypatch):
+        args = _make_args(rm_type="dapo")
+        samples = [
+            _make_sample(response="Answer: 1", label="1"),
+            _make_sample(response="Answer: 2", label="2"),
+            _make_sample(response="Answer: 3", label="3"),
+        ]
+
+        monkeypatch.setattr(
+            RewardExecutor,
+            "_ensure_workers",
+            lambda self: (_ for _ in ()).throw(AssertionError("dapo batch should not initialize RewardWorker actors")),
+        )
+
+        rewards = await batched_async_rm(args, samples)
+        assert rewards == [
+            {"score": 1.0, "acc": True, "pred": "1"},
+            {"score": 1.0, "acc": True, "pred": "2"},
+            {"score": 1.0, "acc": True, "pred": "3"},
+        ]
 
 
 # ===========================================================================

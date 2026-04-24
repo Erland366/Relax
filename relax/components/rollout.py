@@ -15,12 +15,18 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from ray import serve
 
+from relax.backends.sglang.sglang_engine import _install_process_megatron_isolation
 from relax.components.base import Base
 from relax.distributed.ray.placement_group import create_rollout_manager
 from relax.utils.http_utils import _wrap_ipv6
 
 
 app = FastAPI()
+
+
+def _isolate_rollout_service_from_megatron(config) -> bool:
+    enabled = getattr(config, "sglang_model_impl", "").lower() == "transformers"
+    return _install_process_megatron_isolation(enabled, source="Rollout service process", block_imports=True)
 
 
 # ===================== Scale-Out API Models =====================
@@ -326,6 +332,7 @@ class Rollout(Base):
         super().__init__()
         self.config = config
         self.healthy = healthy
+        _isolate_rollout_service_from_megatron(self.config)
 
         tq.init(self.config.tq_config)
         self.data_system_client = tq.get_client()

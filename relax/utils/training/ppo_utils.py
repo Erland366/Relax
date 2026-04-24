@@ -10,7 +10,20 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 
-@torch.compile(dynamic=True)
+def _compile_dynamic_if_supported(fn):
+    if torch.version.hip:
+        return fn
+    return torch.compile(fn, dynamic=True)
+
+
+def _mul_reduce_impl(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    return (a * b).sum(dim=-1, keepdim=True)
+
+
+mul_reduce = _compile_dynamic_if_supported(_mul_reduce_impl)
+
+
+@_compile_dynamic_if_supported
 def compute_approx_kl(
     log_probs: torch.Tensor,
     log_probs_base: torch.Tensor,
@@ -122,7 +135,7 @@ def compute_gspo_kl(
     return ppo_kl
 
 
-@torch.compile(dynamic=True)
+@_compile_dynamic_if_supported
 def compute_sapo_loss(
     ppo_kl: torch.Tensor,
     advantages: torch.Tensor,
@@ -183,7 +196,7 @@ def compute_sapo_loss(
     return pg_loss, clipfrac
 
 
-@torch.compile(dynamic=True)
+@_compile_dynamic_if_supported
 def compute_policy_loss(
     ppo_kl: torch.Tensor,
     advantages: torch.Tensor,
@@ -224,10 +237,6 @@ def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group:
 class _VocabParallelEntropy(torch.autograd.Function):
     @staticmethod
     def forward(ctx, vocab_parallel_logits: torch.Tensor, process_group: dist.ProcessGroup) -> torch.Tensor:
-        @torch.compile(dynamic=True)
-        def mul_reduce(a, b):
-            return (a * b).sum(dim=-1, keepdim=True)
-
         logits_max = vocab_parallel_logits.max(dim=-1, keepdim=True).values
         dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=process_group)
         normalized_vocab_parallel_logits = vocab_parallel_logits - logits_max

@@ -90,6 +90,15 @@ def get_model_provider_func(
         return wrapped_model_provider
 
     if args.megatron_to_hf_mode == "bridge":
+        from relax.utils.megatron_bridge_utils import (
+            install_rocm_bridge_modelopt_shims,
+            install_rocm_bridge_peft_shims,
+            install_rocm_bridge_qwen3_local_mapping_patch,
+        )
+
+        install_rocm_bridge_modelopt_shims()
+        install_rocm_bridge_peft_shims()
+        install_rocm_bridge_qwen3_local_mapping_patch()
         from megatron.bridge import AutoBridge
 
         bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
@@ -107,6 +116,7 @@ def get_model_provider_func(
             "dsa_indexer_loss_coeff",
             "dsa_indexer_use_sparse_loss",
             "attention_softmax_in_fp32",
+            "masked_softmax_fusion",
             "bias_dropout_fusion",
             "apply_rope_fusion",
             "recompute_granularity",
@@ -177,6 +187,15 @@ def get_model_provider_func(
             provider.fp16 = False
             provider.bf16 = True
             provider.params_dtype = torch.bfloat16
+
+        if not os.environ.get("NVTE_PROJECT_BUILDING") and not torch.version.cuda:
+            from megatron.bridge.models.gpt_provider import local_layer_spec as bridge_local_layer_spec
+
+            if getattr(provider, "transformer_layer_spec", None) is not bridge_local_layer_spec:
+                logger.info("Transformer Engine unavailable; force Megatron-Bridge provider to use local layer spec")
+            provider.transformer_layer_spec = bridge_local_layer_spec
+            provider.use_transformer_engine_full_layer_spec = False
+            provider.use_transformer_engine_op_fuser = False
 
         provider.finalize()
 

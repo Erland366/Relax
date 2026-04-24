@@ -171,6 +171,9 @@ def _patch_scatter_dtype_cast():
 
 def _load_checkpoint_hf(ddp_model, optimizer, args, load_path: str):
     assert args.megatron_to_hf_mode == "bridge", "Only bridge mode is supported for loading HF checkpoint"
+    megatron_bridge_utils.install_rocm_bridge_modelopt_shims()
+    megatron_bridge_utils.install_rocm_bridge_peft_shims()
+    megatron_bridge_utils.install_rocm_bridge_qwen3_local_mapping_patch()
     from megatron.bridge import AutoBridge
 
     source_path = load_path or args.hf_checkpoint

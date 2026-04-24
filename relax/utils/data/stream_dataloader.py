@@ -334,16 +334,19 @@ def get_data_from_transfer_queue(
             del td["rollout_routed_experts"]
             rollout_data[0] = td
 
-    # Always broadcast across tensor parallel ranks (now without routed_experts)
-    dist.broadcast_object_list(
-        rollout_data,
-        device=cuda_dev,
-        group=mpu.get_tensor_model_parallel_group(),
-        group_src=0,
-    )
+    # Always broadcast across tensor parallel ranks (now without routed_experts).
+    # Single-rank NCCL object broadcasts are redundant and can SIGBUS on ROCm
+    # when the payload contains TensorDict/NestedTensor storage.
+    if mpu.get_tensor_model_parallel_world_size() > 1:
+        dist.broadcast_object_list(
+            rollout_data,
+            device=cuda_dev,
+            group=mpu.get_tensor_model_parallel_group(),
+            group_src=0,
+        )
 
     # Conditionally broadcast across pipeline parallel ranks
-    if broadcast_pp:
+    if broadcast_pp and mpu.get_pipeline_model_parallel_world_size() > 1:
         dist.broadcast_object_list(
             rollout_data,
             device=cuda_dev,

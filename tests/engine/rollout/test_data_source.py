@@ -8,6 +8,7 @@ restructuring.
 Run with: pytest tests/engine/rollout/test_data_source.py -v
 """
 
+import builtins
 import json
 import os
 import tempfile
@@ -60,6 +61,234 @@ class TestEagerDataset:
 
 class TestDataSourceIntegration:
     """Integration tests for data_source.py with StreamingDataset."""
+
+    def test_worker_import_isolation_runs_in_ray_default_worker(self, monkeypatch):
+        from relax.engine.rollout import data_source as data_source_module
+
+        calls = []
+
+        def fake_install(enabled, *, source, block_imports):
+            calls.append((enabled, source, block_imports))
+            return enabled
+
+        monkeypatch.setattr(data_source_module, "_install_process_megatron_isolation", fake_install)
+        monkeypatch.setattr(data_source_module.sys, "argv", ["/tmp/default_worker.py"])
+
+        changed = data_source_module._maybe_isolate_rollout_data_source_worker_at_import()
+
+        assert changed is True
+        assert calls == [(True, "Rollout data source worker import", False)]
+
+    def test_worker_import_isolation_skips_non_worker_process(self, monkeypatch):
+        from relax.engine.rollout import data_source as data_source_module
+
+        calls = []
+
+        def fake_install(enabled, *, source, block_imports):
+            calls.append((enabled, source, block_imports))
+            return enabled
+
+        monkeypatch.setattr(data_source_module, "_install_process_megatron_isolation", fake_install)
+        monkeypatch.setattr(data_source_module.sys, "argv", ["/tmp/train.py"])
+
+        changed = data_source_module._maybe_isolate_rollout_data_source_worker_at_import()
+
+        assert changed is False
+        assert calls == []
+
+    def test_data_source_process_isolation_uses_pruning_only(self, monkeypatch):
+        from relax.engine.rollout import data_source as data_source_module
+
+        calls = []
+
+        def fake_install(enabled, *, source, block_imports):
+            calls.append((enabled, source, block_imports))
+            return enabled
+
+        monkeypatch.setattr(data_source_module, "_install_process_megatron_isolation", fake_install)
+
+        args = MagicMock()
+        args.sglang_model_impl = "transformers"
+
+        changed = data_source_module._isolate_rollout_data_source_from_megatron(args)
+
+        assert changed is True
+        assert calls == [(True, "Rollout data source process", False)]
+
+    def test_data_source_blocks_megatron_only_during_setup(self, monkeypatch):
+        from relax.engine.rollout import data_source as data_source_module
+
+        events = []
+
+        class FakeBlocker:
+            def __enter__(self):
+                events.append("enter")
+
+            def __exit__(self, exc_type, exc, tb):
+                events.append("exit")
+
+        def fake_blocker(args):
+            events.append("blocker")
+            return FakeBlocker()
+
+        def fake_load_tokenizer(*args, **kwargs):
+            events.append("tokenizer")
+            return MagicMock()
+
+        def fake_load_processor(*args, **kwargs):
+            events.append("processor")
+            return None
+
+        def fake_create_dataset(*args, **kwargs):
+            events.append("dataset")
+            return MagicMock()
+
+        monkeypatch.setattr(data_source_module, "_block_megatron_during_data_source_setup", fake_blocker)
+        monkeypatch.setattr(data_source_module, "_isolate_rollout_data_source_from_megatron", lambda args: True)
+        monkeypatch.setattr(data_source_module, "load_tokenizer", fake_load_tokenizer)
+        monkeypatch.setattr(data_source_module, "load_processor", fake_load_processor)
+        monkeypatch.setattr(data_source_module, "_create_dataset", fake_create_dataset)
+
+        args = MagicMock()
+        args.sglang_model_impl = "transformers"
+        args.rollout_global_dataset = True
+        args.hf_checkpoint = "/tmp/checkpoint"
+        args.dump_details = None
+        args.rollout_shuffle = False
+
+        data_source_module.RolloutDataSource(args)
+
+        assert events == ["blocker", "enter", "tokenizer", "processor", "dataset", "exit"]
+
+    def test_trace_megatron_imports_context_noops_when_disabled(self, monkeypatch):
+        from relax.engine.rollout import data_source as data_source_module
+
+        records = []
+
+        def fake_error(message, *args):
+            records.append(message % args)
+
+        monkeypatch.delenv(data_source_module._TRACE_MEGATRON_IMPORTS_ENV_VAR, raising=False)
+        monkeypatch.setattr(data_source_module.logger, "error", fake_error)
+
+        with data_source_module._trace_megatron_imports_during_data_source_init():
+            __import__("math")
+
+        assert records == []
+
+    def test_trace_megatron_imports_context_logs_matching_imports(self, monkeypatch):
+        from relax.engine.rollout import data_source as data_source_module
+
+        records = []
+
+        def fake_error(message, *args):
+            records.append(message % args)
+
+        original_import = builtins.__import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "megatron.core":
+                raise ModuleNotFoundError(name)
+            return original_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setenv(data_source_module._TRACE_MEGATRON_IMPORTS_ENV_VAR, "1")
+        monkeypatch.setattr(data_source_module.logger, "error", fake_error)
+        monkeypatch.setattr(data_source_module.builtins, "__import__", fake_import)
+
+        with pytest.raises(ModuleNotFoundError):
+            with data_source_module._trace_megatron_imports_during_data_source_init():
+                __import__("megatron.core")
+
+        assert len(records) == 1
+        assert "Megatron import traced during RolloutDataSource init: megatron.core" in records[0]
+
+    def test_build_data_source_config_keeps_only_rollout_fields(self):
+        from argparse import Namespace
+
+        from relax.engine.rollout import data_source as data_source_module
+
+        args = Namespace(
+            sglang_model_impl="transformers",
+            rollout_global_dataset=True,
+            hf_checkpoint="/tmp/checkpoint",
+            dump_details=None,
+            rollout_shuffle=True,
+            use_streaming_dataset=True,
+            streaming_buffer_size=10000,
+            prompt_data="/tmp/prompts.jsonl",
+            rollout_max_prompt_len=4096,
+            input_key="prompt",
+            multimodal_keys=None,
+            label_key="label",
+            tool_key="tools",
+            metadata_key="metadata",
+            system_prompt=None,
+            apply_chat_template=True,
+            apply_chat_template_kwargs={},
+            use_audio_in_video=False,
+            rollout_seed=42,
+            n_samples_per_prompt=8,
+            buffer_filter_path=None,
+            image_max_token_num=None,
+            image_min_token_num=None,
+            video_min_token_num=None,
+            video_max_token_num=None,
+            video_fps=None,
+            video_fps_min_frames=None,
+            video_fps_max_frames=None,
+            frame_factor=None,
+            audio_sample_rate=None,
+            save="/tmp/save",
+            load="/tmp/load",
+            tq_config=object(),
+            megatron_enum=object(),
+        )
+
+        config = data_source_module.build_data_source_config(args)
+
+        assert isinstance(config, Namespace)
+        assert config.prompt_data == "/tmp/prompts.jsonl"
+        assert config.save == "/tmp/save"
+        assert config.load == "/tmp/load"
+        assert not hasattr(config, "tq_config")
+        assert not hasattr(config, "megatron_enum")
+
+    def test_rollout_data_source_isolates_before_tokenizer_load(self, monkeypatch):
+        from relax.engine.rollout import data_source as data_source_module
+
+        call_order = []
+
+        def fake_isolate(args):
+            call_order.append("isolate")
+            return True
+
+        def fake_load_tokenizer(*args, **kwargs):
+            call_order.append("tokenizer")
+            return MagicMock()
+
+        def fake_load_processor(*args, **kwargs):
+            call_order.append("processor")
+            return None
+
+        def fake_create_dataset(*args, **kwargs):
+            call_order.append("dataset")
+            return MagicMock()
+
+        monkeypatch.setattr(data_source_module, "_isolate_rollout_data_source_from_megatron", fake_isolate)
+        monkeypatch.setattr(data_source_module, "load_tokenizer", fake_load_tokenizer)
+        monkeypatch.setattr(data_source_module, "load_processor", fake_load_processor)
+        monkeypatch.setattr(data_source_module, "_create_dataset", fake_create_dataset)
+
+        args = MagicMock()
+        args.sglang_model_impl = "transformers"
+        args.rollout_global_dataset = True
+        args.hf_checkpoint = "/tmp/checkpoint"
+        args.dump_details = None
+        args.rollout_shuffle = False
+
+        data_source_module.RolloutDataSource(args)
+
+        assert call_order == ["isolate", "tokenizer", "processor", "dataset"]
 
     @pytest.fixture
     def jsonl_file(self):
