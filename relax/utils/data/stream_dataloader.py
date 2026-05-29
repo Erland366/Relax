@@ -7,10 +7,13 @@ from typing import Any, Dict, List, Tuple
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from megatron.core import mpu
 from tensordict import TensorDict
 from transfer_queue.dataloader.streaming_dataloader import StreamingDataLoader
 from transfer_queue.dataloader.streaming_dataset import StreamingDataset
+
+from relax.utils import device as device_utils
 
 
 logger = logging.getLogger(__name__)
@@ -309,9 +312,9 @@ def get_data_from_transfer_queue(
         # will receive the real data via broadcast.
         rollout_data = [None, None]
 
-    # Use an explicit CUDA device so the communication backend (e.g. NCCL)
-    # can bind to a known CUDA context.
-    cuda_dev = torch.device(f"cuda:{torch.cuda.current_device()}")
+    # Use an explicit device so the communication backend (e.g. NCCL)
+    # can bind to a known device context.
+    cuda_dev = device_utils.make_current_torch_device()
 
     # --- Extract rollout_routed_experts BEFORE broadcast_object_list ---
     # broadcast_object_list uses pickle for the entire payload. When
@@ -428,12 +431,12 @@ def get_data_from_transfer_queue(
 def post_process_rollout_data(args, rollout_data):
     # move tokens/loss_masks to GPU in-place as a list of tensors (downstream
     # code in this module expects lists of sequence tensors for packing)
-    from relax.backends.megatron.cp_utils import slice_log_prob_with_cp
+    from relax.backends.megatron.cp_utils import maybe_padded_total_lengths, slice_log_prob_with_cp
 
-    cuda_dev = torch.device(f"cuda:{torch.cuda.current_device()}")
-    rollout_data["tokens"] = [torch.tensor(t, dtype=torch.long, device=cuda_dev) for t in rollout_data["tokens"]]
+    cuda_dev = device_utils.make_current_torch_device()
+    rollout_data["tokens"] = [torch.as_tensor(t, dtype=torch.long, device=cuda_dev) for t in rollout_data["tokens"]]
     rollout_data["loss_masks"] = [
-        torch.tensor(t, dtype=torch.int, device=cuda_dev) for t in rollout_data["loss_masks"]
+        torch.as_tensor(t, dtype=torch.int, device=cuda_dev) for t in rollout_data["loss_masks"]
     ]
     if "multimodal_train_inputs" in rollout_data:
         # Move multimodal training tensors to GPU in advance.
@@ -461,17 +464,32 @@ def post_process_rollout_data(args, rollout_data):
 
         rollout_data["max_seq_lens"] = [max_seq_len] * len(rollout_data["tokens"])
 
-    for key in ["rollout_log_probs", "teacher_log_probs"]:
+    padded_total_lengths = maybe_padded_total_lengths(
+        rollout_data["total_lengths"],
+        args.qkv_format,
+        "multimodal_train_inputs" in rollout_data or getattr(args, "uses_unsplit_forward", False),
+    )
+
+    for key in [
+        "log_probs",
+        "ref_log_probs",
+        "rollout_log_probs",
+        "teacher_log_probs",
+        "advantages",
+        "returns",
+        "opd_reverse_kl",
+    ]:
         if key not in rollout_data:
             continue
         rollout_data[key] = [
-            torch.tensor(
+            torch.as_tensor(
                 slice_log_prob_with_cp(
                     log_prob,
                     total_length,
                     response_length,
                     args.qkv_format,
                     rollout_data["max_seq_lens"][i] if args.qkv_format == "bshd" else None,
+                    padded_total_length=padded_total_lengths[i] if padded_total_lengths is not None else None,
                 ),
                 device=cuda_dev,
                 dtype=torch.float32,
@@ -486,10 +504,49 @@ def post_process_rollout_data(args, rollout_data):
             )
         ]
 
+    if "teacher_topk_token_ids" in rollout_data:
+        teacher_topk_k = rollout_data.get("teacher_topk_k", None)
+        if isinstance(teacher_topk_k, torch.Tensor):
+            teacher_topk_k = teacher_topk_k.tolist()
+
+        topk_tensors = []
+        for i, (flat_topk_ids, total_length, response_length) in enumerate(
+            zip(
+                rollout_data["teacher_topk_token_ids"],
+                rollout_data["total_lengths"],
+                rollout_data["response_lengths"],
+                strict=False,
+            )
+        ):
+            k = int(teacher_topk_k[i]) if teacher_topk_k is not None else 0
+            if k <= 0:
+                topk_tensors.append(torch.empty((response_length, 0), dtype=torch.long, device=cuda_dev))
+                continue
+
+            topk_tensor = torch.tensor(flat_topk_ids, dtype=torch.long, device=cuda_dev)
+            expected = response_length * k
+            if topk_tensor.numel() < expected:
+                topk_tensor = F.pad(topk_tensor, (0, expected - topk_tensor.numel()), value=-1)
+            elif topk_tensor.numel() > expected:
+                topk_tensor = topk_tensor[:expected]
+
+            topk_tensor = topk_tensor.reshape(response_length, k)
+            topk_tensor = slice_log_prob_with_cp(
+                topk_tensor,
+                total_length,
+                response_length,
+                args.qkv_format,
+                rollout_data["max_seq_lens"][i] if args.qkv_format == "bshd" else None,
+                padded_total_length=padded_total_lengths[i] if padded_total_lengths is not None else None,
+            )
+            topk_tensors.append(topk_tensor)
+
+        rollout_data["teacher_topk_token_ids"] = topk_tensors
+
     if "rollout_routed_experts" in rollout_data:
         from tensordict.tensorclass import NonTensorData
 
         rollout_data["rollout_routed_experts"] = [
-            torch.tensor(r.data if isinstance(r, NonTensorData) else r, dtype=torch.long, device=cuda_dev)
+            torch.as_tensor(r.data if isinstance(r, NonTensorData) else r, dtype=torch.long, device=cuda_dev)
             for r in rollout_data["rollout_routed_experts"]
         ]

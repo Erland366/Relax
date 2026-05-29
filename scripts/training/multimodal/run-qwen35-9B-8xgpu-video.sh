@@ -21,18 +21,20 @@ fi
 source "${MODEL_CONFIG_DIR}/qwen35-9B.sh"
 
 PROJECT_NAME="${PROJECT_NAME:=Relax/dev/next-qa}"
-EXP_DIR="${MODEL_DIR:=${SCRIPT_DIR}/../../../../exps}"
+EXP_DIR="${EXP_DIR:-${SCRIPT_DIR}/../../../../exps}"
+MODEL_DIR="${MODEL_DIR:-${EXP_DIR}}"
+DATA_DIR="${DATA_DIR:-${EXP_DIR}}"
 NUM_ROLLOUT="${NUM_ROLLOUT:=200}"
 
 CKPT_ARGS=(
-   --hf-checkpoint ${EXP_DIR}/Qwen3.5-9B
-   --ref-load ${EXP_DIR}/Qwen3.5-9B
+   --hf-checkpoint ${MODEL_DIR}/Qwen3.5-9B
+   --ref-load ${MODEL_DIR}/Qwen3.5-9B
    --megatron-to-hf-mode bridge
 )
 
 SYSTEM_PROMPT="'Please think about this question as if you were a human pondering deeply, carefully considering the video information before answering, engaging in an internal dialogue using expressions such as let me think, wait, hmm, oh I see, or let's break it down, including self-reflection or verification in the reasoning process, providing the detailed reasoning between the <think> </think> tags, and finally giving only the single option letter (e.g., A, B, C, D, etc.) as the final answer within the <answer> </answer> tags.'"
 
-PROMPT_SET=${EXP_DIR}/NextQA/nextqa_0-30s_convert.jsonl
+PROMPT_SET=${DATA_DIR}/NextQA/nextqa_0-30s_convert.jsonl
 
 ROLLOUT_ARGS=(
    --prompt-data ${PROMPT_SET}
@@ -76,6 +78,7 @@ PERF_ARGS=(
 
    --use-dynamic-batch-size
    --max-tokens-per-gpu 9216
+   --log-probs-max-tokens-per-gpu 20480
 
    --no-rope-fusion
 )
@@ -86,7 +89,7 @@ GRPO_ARGS=(
    --kl-loss-coef 0.001
    --kl-loss-type low_var_kl
    --entropy-coef 0.00
-   --eps-clip 3.0
+   --eps-clip 0.2
    --eps-clip-high 0.28
    --use-tis
 )
@@ -101,7 +104,7 @@ OPTIMIZER_ARGS=(
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 2
+   --rollout-num-gpus-per-engine 1
    --sglang-mem-fraction-static 0.8
 )
 

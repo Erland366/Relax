@@ -22,6 +22,7 @@ from packaging.version import parse
 from urllib3.exceptions import NewConnectionError
 
 from relax.distributed.ray.ray_actor import RayActor
+from relax.utils import device as device_utils
 from relax.utils.async_utils import run
 from relax.utils.http_utils import get_host_info
 from relax.utils.logging_utils import get_logger
@@ -38,7 +39,7 @@ _MEGATRON_BLOCKED_PREFIXES = ("megatron.core",)
 
 
 if TYPE_CHECKING:
-    from sglang.srt.server_args import ServerArgs
+    pass
 
 
 def _get_server_args_cls():
@@ -121,7 +122,9 @@ def _prune_megatron_import_state(enabled: bool, *, source: str) -> bool:
     original_sys_path = list(sys.path)
     original_path_importer_cache = dict(sys.path_importer_cache)
     blocked_modules = [
-        name for name in list(sys.modules) if any(name == prefix or name.startswith(f"{prefix}.") for prefix in _MEGATRON_BLOCKED_PREFIXES)
+        name
+        for name in list(sys.modules)
+        if any(name == prefix or name.startswith(f"{prefix}.") for prefix in _MEGATRON_BLOCKED_PREFIXES)
     ]
     editable_finder_modules = [
         name
@@ -213,11 +216,7 @@ def _blocked_megatron_imports(enabled: bool):
     original_path_importer_cache = dict(sys.path_importer_cache)
     original_import = _builtin_import
     original_import_module = importlib.import_module
-    blocked_modules = {
-        name: module
-        for name, module in list(sys.modules.items())
-        if _is_blocked_megatron_module(name)
-    }
+    blocked_modules = {name: module for name, module in list(sys.modules.items()) if _is_blocked_megatron_module(name)}
     editable_finder_modules = {
         name: module
         for name, module in list(sys.modules.items())
@@ -326,17 +325,15 @@ def get_base_gpu_id(args, rank):
     else:
         num_actor_gpus = 0 if args.debug_rollout_only else args.actor_num_gpus_per_node * args.actor_num_nodes
         start_index = (num_actor_gpus + rank * num_gpus) % args.num_gpus_per_node
-        if args.use_critic:
-            num_critic_gpus = args.critic_num_gpus_per_node * args.critic_num_nodes
-            start_index = (num_actor_gpus + num_critic_gpus + rank * num_gpus) % args.num_gpus_per_node
     return start_index
 
 
 def _to_local_gpu_id(physical_gpu_id: int) -> int:
-    cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+    visible_env = device_utils.get_visible_devices_env_var()
+    cvd = os.environ.get(visible_env)
     if not cvd:
         return physical_gpu_id  # no remapping
-    # CUDA_VISIBLE_DEVICES can be like "4,5,6,7"
+    # Visible devices can be like "4,5,6,7"
     visible = [int(x) for x in cvd.split(",") if x.strip() != ""]
     # In a remapped process, valid torch device indices are 0..len(visible)-1
     if physical_gpu_id in visible:
@@ -345,7 +342,7 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
     if 0 <= physical_gpu_id < len(visible):
         return physical_gpu_id
     raise RuntimeError(
-        f"GPU id {physical_gpu_id} is not valid under CUDA_VISIBLE_DEVICES={cvd}. "
+        f"Device id {physical_gpu_id} is not valid under {visible_env}={cvd}. "
         f"Expected one of {visible} (physical) or 0..{len(visible) - 1} (local)."
     )
 
@@ -1065,40 +1062,6 @@ class SGLangEngine(RayActor):
             },
         )
 
-    def start_profile(
-        self,
-        # The output directory
-        output_dir: str | None = None,
-        # If set, it profile as many as this number of steps.
-        # If it is set, profiling is automatically stopped after this step, and
-        # the caller doesn't need to run stop_profile.
-        start_step: int | None = None,
-        num_steps: int | None = None,
-        activities: list[str] | None = None,
-        profile_by_stage: bool = False,
-        with_stack: bool | None = None,
-        record_shapes: bool | None = None,
-    ):
-        response = requests.post(
-            f"http://{self.server_host}:{self.server_port}/start_profile",
-            json={
-                "output_dir": output_dir,
-                "start_step": start_step,
-                "num_steps": num_steps,
-                "activities": activities,
-                "profile_by_stage": profile_by_stage,
-                "with_stack": with_stack,
-                "record_shapes": record_shapes,
-            },
-        )
-        response.raise_for_status()
-        return response
-
-    def stop_profile(self):
-        response = requests.post(f"http://{self.server_host}:{self.server_port}/stop_profile", json={})
-        response.raise_for_status()
-        return response
-
     def simulate_crash(self):
         if self.args.rollout_external or not getattr(self, "process", None):
             logger.info(
@@ -1221,6 +1184,11 @@ def _compute_genrm_server_args(
         # GenRM Only
         "enable_weights_cpu_backup": True,
     }
+
+    # Allow per-genrm SGLang mem_fraction_static via --genrm-engine-config; this overrides
+    # the global --sglang-mem-fraction-static below so rollout and genrm can share GPUs.
+    if "mem_fraction_static" in args.genrm_engine_config:
+        kwargs["mem_fraction_static"] = args.genrm_engine_config["mem_fraction_static"]
 
     if worker_type == "prefill":
         kwargs["disaggregation_mode"] = "prefill"

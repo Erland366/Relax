@@ -20,7 +20,7 @@ from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer.optimizer import MegatronOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.pipeline_parallel import get_forward_backward_func
-from megatron.core.utils import get_model_config
+from megatron.core.utils import get_model_config, unwrap_model
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
@@ -163,7 +163,7 @@ def setup_model_and_optimizer(
     optimizer = get_megatron_optimizer(
         config=config,
         model_chunks=model,
-        use_gloo_process_groups=args.enable_gloo_process_groups,
+        use_gloo_process_groups=args.use_gloo_process_groups,
     )
     # Megatron's mixed-precision wrapper can replace the wrapped optimizer's
     # param_groups with fp32 main params. Rebuild HybridDeviceOptimizer once so
@@ -271,14 +271,40 @@ def forward_only(
         packed_seq_params = batch["packed_seq_params"]
         total_lengths = batch["total_lengths"]
         response_lengths = batch["response_lengths"]
+
+        is_vl_model = batch.get("multimodal_train_inputs", None) is not None
+        mm_kwargs = batch["multimodal_train_inputs"] if is_vl_model else {}
+        needs_unsplit = is_vl_model or getattr(args, "uses_unsplit_forward", False)
+
+        # Bridge Qwen3VLModel.forward (VL or text-only Qwen3.6) does CP+SP
+        # splitting internally, so pass unsplit tokens.
+        if needs_unsplit and "unsplit_tokens" in batch:
+            forward_input_ids = batch["unsplit_tokens"]
+            forward_packed_seq_params = None
+        else:
+            forward_input_ids = tokens
+            forward_packed_seq_params = packed_seq_params
+
+        # thd bridge+CP: bridge needs per-sample attention_mask + matching thd
+        # packed_seq_params (align_size = tp*cp*2).  loss_mask is None because
+        # labels=None means GPTModel won't run internal loss; Relax's loss is
+        # computed externally from full_loss_masks.
+        if needs_unsplit and "vlm_packed_seq_params" in batch:
+            forward_attention_mask = batch["unsplit_attention_mask"]
+            forward_packed_seq_params = batch["vlm_packed_seq_params"]
+            forward_loss_mask = None
+        else:
+            forward_attention_mask = None
+            forward_loss_mask = batch["full_loss_masks"]
+
         output_tensor = model(
-            input_ids=tokens,
+            input_ids=forward_input_ids,
             position_ids=None,
-            attention_mask=None,
+            attention_mask=forward_attention_mask,
             labels=None,
-            packed_seq_params=packed_seq_params,
-            loss_mask=batch["full_loss_masks"],
-            **(batch["multimodal_train_inputs"] if batch.get("multimodal_train_inputs", None) is not None else {}),
+            packed_seq_params=forward_packed_seq_params,
+            loss_mask=forward_loss_mask,
+            **mm_kwargs,
         )
 
         return output_tensor, partial(
@@ -289,6 +315,7 @@ def forward_only(
             response_lengths=response_lengths,
             with_entropy=args.use_rollout_entropy,
             max_seq_lens=batch.get("max_seq_lens", None),
+            padded_total_lengths=batch.get("padded_total_lengths", None),
         )
 
     # Turn on evaluation mode which disables dropout.
@@ -443,19 +470,32 @@ def train_one_step(
                 loss_mask=batch["full_loss_masks"],
             )
         else:
+            is_vl_model = batch.get("multimodal_train_inputs", None) is not None
+            needs_unsplit = is_vl_model or getattr(args, "uses_unsplit_forward", False)
+            use_unsplit = needs_unsplit and "unsplit_tokens" in batch
+
             forward_kwargs = {
-                "input_ids": batch["tokens"],
+                "input_ids": batch["unsplit_tokens"] if use_unsplit else batch["tokens"],
                 "position_ids": None,
                 "attention_mask": None,
                 "labels": None,
-                "packed_seq_params": batch["packed_seq_params"],
+                "packed_seq_params": None if use_unsplit else batch["packed_seq_params"],
                 "loss_mask": batch["full_loss_masks"],
             }
+
+            # thd VL+CP: bridge needs per-sample attention_mask + matching thd
+            # packed_seq_params (align_size = tp*cp*2).  loss_mask is None
+            # because labels=None means GPTModel won't run internal loss;
+            # Relax's loss is computed externally from full_loss_masks.
+            if needs_unsplit and "vlm_packed_seq_params" in batch:
+                forward_kwargs["attention_mask"] = batch["unsplit_attention_mask"]
+                forward_kwargs["packed_seq_params"] = batch["vlm_packed_seq_params"]
+                forward_kwargs["loss_mask"] = None
 
             if args.enable_mtp_training:
                 forward_kwargs["mtp_kwargs"] = {"mtp_labels": batch["tokens"]}
 
-            if batch.get("multimodal_train_inputs", None) is not None:
+            if is_vl_model:
                 forward_kwargs.update(batch["multimodal_train_inputs"])
 
             output_tensor = model(**forward_kwargs)
@@ -575,11 +615,10 @@ def train(
     config = get_model_config(model[0])
     config.grad_scale_func = optimizer.scale_loss
     config.timers = None
-    if isinstance(model[0], DDP) and args.overlap_grad_reduce:
-        assert config.no_sync_func is None, (
-            "When overlap_grad_reduce is True, config.no_sync_func must be None; "
-            "a custom no_sync_func is not supported when overlapping grad-reduce"
-        )
+    # train() is invoked once per rollout in Relax (vs. once per run upstream),
+    # so guard the sync-func setup to be idempotent — re-assigning would trip
+    # Megatron's "no_sync_func must be None" assert on rollout 1+.
+    if isinstance(model[0], DDP) and args.overlap_grad_reduce and config.no_sync_func is None:
         config.no_sync_func = [model_chunk.no_sync for model_chunk in model]
         if len(model) == 1:
             config.no_sync_func = config.no_sync_func[0]
@@ -587,14 +626,13 @@ def train(
             config.grad_sync_func = [model_chunk.start_grad_sync for model_chunk in model]
             if len(model) == 1:
                 config.grad_sync_func = config.grad_sync_func[0]
-    if args.overlap_param_gather and args.align_param_gather:
+    if args.overlap_param_gather and args.align_param_gather and config.param_sync_func is None:
         config.param_sync_func = [model_chunk.start_param_sync for model_chunk in model]
         if len(model) == 1:
             config.param_sync_func = config.param_sync_func[0]
     config.finalize_model_grads_func = finalize_model_grads
 
     pre_hook_enabled = False
-
     if args.reset_optimizer_states:
         if (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0
@@ -734,9 +772,13 @@ def train(
                     rel_tol=0.01,
                     abs_tol=0.01,
                 ), f"grad norm mismatch: {grad_norm} != {expected_grad_norm}"
+
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:
-        disable_forward_pre_hook(model)
+        # NOTE(wuhuan): Sync the latest distributed-optimizer parameters before exporting weights
+        # to rollout engines. this is important for --overlap-grad-reduce --overlap-param-gather
+        disable_forward_pre_hook(model, param_sync=True)
+        enable_forward_pre_hook(model)
 
 
 def save(
@@ -814,6 +856,68 @@ def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
             logger.error(f"Failed to save HuggingFace format: {e}")
 
 
+def _iter_critic_output_layers(model: Sequence[DDP]):
+    for chunk_id, module in enumerate(unwrap_model(model)):
+        output_layer = getattr(module, "output_layer", None)
+        if output_layer is not None:
+            yield chunk_id, output_layer
+
+
+def _critic_output_layer_needs_reinit(args: Namespace, model: Sequence[DDP], role: str) -> bool:
+    if role != "critic" or args.load is None:
+        return False
+
+    from megatron.core.dist_checkpointing.serialization import load_tensors_metadata
+    from megatron.training.checkpointing import get_load_checkpoint_path_by_args
+
+    checkpoint_path = Path(get_load_checkpoint_path_by_args(args))
+    if not (checkpoint_path / ".metadata").is_file():
+        return False
+
+    checkpoint_metadata = load_tensors_metadata(str(checkpoint_path))
+    for _chunk_id, output_layer in _iter_critic_output_layers(model):
+        for name in ("weight", "bias"):
+            param = getattr(output_layer, name, None)
+            if param is None:
+                continue
+
+            param_name = f"output_layer.{name}"
+            ckpt_tensor_metadata = next(
+                (
+                    tensor_metadata
+                    for key, tensor_metadata in checkpoint_metadata.items()
+                    if key == param_name or key.endswith(f".{param_name}")
+                ),
+                None,
+            )
+            expected_shape = tuple(param.shape)
+            checkpoint_shape = tuple(ckpt_tensor_metadata.global_shape) if ckpt_tensor_metadata is not None else None
+            if checkpoint_shape == expected_shape:
+                continue
+
+            reason = (
+                "missing from checkpoint metadata"
+                if checkpoint_shape is None
+                else f"shape mismatch checkpoint={checkpoint_shape} runtime={expected_shape}"
+            )
+            logger.warning(
+                "Will reinitialize critic %s after checkpoint load because it is %s",
+                param_name,
+                reason,
+            )
+            return True
+
+    return False
+
+
+@torch.no_grad()
+def _reinitialize_critic_output_layer(model: Sequence[DDP]) -> None:
+    for _chunk_id, output_layer in _iter_critic_output_layers(model):
+        output_layer.weight.data.normal_(mean=0.0, std=0.02)
+        if output_layer.bias is not None:
+            output_layer.bias.data.zero_()
+
+
 def initialize_model_and_optimizer(
     args: Namespace, role: str = "actor"
 ) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
@@ -838,6 +942,7 @@ def initialize_model_and_optimizer(
 
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args, role)
     model[0].role = role
+    reinit_critic_output_layer = _critic_output_layer_needs_reinit(args, model, role)
     clear_memory()
     iteration, _ = load_checkpoint(
         model,
@@ -846,6 +951,10 @@ def initialize_model_and_optimizer(
         checkpointing_context={},
         skip_load_to_model_and_opt=False,
     )
+    if reinit_critic_output_layer:
+        _reinitialize_critic_output_layer(model)
+        if (args.fp16 or args.bf16) and optimizer is not None:
+            optimizer.reload_model_params()
     clear_memory()
     if opt_param_scheduler is not None:
         opt_param_scheduler.step(increment=iteration * args.global_batch_size)

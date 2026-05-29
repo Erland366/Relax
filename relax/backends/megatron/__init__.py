@@ -2,7 +2,13 @@
 
 import logging
 
-import torch
+
+try:
+    import relax.models  # noqa
+except BaseException as e:
+    print(f"failed to import relax.models, error={e}")
+
+from relax.utils import device as device_utils
 
 
 try:
@@ -15,7 +21,7 @@ try:
         if torch_memory_saver._impl is not None:
             torch_memory_saver._impl._binary_wrapper.cdll.tms_set_interesting_region(False)
         old_init(self, *args, **kwargs)
-        torch.cuda.synchronize()
+        device_utils.synchronize()
         if torch_memory_saver._impl is not None:
             torch_memory_saver._impl._binary_wrapper.cdll.tms_set_interesting_region(True)
 

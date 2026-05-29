@@ -95,7 +95,11 @@ def test_order_service_creation_moves_rollout_before_actor_for_serial_non_coloca
 
     ordered = controller_module.order_service_creation(roles_to_create, colocate=False, fully_async=False)
 
-    assert [role for role, *_rest in ordered] == [controller_module.ROLES.rollout, controller_module.ROLES.actor, "genrm"]
+    assert [role for role, *_rest in ordered] == [
+        controller_module.ROLES.rollout,
+        controller_module.ROLES.actor,
+        "genrm",
+    ]
 
 
 def test_order_service_creation_keeps_order_for_colocated_or_async():

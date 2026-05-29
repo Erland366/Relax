@@ -21,20 +21,23 @@ fi
 source "${MODEL_CONFIG_DIR}/qwen3-30B-A3B.sh"
 
 PROJECT_NAME="${PROJECT_NAME:=Relax/dev/dapo-math}"
-EXP_DIR="${MODEL_DIR:=${SCRIPT_DIR}/../../../../exps}"
+EXP_DIR="${EXP_DIR:-${SCRIPT_DIR}/../../../../exps}"
+MODEL_DIR="${MODEL_DIR:-${EXP_DIR}}"
+DATA_DIR="${DATA_DIR:-${EXP_DIR}}"
 NUM_ROLLOUT="${NUM_ROLLOUT:=200}"
 
 
 
 CKPT_ARGS=(
-   --hf-checkpoint ${EXP_DIR}/Qwen3-30B-A3B-Instruct/
+   --hf-checkpoint ${MODEL_DIR}/Qwen3-30B-A3B-Instruct/
+   --ref-load ${MODEL_DIR}/Qwen3-30B-A3B-Instruct/
+   --megatron-to-hf-mode bridge
    --load ${EXP_DIR}/Qwen3-30B-A3B-Instruct_mcore_16xgpu/
    --save ${EXP_DIR}/Qwen3-30B-A3B-Instruct_mcore_16xgpu/
-   --ref-load ${EXP_DIR}/Qwen3-30B-A3B-Instruct_torch_dist//
    --save-interval 100
 )
 
-PROMPT_SET=${EXP_DIR}/dapo-math-17k/dapo-math-17k.jsonl
+PROMPT_SET=${DATA_DIR}/dapo-math-17k/dapo-math-17k.jsonl
 
 ROLLOUT_ARGS=(
    --prompt-data ${PROMPT_SET}
@@ -56,7 +59,8 @@ ROLLOUT_ARGS=(
 EVAL_ARGS=(
    --log-passrate
    --eval-interval 20
-   --eval-prompt-data aime ${EXP_DIR}/aime-2024/aime-2024.jsonl
+   --skip-eval-before-train
+   --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 8
    --eval-max-response-len 16384
    --eval-top-p 0.7
@@ -95,6 +99,13 @@ OPTIMIZER_ARGS=(
    --weight-decay 0.1
    --adam-beta1 0.9
    --adam-beta2 0.98
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
+
+   # NOTE(wuhuan): to avoid algorithm performance degradation
+   --moe-router-load-balancing-type "none"
+   --moe-aux-loss-coeff 0.0
 )
 
 SGLANG_ARGS=(

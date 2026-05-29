@@ -11,10 +11,10 @@ from relax.backends.sglang.sglang_engine import (
     _MEGATRON_ISOLATION_ENV_VAR,
     _blocked_megatron_imports,
     _filtered_pythonpath_without_megatron,
-    launch_server_process,
     _patched_run_scheduler_process,
     _remove_megatron_from_current_process,
     _temporary_pythonpath_without_megatron,
+    launch_server_process,
 )
 
 
@@ -189,7 +189,15 @@ def test_launch_server_process_kills_tree_when_health_check_fails(monkeypatch):
     monkeypatch.setattr("relax.backends.sglang.sglang_engine._kill_process_tree", killed_pids.append)
 
     try:
-        launch_server_process(SimpleNamespace(model_impl="transformers", host="127.0.0.1", node_rank=0, api_key=None, url=lambda: "http://127.0.0.1:8000"))
+        launch_server_process(
+            SimpleNamespace(
+                model_impl="transformers",
+                host="127.0.0.1",
+                node_rank=0,
+                api_key=None,
+                url=lambda: "http://127.0.0.1:8000",
+            )
+        )
     except RuntimeError as exc:
         assert str(exc) == "boom"
     else:

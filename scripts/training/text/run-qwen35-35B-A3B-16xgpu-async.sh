@@ -21,12 +21,14 @@ fi
 source "${MODEL_CONFIG_DIR}/qwen35-35B-A3B.sh"
 
 PROJECT_NAME="${PROJECT_NAME:=Relax/dev/dapo-math}"
-EXP_DIR="${MODEL_DIR:=${SCRIPT_DIR}/../../../../exps}"
+EXP_DIR="${EXP_DIR:-${SCRIPT_DIR}/../../../../exps}"
+MODEL_DIR="${MODEL_DIR:-${EXP_DIR}}"
+DATA_DIR="${DATA_DIR:-${EXP_DIR}}"
 NUM_ROLLOUT="${NUM_ROLLOUT:=1000}"
 
 CKPT_ARGS=(
-   --hf-checkpoint ${EXP_DIR}/Qwen3.5-35B-A3B/
-   # --ref-load ${EXP_DIR}/Qwen3.5-35B-A3B/
+   --hf-checkpoint ${MODEL_DIR}/Qwen3.5-35B-A3B/
+   # --ref-load ${MODEL_DIR}/Qwen3.5-35B-A3B/
    --megatron-to-hf-mode bridge
 
    --load ${EXP_DIR}/Qwen3-35B-A3B_mcore_16xgpu/
@@ -35,7 +37,7 @@ CKPT_ARGS=(
    --max-actor-ckpt-to-keep 1
 )
 
-PROMPT_SET=${EXP_DIR}/dapo-math-17k/dapo-math-17k.jsonl
+PROMPT_SET=${DATA_DIR}/dapo-math-17k/dapo-math-17k.jsonl
 
 ROLLOUT_ARGS=(
    --prompt-data ${PROMPT_SET}
@@ -58,7 +60,7 @@ EVAL_ARGS=(
    --log-passrate
    --skip-eval-before-train
    --eval-interval 20
-   --eval-prompt-data aime ${EXP_DIR}/aime-2024/aime-2024.jsonl
+   --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 8
    --eval-max-response-len 8192
    --eval-top-p 0.7
@@ -138,11 +140,10 @@ ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://${HOST_IP}:8265" \
    ${WORKING_DIR:+--working-dir "${WORKING_DIR}"} \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 -m relax.entrypoints.train \
-   --resource '{"actor": [1, 8], "rollout": [1, 6], "actor_fwd": [1, 2], "advantages": [1, 0]}'\
+   --resource '{"actor": [1, 8], "rollout": [1, 8], "advantages": [1, 0]}'\
    --max-staleness 2 \
    --num-data-storage-units 1 \
    --num-iters-per-train-update 32 \
-   --ref-actor-config '{"tensor_model_parallel_size": 2, "pipeline_model_parallel_size": 1, "expert_model_parallel_size": 2, "max_tokens_per_gpu": 10240, "sequence_parallel": false, "only_load_weight": true}' \
    --fully-async \
     --use-health-check \
     "${MODEL_ARGS[@]}" \

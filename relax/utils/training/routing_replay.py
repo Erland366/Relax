@@ -2,6 +2,8 @@ import os
 
 import torch
 
+from relax.utils import device as device_utils
+
 
 ROUTING_REPLAY = None
 
@@ -29,12 +31,12 @@ class RoutingReplay:
     def pop_forward(self):
         top_indices = self.top_indices_list[self.forward_index]
         self.forward_index += 1
-        return top_indices.to(torch.cuda.current_device())
+        return top_indices.to(device_utils.make_current_torch_device())
 
     def pop_backward(self):
         top_indices = self.top_indices_list[self.backward_index]
         self.backward_index += 1
-        return top_indices.to(torch.cuda.current_device())
+        return top_indices.to(device_utils.make_current_torch_device())
 
     def clear(self):
         self.forward_index = 0
@@ -57,7 +59,9 @@ class RoutingReplay:
 
 def get_routing_replay_compute_topk(old_compute_topk):
     def compute_topk(scores, topk, num_groups=None, group_topk=None):
-        if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
+        # ROUTING_REPLAY is None for routers that opt out of replay (e.g. MTP),
+        # in which case we fall through to the original implementation.
+        if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1" and ROUTING_REPLAY is not None:
             routing_replay_stage = os.environ["ROUTING_REPLAY_STAGE"]
             if routing_replay_stage == "fallthrough":
                 return old_compute_topk(scores, topk, num_groups=num_groups, group_topk=group_topk)
@@ -84,10 +88,25 @@ def get_routing_replay_compute_topk(old_compute_topk):
 
 
 def register_routing_replay(module):
-    if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
-        module.routing_replay = RoutingReplay()
+    if os.environ.get("ENABLE_ROUTING_REPLAY", "0") != "1":
+        return
+
+    # MTP routers exist in training but rollout (sglang) doesn't run MTP, so
+    # there's nothing to record/replay against.  Install a pre-hook that clears
+    # the global ROUTING_REPLAY (compute_topk falls through) and skip
+    # registration in `all_routing_replays` so fill_routing_replay's per-layer
+    # accounting stays consistent.
+    if getattr(module, "is_mtp_layer", False):
 
         def pre_forward_hook(*args, **kwargs):
-            set_routing_replay(module.routing_replay)
+            set_routing_replay(None)
 
         module.register_forward_pre_hook(pre_forward_hook)
+        return
+
+    module.routing_replay = RoutingReplay()
+
+    def pre_forward_hook(*args, **kwargs):
+        set_routing_replay(module.routing_replay)
+
+    module.register_forward_pre_hook(pre_forward_hook)

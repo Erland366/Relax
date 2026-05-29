@@ -50,7 +50,9 @@ def test_post_process_env_propagates_proxy_variables(monkeypatch):
     assert result["env_vars"]["no_proxy"] == (
         ".example.internal,127.0.0.1,localhost,::1,head-node,172.27.112.25,worker-node,172.27.112.26"
     )
-    assert result["env_vars"]["NO_PROXY"] == "127.0.0.1,localhost,::1,head-node,172.27.112.25,worker-node,172.27.112.26"
+    assert (
+        result["env_vars"]["NO_PROXY"] == "127.0.0.1,localhost,::1,head-node,172.27.112.25,worker-node,172.27.112.26"
+    )
 
 
 def test_post_process_env_propagates_ray_runtime_tuning(monkeypatch):

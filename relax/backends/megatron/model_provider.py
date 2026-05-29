@@ -3,15 +3,16 @@
 # Adapt from https://github.com/NVIDIA/Megatron-LM/blob/b1efb3c7126ef7615e8c333432d76e08038e17ff/pretrain_gpt.py
 import argparse
 import inspect
+import json
 import os
 import pickle
 import re
 from contextlib import nullcontext
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 import torch.distributed as dist
-from megatron.core import tensor_parallel
+from megatron.core import mpu, tensor_parallel
 from megatron.core.models.gpt import GPTModel
 from megatron.core.models.gpt.gpt_layer_specs import (
     get_gpt_decoder_block_spec,
@@ -27,6 +28,50 @@ from relax.utils.misc import load_function
 
 
 logger = get_logger(__name__)
+
+
+def _make_json_safe(value: Any, seen: set[int] | None = None) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+
+    if seen is None:
+        seen = set()
+
+    if isinstance(value, dict):
+        return {str(k): _make_json_safe(v, seen) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_make_json_safe(v, seen) for v in value]
+
+    obj_id = id(value)
+    if obj_id in seen:
+        return str(value)
+
+    if hasattr(value, "__dict__"):
+        seen.add(obj_id)
+        try:
+            return {str(k): _make_json_safe(v, seen) for k, v in vars(value).items()}
+        finally:
+            seen.remove(obj_id)
+
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        return str(value)
+
+
+def _dump_provider_config(provider: Any, save_path: str) -> None:
+    os.makedirs(save_path, exist_ok=True)
+
+    pkl_path = os.path.join(save_path, "transformer_config.pkl")
+    with open(pkl_path, "wb") as f:
+        pickle.dump(provider, f)
+    logger.info(f"Provider config saved to {pkl_path}")
+
+    json_path = os.path.join(save_path, "transformer_config.json")
+    with open(json_path, "w") as f:
+        json.dump(_make_json_safe(provider), f, indent=2, ensure_ascii=False)
+    logger.info(f"Provider config saved to {json_path}")
 
 
 # Adapt from https://github.com/volcengine/verl/blob/c3b20575d2bc815fcccd84bddb4c0401fc4b632b/verl/models/llama/megatron/layers/parallel_linear.py#L82
@@ -63,6 +108,105 @@ class LinearForLastLayer(torch.nn.Linear):
         return logits, None
 
 
+# CP-PROBE: one-shot forward-pre-hook on the first attention module to verify that
+# context parallelism actually splits the sequence dimension at the attention input.
+# Compare seq_len across CP=1 vs CP=2 runs — it must halve.  Remove after verifying.
+_CP_PROBE_INSTALLED = False
+
+
+def _maybe_mark_unsplit_forward(args: argparse.Namespace, model: torch.nn.Module) -> None:
+    """Mark `args.uses_unsplit_forward` when the bridge produces a model whose
+    forward expects UNSPLIT input + global cu_seqlens + attention_mask and does
+    CP+SP splitting internally (Qwen3VLModel family — used for Qwen3-VL and
+    text-only Qwen3.5 / Qwen3.6 sharing the same architecture).
+
+    Read by data.py / loss.py to build unsplit tokens + tp*cp*2-aligned
+    cu_seqlens instead of the pre-split + cp-multiplied form, and by model.py
+    to route those through the forward.
+    """
+    try:
+        from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model import Qwen3VLModel
+    except ImportError:
+        return
+    if isinstance(model, Qwen3VLModel):
+        args.uses_unsplit_forward = True
+
+
+def _install_cp_probe(model: torch.nn.Module) -> None:
+    global _CP_PROBE_INSTALLED
+    if _CP_PROBE_INSTALLED:
+        return
+
+    from megatron.core import mpu
+
+    cp_size = mpu.get_context_parallel_world_size()
+    cp_rank = mpu.get_context_parallel_rank()
+    tp_rank = mpu.get_tensor_model_parallel_rank()
+    state = {"n": 0}
+
+    target_classes = (
+        "DotProductAttention",
+        "TEDotProductAttention",
+        "FusedAttention",
+        "FlashAttention",
+    )
+
+    def hook(module, args, kwargs):
+        if state["n"] >= 2 or tp_rank != 0:
+            return
+        shapes: dict[str, object] = {}
+        for name in (
+            "query",
+            "key",
+            "value",
+            "q",
+            "k",
+            "v",
+            "hidden_states",
+            "query_layer",
+            "key_layer",
+            "value_layer",
+        ):
+            t = kwargs.get(name)
+            if torch.is_tensor(t):
+                shapes[name] = tuple(t.shape)
+        for i, t in enumerate(args):
+            if torch.is_tensor(t):
+                shapes[f"arg{i}"] = tuple(t.shape)
+        for name in ("cu_seqlens_q", "cu_seqlens_kv"):
+            t = kwargs.get(name)
+            if torch.is_tensor(t):
+                shapes[name] = t.tolist()  # one-shot sync, OK for probe
+        logger.debug(f"[CP-PROBE] cp_rank={cp_rank}/{cp_size} module={type(module).__name__} shapes={shapes}")
+        state["n"] += 1
+
+    skip_prefixes = ("vision_model", "visual", "vit", "image_encoder", "projector", "audio")
+
+    def is_llm_backbone(n: str) -> bool:
+        return not any(p in n for p in skip_prefixes)
+
+    matches = [(n, m) for n, m in model.named_modules() if type(m).__name__ in target_classes]
+    llm_matches = [(n, m) for n, m in matches if is_llm_backbone(n)]
+    chosen = llm_matches or matches  # fallback to vision if no LLM backbone in this stage
+
+    if chosen:
+        name, m = chosen[0]
+        m.register_forward_pre_hook(hook, with_kwargs=True)
+        logger.debug(
+            f"[CP-PROBE] hook installed on '{name}' ({type(m).__name__}) "
+            f"cp_size={cp_size} cp_rank={cp_rank} "
+            f"(total_attn_modules={len(matches)}, llm_backbone={len(llm_matches)})"
+        )
+        _CP_PROBE_INSTALLED = True
+        return
+
+    candidates = [(n, type(m).__name__) for n, m in model.named_modules() if "attention" in n.lower()][:8]
+    logger.warning(
+        f"[CP-PROBE] no attention module matched on this stage (cp_rank={cp_rank}); "
+        f"attention-like candidates: {candidates}"
+    )
+
+
 def get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
@@ -85,6 +229,8 @@ def get_model_provider_func(
                 model.output_layer = LinearForLastLayer(
                     input_size=model.config.hidden_size, output_size=1, config=model.config
                 )
+            _maybe_mark_unsplit_forward(args, model)
+            _install_cp_probe(model)
             return model
 
         return wrapped_model_provider
@@ -109,6 +255,7 @@ def get_model_provider_func(
             "tensor_model_parallel_size",
             "sequence_parallel",
             "pipeline_model_parallel_size",
+            "virtual_pipeline_model_parallel_size",
             "context_parallel_size",
             "expert_model_parallel_size",
             "expert_tensor_parallel_size",
@@ -127,42 +274,41 @@ def get_model_provider_func(
             "moe_router_dtype",
             "moe_aux_loss_coeff",
             "moe_token_dispatcher_type",
+            "moe_shared_expert_overlap",
             "moe_enable_deepep",
             "moe_flex_dispatcher_backend",
             "use_audio_in_video",
             "freeze_language_model",
             "freeze_vision_model",
             "freeze_vision_projection",
+            # https://github.com/redai-infra/Megatron-Bridge/commit/960bb5f18800d3e1fb9815e95daa185ab06c09ea
+            "vision_dp_when_tp",
+            "calculate_per_token_loss",
+            # Allow CLI to override layer count / MoE frequency for layer-reduced training
+            "num_layers",
+            "moe_layer_freq",
+            # Kimi K2 / MLA / MoE override surface — required because published K2 configs
+            # declare DeepseekV3ForCausalLM and route through DeepSeekV3Bridge, which has
+            # different defaults than what slime's K2 launch scripts assume.
+            "q_lora_rank",
+            "kv_lora_rank",
+            "qk_head_dim",
+            "qk_pos_emb_head_dim",
+            "v_head_dim",
+            "rotary_scaling_factor",
+            "rotary_base",
+            "moe_router_pre_softmax",
+            "moe_router_enable_expert_bias",
+            "moe_permute_fusion",
+            "moe_grouped_gemm",
+            "moe_shared_expert_intermediate_size",
+            "moe_router_topk",
+            "moe_router_num_groups",
+            "moe_router_group_topk",
+            "moe_router_topk_scaling_factor",
+            "moe_router_score_function",
+            "moe_ffn_hidden_size",
         ]
-
-        # NOTE(wuhuan): Multimodal models (e.g. Qwen3-VL) use multi-axis RoPE whose
-        # `rotary_pos_emb` is a Python list of tensors, not a single Tensor. Megatron's
-        # `CheckpointFunction.forward` calls `ctx.save_for_backward(*forward_args)`, which
-        # rejects list arguments with:
-        #   TypeError: save_for_backward can only save variables, but argument 6 is of type list
-        # So `recompute-granularity full` is incompatible with multimodal providers until
-        # upstream Megatron-Bridge unpacks the rope list. Detect that case and disable the
-        # recompute overrides (bridge default = no full recompute), warning the user loudly.
-        is_multimodal = hasattr(provider, "freeze_vision_model") or hasattr(provider, "vision_transformer_config")
-        if is_multimodal and getattr(args, "recompute_granularity", None) == "full":
-            logger.warning(
-                "Multimodal model detected together with --recompute-granularity=full. "
-                "Full activation recomputation is incompatible with multi-axis RoPE "
-                "(rotary_pos_emb is a list, which Megatron's CheckpointFunction cannot "
-                "save_for_backward). Disabling recompute overrides for this run — "
-                "remove --recompute-granularity from the launch script to silence this warning."
-            )
-            bridge_keys = [
-                k
-                for k in bridge_keys
-                if k
-                not in (
-                    "recompute_granularity",
-                    "recompute_method",
-                    "recompute_num_layers",
-                    "distribute_saved_activations",
-                )
-            ]
 
         args_dict = vars(args)
         for attr in vars(provider):
@@ -202,13 +348,17 @@ def get_model_provider_func(
         # Pickle provider for offline inspection / reproducibility (only on rank 0)
         if not dist.is_initialized() or dist.get_rank() == 0:
             save_path = getattr(args, "save", None) or "/tmp/relax"
-            os.makedirs(save_path, exist_ok=True)
-            pkl_path = os.path.join(save_path, "transformer_config.pkl")
-            with open(pkl_path, "wb") as f:
-                pickle.dump(provider, f)
-            logger.info(f"Provider config saved to {pkl_path}")
+            _dump_provider_config(provider, save_path)
 
-        return provider.provide
+        original_provide = provider.provide
+
+        def provide_with_cp_probe(*p_args, **p_kwargs):
+            model = original_provide(*p_args, **p_kwargs)
+            _maybe_mark_unsplit_forward(args, model)
+            _install_cp_probe(model)
+            return model
+
+        return provide_with_cp_probe
 
     def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:
         """Builds the model.
@@ -315,15 +465,23 @@ def get_model_provider_func(
         if post_process and role == "critic":
             model.output_layer = LinearForLastLayer(input_size=config.hidden_size, output_size=1, config=config)
 
+        _maybe_mark_unsplit_forward(args, model)
+        _install_cp_probe(model)
         return model
 
     return model_provider
 
 
 def wrap_model_provider_with_freeze(original_provider, args):
-    def wrapped_provider(pre_process=True, post_process=True, vp_stage=None):
+    def wrapped_provider(pre_process=True, post_process=True, vp_stage=None, **kwargs):
+        if vp_stage is None and mpu.get_virtual_pipeline_model_parallel_world_size() is not None:
+            vp_stage = mpu.get_virtual_pipeline_model_parallel_rank()
+
         sig = inspect.signature(original_provider)
-        if "vp_stage" in sig.parameters:
+        accepts_vp_stage = "vp_stage" in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+        if accepts_vp_stage:
             model = original_provider(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
         else:
             model = original_provider(pre_process=pre_process, post_process=post_process)

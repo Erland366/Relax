@@ -4,6 +4,8 @@ from collections.abc import Callable, Iterable
 
 import torch
 
+from relax.utils import device as device_utils
+
 
 _SourceGetter = Callable[[], Iterable[tuple[str, torch.Tensor]]]
 
@@ -64,7 +66,7 @@ class _TensorBackuperNormal(TensorBackuper):
                     pin_memory=self._pin_memory,
                 )
             backup_dict[name].copy_(param.detach(), non_blocking=True)
-        torch.cuda.synchronize()
+        device_utils.synchronize()
 
     @torch.no_grad()
     def copy(self, *, src_tag: str, dst_tag: str):
@@ -77,7 +79,7 @@ class _TensorBackuperNormal(TensorBackuper):
         for name, param in self._source_getter():
             assert name in backup_dict
             param.copy_(backup_dict[name], non_blocking=True)
-        torch.cuda.synchronize()
+        device_utils.synchronize()
 
 
 class _TensorBackuperNoop(TensorBackuper):
@@ -100,12 +102,12 @@ class _TensorBackuperNoop(TensorBackuper):
     def backup(self, tag: str) -> None:
         assert tag == self._single_tag
         self._backup_hash_dict = _compute_hash_dict(dict(self._source_getter()))
-        torch.cuda.synchronize()
+        device_utils.synchronize()
 
     def restore(self, tag: str) -> None:
         assert tag == self._single_tag
         assert _compute_hash_dict(dict(self._source_getter())) == self._backup_hash_dict
-        torch.cuda.synchronize()
+        device_utils.synchronize()
 
 
 def _compute_hash_dict(tensors: dict[str, torch.Tensor]):

@@ -24,8 +24,9 @@ fi
 source "${MODEL_CONFIG_DIR}/qwen3-4B.sh"
 
 PROJECT_NAME="${PROJECT_NAME:=Relax/dev/genrm-colocated}"
-EXP_DIR="${EXP_DIR:=${SCRIPT_DIR}/../../exps}"
-MODEL_DIR=${MODEL_DIR:=${EXP_DIR}}
+EXP_DIR="${EXP_DIR:-${SCRIPT_DIR}/../../exps}"
+MODEL_DIR="${MODEL_DIR:-${EXP_DIR}}"
+DATA_DIR="${DATA_DIR:-${EXP_DIR}}"
 NUM_ROLLOUT="${NUM_ROLLOUT:=200}"
 
 CKPT_ARGS=(
@@ -34,7 +35,7 @@ CKPT_ARGS=(
    --megatron-to-hf-mode bridge
 )
 
-PROMPT_SET=${EXP_DIR}/dapo-math-17k/dapo-math-17k.jsonl
+PROMPT_SET=${DATA_DIR}/dapo-math-17k/dapo-math-17k.jsonl
 
 # ============================================
 # ROLLOUT ARGS - Using dapo-genrm rm-type
@@ -64,7 +65,7 @@ EVAL_ARGS=(
    --skip-eval-before-train
    --log-passrate
    --eval-interval 20
-   --eval-prompt-data aime ${EXP_DIR}/aime-2024/aime-2024.jsonl
+   --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 8
    --eval-max-response-len 16384
    --eval-top-p 0.7
@@ -110,7 +111,7 @@ OPTIMIZER_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.8
+   --sglang-mem-fraction-static 0.5
 )
 
 WANDB_ARGS=(
@@ -140,11 +141,11 @@ MISC_ARGS=(
 ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 ${SCRIPT_DIR}/../../relax/entrypoints/train.py \
-   --resource '{"actor": [1, 8], "rollout": [1, 4], "genrm": [1, 4]}' \
+   --resource '{"actor": [1, 8], "rollout": [1, 8], "genrm": [1, 8]}' \
    --colocate \
    --genrm-model-path ${MODEL_DIR}/Qwen3-VL-30B-A3B-Instruct/ \
    --genrm-num-gpus-per-engine 4 \
-   --genrm-engine-config '{"max_context_len": 10240}' \
+   --genrm-engine-config '{"max_context_len": 10240, "mem_fraction_static": 0.3}' \
    --genrm-sampling-config '{"temperature": 0.1, "top_p": 1.0, "top_k": -1, "max_response_len": 1024}' \
    --max-staleness 0 \
    ${MODEL_ARGS[@]} \

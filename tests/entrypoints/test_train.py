@@ -26,7 +26,9 @@ def test_main_initializes_tracking_before_controller(monkeypatch):
 
     monkeypatch.setattr(train_entry.yaml, "safe_load", lambda _file: {"env_vars": {}})
     monkeypatch.setattr(train_entry, "post_process_env", lambda args, runtime_env: runtime_env)
-    monkeypatch.setattr(train_entry, "init_tracking", lambda args, primary=True, **kwargs: call_order.append(("tracking", primary)))
+    monkeypatch.setattr(
+        train_entry, "init_tracking", lambda args, primary=True, **kwargs: call_order.append(("tracking", primary))
+    )
     monkeypatch.setattr(train_entry.ray, "is_initialized", lambda: True)
     monkeypatch.setattr(train_entry.atexit, "register", lambda fn: None)
     monkeypatch.setattr(train_entry.signal, "signal", lambda sig, handler: None)

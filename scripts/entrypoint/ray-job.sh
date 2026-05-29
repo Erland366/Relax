@@ -2,43 +2,73 @@
 
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 #
-# Entrypoint for Ray Job tasks.
+# Entrypoint / source helper for Ray Job tasks.
 # The Ray cluster is already running. This script MUST NOT kill ray or stop the
-# cluster. It only cleans up residual python/sglang processes and then runs the
-# training script directly via python3.
+# cluster. It only cleans up residual python/sglang processes and then sets up
+# the environment for running training against an existing Ray cluster.
 #
-# Usage:
-#   bash scripts/entrypoint/ray-job.sh <run-script> [extra-args...]
+# Two usage modes:
+#   1) Entry-point mode — first argument is a .sh script path:
+#        bash scripts/entrypoint/ray-job.sh <run-script> [extra-args...]
+#      Sets up env, cleans residual processes, then execs the run script.
 #
-# Example:
-#   bash scripts/entrypoint/ray-job.sh scripts/training/text/run-qwen35-9B-8xgpu-async.sh
-#   bash scripts/entrypoint/ray-job.sh scripts/training/text/run-qwen35-9B-8xgpu-async.sh --lr 5e-7
+#      Example:
+#        bash scripts/entrypoint/ray-job.sh scripts/training/text/run-qwen35-9B-8xgpu-async.sh
+#        bash scripts/entrypoint/ray-job.sh scripts/training/text/run-qwen35-9B-8xgpu-async.sh --lr 5e-7
+#
+#   2) Source mode — no .sh script arg (like local.sh):
+#        source scripts/entrypoint/ray-job.sh
+#      Sets up env only, so the caller can continue execution.
 #
 # Environment variables (optional):
 #   MEGATRON      - Path to Megatron-LM (default: /root/Megatron-LM/)
 #   RELAX         - Path to Relax project (default: ../../)
 
+# Guard: skip if already sourced by another entrypoint
+if [ -n "${RELAX_ENTRYPOINT_MODE:-}" ]; then
+    return 0 2>/dev/null || exit 0
+fi
+
+# ── mode detection ──────────────────────────────────────────────────────────
+# Entry-point mode: directly executed AND first arg is an existing .sh file.
+# Otherwise act as a sourced setup script.
+_RAY_JOB_RUN_SCRIPT=""
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    _RAY_JOB_FIRST_ARG="${1:-}"
+    if [ -n "$_RAY_JOB_FIRST_ARG" ] && [ -f "$_RAY_JOB_FIRST_ARG" ] && [[ "$_RAY_JOB_FIRST_ARG" == *.sh ]]; then
+        _RAY_JOB_RUN_SCRIPT="$_RAY_JOB_FIRST_ARG"
+        shift
+    else
+        echo "Usage: $0 <run-script.sh> [extra-args...]" >&2
+        exit 1
+    fi
+fi
+
 set -eo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 
-# ── argument parsing ────────────────────────────────────────────────────────
-RUN_SCRIPT="${1:-}"
-if [ -z "$RUN_SCRIPT" ]; then
-    echo "Usage: $0 <run-script> [extra-args...]" >&2
-    exit 1
-fi
-shift  # remaining args are extra overrides
-
-if [ ! -f "$RUN_SCRIPT" ]; then
-    echo "ERROR: run script not found: $RUN_SCRIPT" >&2
-    exit 1
-fi
-
 # ── clean up residual python/sglang processes (NOT ray) ─────────────────────
 # IMPORTANT: Do NOT pkill ray or run ray stop — the cluster is managed externally.
 echo "=== Cleaning up residual python/sglang processes ==="
+ray serve shutdown -y
 python ${DIR}/../tools/run_on_each_ray_node.py ${DIR}/../tools/kill_for_ray.sh || echo "failed"
+
+# ── reserve sglang port range from kernel ephemeral pool ────────────────────
+# Some worker nodes ship with net.ipv4.ip_local_port_range="10000 65500", which
+# includes sglang's well-known port range (15670-15900). Megatron's 294 process
+# groups grab ephemeral ports for NCCL/Gloo bootstrap; on those nodes a PG can
+# land on a port sglang wants and crash the engine with
+# "scheduler_input_port at 15855 is not available in 120 seconds. holder=ray::MegatronTrainRayActor".
+# Reserve sglang's range so the kernel never picks it for ephemeral.
+echo "=== Reserving sglang port ranges on all GPU nodes ==="
+# Reserve two ranges:
+#   15000-16800 — sglang port range. SGLang's dp-attention schedulers use ports
+#                 starting from ~15100 (base_port + offsets for DP/TP ranks), so
+#                 the range must start well below 15400 to cover all scheduler
+#                 input/output/NCCL bootstrap ports.
+#   30000-30300 — secondary safe zone (fallback if sglang port_base needs adjustment)
+python ${DIR}/../tools/run_on_each_ray_node.py --timeout 30 "sysctl -w net.ipv4.ip_local_reserved_ports=15000-16800,30000-30300" || echo "reserve_ports failed (non-fatal)"
 
 # kill old tasks
 ray job list | grep RUNNING | grep -v job_id=None | grep -oP "submission_id='\\K[^']+" | xargs ray job stop || true
@@ -46,14 +76,21 @@ ray job list | grep RUNNING | grep -v job_id=None | grep -oP "submission_id='\\K
 set -x
 
 # ── environment setup ───────────────────────────────────────────────────────
-# Use the first GPU node as MASTER_ADDR and SLIME_HOST_IP (prefer head node)
-export MASTER_ADDR=$(ray list nodes --format json | jq -r '
+# Use the first GPU node as MASTER_ADDR (prefer head node).
+# NOTE: assignment is split from `export` on purpose — `export VAR=$(...)`
+# always returns 0 (export's own exit code), which would mask failures of
+# the command substitution and defeat `set -eo pipefail` set above.
+MASTER_ADDR=$(ray list nodes --format json | jq -r '
   map(select(.state == "ALIVE" and (.resources_total.GPU // 0) > 0)) |
   sort_by(.is_head_node | not) |
   .[0].node_ip
 ')
+if [ -z "$MASTER_ADDR" ] || [ "$MASTER_ADDR" = "null" ]; then
+    echo "ERROR: failed to resolve MASTER_ADDR (no ALIVE GPU node returned by 'ray list nodes')." >&2
+    exit 1
+fi
+export MASTER_ADDR
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 export PYTHONUNBUFFERED=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export MEGATRON=${MEGATRON:-/root/Megatron-LM/}
@@ -74,14 +111,19 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
-# ── delegate to run script ──────────────────────────────────────────────────
-echo "=== Launching training script: $RUN_SCRIPT ==="
+# ── entrypoint mode & runtime env ──────────────────────────────────────────
 export RELAX_ENTRYPOINT_MODE="ray-job"
 RAY_DEBUG=${RAY_DEBUG:-"0"}
 RAY_DEBUG_POST_MORTEM=${RAY_DEBUG_POST_MORTEM:-"0"}
 
-# Runtime env for ray-job mode (empty, env inherited from Ray cluster)
+# Runtime env for ray-job mode (env inherited from Ray cluster)
+NVSHMEM_LIB_PATH="${NVSHMEM_LIB_PATH:-/usr/local/lib/python3.12/dist-packages/nvidia/nvshmem/lib}"
+# torch lib path is required for fake_int4_quant_cuda.so to find libc10.so / libtorch.so
+TORCH_LIB_PATH="${TORCH_LIB_PATH:-/usr/local/lib/python3.12/dist-packages/torch/lib}"
+CURRENT_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}${NVSHMEM_LIB_PATH}:${TORCH_LIB_PATH}"
+
 export RUNTIME_ENV_JSON="{
+\"worker_process_setup_hook\": \"relax.utils.logging_utils.install_asyncio_noise_filter\",
 \"env_vars\": {
    \"PYTHONUNBUFFERED\": \"1\",
    \"PYTHONPATH\": \"${PYTHONPATH}\",
@@ -90,7 +132,20 @@ export RUNTIME_ENV_JSON="{
    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
    \"MASTER_ADDR\": \"${MASTER_ADDR}\",
    \"RAY_DEBUG\": \"${RAY_DEBUG}\",
-   \"RAY_DEBUG_POST_MORTEM\": \"${RAY_DEBUG_POST_MORTEM}\"
+   \"RAY_DEBUG_POST_MORTEM\": \"${RAY_DEBUG_POST_MORTEM}\",
+   \"SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK\": \"${SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK:-32}\",
+   \"NVSHMEM_DISABLE_NCCL\": \"${NVSHMEM_DISABLE_NCCL:-1}\",
+   \"SGLANG_HEALTH_CHECK_TIMEOUT\": \"${SGLANG_HEALTH_CHECK_TIMEOUT:-180}\",
+   \"INDEXER_ROPE_NEOX_STYLE\": \"${INDEXER_ROPE_NEOX_STYLE:-0}\",
+   \"NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME\": \"${NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME:-${NCCL_SOCKET_IFNAME}}\",
+   \"LD_LIBRARY_PATH\": \"${CURRENT_LD_LIBRARY_PATH}\"
 }
 }"
-exec bash "$RUN_SCRIPT" "$@"
+
+echo "=== Ray-job environment ready ==="
+
+# ── delegate to run script (entry-point mode only) ─────────────────────────
+if [ -n "$_RAY_JOB_RUN_SCRIPT" ]; then
+    echo "=== Launching training script: $_RAY_JOB_RUN_SCRIPT ==="
+    exec bash "$_RAY_JOB_RUN_SCRIPT" "$@"
+fi

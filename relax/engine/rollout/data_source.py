@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 
 import abc
-import copy
 import os
 import sys
 from argparse import Namespace
@@ -89,6 +88,25 @@ def build_data_source_config(args) -> Namespace:
 _maybe_isolate_rollout_data_source_worker_at_import()
 
 
+def _shallow_copy_sample(src: Sample) -> Sample:
+    """Create a lightweight copy of a Sample that *shares* heavy read-only
+    payloads (``multimodal_inputs``) with the source."""
+    new = Sample.__new__(Sample)
+    new.__dict__.update(src.__dict__)
+    # Shallow-copy mutable containers that downstream code mutates in-place.
+    new.tokens = list(src.tokens)
+    new.rollout_tokens = list(src.rollout_tokens)
+    new.weight_versions = list(src.weight_versions)
+    new.metadata = dict(src.metadata)
+    # Per-sample accumulators — create fresh instances.
+    new.spec_info = Sample.SpecInfo()
+    new.prefix_cache_info = Sample.PrefixCacheInfo()
+    # ``multimodal_inputs`` is read-only downstream — share the reference.
+    # ``multimodal_train_inputs`` is *set* (not mutated) per-sample by the
+    # processor, so sharing the initial ``None`` is fine.
+    return new
+
+
 def _create_dataset(args, tokenizer, processor, multimodal_config=None):
     """Factory function to create dataset based on configuration.
 
@@ -104,14 +122,24 @@ def _create_dataset(args, tokenizer, processor, multimodal_config=None):
     Returns:
         Dataset or StreamingDataset instance
     """
+    custom_prompt_path = getattr(args, "custom_prompt_path", None)
+    custom_prompt_func = load_function(custom_prompt_path) if custom_prompt_path else None
+
     use_streaming = getattr(args, "use_streaming_dataset", False)
 
     if use_streaming:
         from relax.utils.data.streaming_dataset import StreamingDataset
 
         buffer_size = getattr(args, "streaming_buffer_size", 10000)
+        prefetch_chunk_size = getattr(args, "prefetch_chunk_size", 32)
+        prefetch_max_cached = getattr(args, "prefetch_max_cached", 256)
+        prefetch_num_workers = getattr(args, "prefetch_num_workers", 1)
 
-        logger.info(f"Using StreamingDataset with buffer_size={buffer_size}")
+        logger.info(
+            f"Using StreamingDataset with buffer_size={buffer_size}, "
+            f"prefetch_chunk_size={prefetch_chunk_size}, prefetch_max_cached={prefetch_max_cached}, "
+            f"prefetch_num_workers={prefetch_num_workers}"
+        )
         return StreamingDataset(
             path=args.prompt_data,
             tokenizer=tokenizer,
@@ -128,7 +156,11 @@ def _create_dataset(args, tokenizer, processor, multimodal_config=None):
             use_audio_in_video=args.use_audio_in_video,
             seed=args.rollout_seed,
             buffer_size=buffer_size,
+            prefetch_chunk_size=prefetch_chunk_size,
+            prefetch_max_cached=prefetch_max_cached,
+            prefetch_num_workers=prefetch_num_workers,
             multimodal_config=multimodal_config,
+            custom_prompt_func=custom_prompt_func,
         )
     else:
         logger.info("Using traditional Dataset (eager loading)")
@@ -148,6 +180,7 @@ def _create_dataset(args, tokenizer, processor, multimodal_config=None):
             use_audio_in_video=args.use_audio_in_video,
             seed=args.rollout_seed,
             multimodal_config=multimodal_config,
+            custom_prompt_func=custom_prompt_func,
         )
 
 
@@ -245,7 +278,7 @@ class RolloutDataSource(DataSource):
         for prompt_sample in prompt_samples:
             group = []
             for _ in range(self.args.n_samples_per_prompt):
-                sample = copy.deepcopy(prompt_sample)
+                sample = _shallow_copy_sample(prompt_sample)
                 sample.group_index = self.sample_group_index
                 sample.index = self.sample_index
                 self.sample_index += 1
@@ -274,7 +307,7 @@ class RolloutDataSource(DataSource):
         if self._use_streaming and self.dataset is not None:
             state_dict["streaming_state"] = self.dataset.get_state()
 
-        path = os.path.join(self.args.save, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
+        path = os.path.join(self.args.save, f"dataset/global_dataset_state_dict_{rollout_id}.pt")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(state_dict, path)
 
@@ -288,10 +321,16 @@ class RolloutDataSource(DataSource):
         if rollout_id < 0:
             return
 
-        path = os.path.join(self.args.load, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
+        path = os.path.join(self.args.load, f"dataset/global_dataset_state_dict_{rollout_id}.pt")
         if not os.path.exists(path):
-            logger.error(f"Checkpoint {path} does not exist.")
-            return
+            # Backwards compat: older checkpoints wrote to rollout/ instead of dataset/.
+            legacy_path = os.path.join(self.args.load, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
+            if os.path.exists(legacy_path):
+                logger.warning(f"Loading dataset state from legacy path {legacy_path} (new path: dataset/)")
+                path = legacy_path
+            else:
+                logger.error(f"Checkpoint {path} does not exist.")
+                return
 
         logger.info(f"load metadata from {path}")
         state_dict = torch.load(path)

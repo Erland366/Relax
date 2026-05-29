@@ -14,6 +14,7 @@ Features:
 """
 
 import asyncio
+import logging
 import socket
 import time
 from collections.abc import Sequence
@@ -35,9 +36,12 @@ from relax.backends.megatron.weight_update.common import all_gather_param, named
 from relax.distributed.checkpoint_service.backends.base import CommBackend, TensorFusion
 from relax.distributed.checkpoint_service.config import BackendType, RoleInfo
 from relax.distributed.checkpoint_service.utils import load_weight
+from relax.utils import device as device_utils
 from relax.utils.distributed_utils import get_gloo_group, init_process_group
 from relax.utils.logging_utils import get_logger
 
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = get_logger(__name__)
 
@@ -92,7 +96,7 @@ class DeviceDirectBackend(CommBackend):
         self.coordinator_url = coordinator_url
         self.lock = lock
         self.timeout_seconds = timeout_seconds
-        self.device = next(model[0].parameters()).device if model else torch.cuda.current_device()
+        self.device = next(model[0].parameters()).device if model else device_utils.current_device()
 
         self._comm_stream: Optional[Any] = None  # CUDA stream
         self._thread_pool = ThreadPoolExecutor(max_workers=4)
@@ -108,7 +112,14 @@ class DeviceDirectBackend(CommBackend):
 
         # Ray actors for rollout communication
         self.rollout_engines: Dict[int, Any] = {}  # rank -> Ray actor handle
-        torch.cuda.set_device(self.device)
+        device_utils.set_device(self.device)
+
+        # Bridge-based HF weight converter (lazy-initialized on first use)
+        self._use_bridge = getattr(args, "megatron_to_hf_mode", None) == "bridge"
+        if self._use_bridge:
+            from relax.backends.megatron.weight_update.bridge_converter import BridgeConverter
+
+            self._bridge_converter = BridgeConverter(args=args, model=model, quantization_config=quantization_config)
 
     def _create_rollout_engines(self, rollout_topology: Dict[int, Dict[str, Any]]) -> None:
         """Create Ray actors for each rollout node.
@@ -207,15 +218,42 @@ class DeviceDirectBackend(CommBackend):
                 logger.warning(f"Error killing RolloutEngine #{rank}: {e}")
         self.rollout_engines.clear()
 
-    def _update_rollout_engines(self):
-        failed_ranks = self._healthcheck_rollout_engines()
-        if failed_ranks:
-            logger.warning(f"Healthcheck failed for engines: {failed_ranks}, removing and recreating...")
-            self._remove_failed_engines(failed_ranks)
-            self._create_rollout_engines(self.rollout_topology)
+    def _update_rollout_engines(self, max_retries: int = 30, retry_interval: float = 10.0):
+        """Wait for rollout engines to be ready with retries.
 
+        In fully-async mode, Rollout engines may still be initializing (loading model)
+        when Actor attempts to sync weights. This method retries health checks until
+        engines are ready, without modifying topology during retries.
+
+        Args:
+            max_retries: Maximum number of retry attempts (default: 30).
+            retry_interval: Seconds to wait between retries (default: 2.0).
+
+        Raises:
+            RuntimeError: If no healthy engines are available after all retries.
+        """
         if not self.rollout_topology:
-            raise RuntimeError("No healthy rollout engines available after healthcheck")
+            raise RuntimeError("No rollout engines configured")
+
+        for attempt in range(max_retries):
+            failed_ranks = self._healthcheck_rollout_engines()
+
+            if not failed_ranks:
+                if attempt > 0:
+                    logger.info(f"Rollout engines ready after {attempt + 1} attempts")
+                return
+
+            logger.warning(
+                f"Healthcheck failed for engines: {failed_ranks}, "
+                f"retrying in {retry_interval}s (attempt {attempt + 1}/{max_retries})"
+            )
+            time.sleep(retry_interval)
+
+        # All retries exhausted, remove failed engines and report error
+        logger.error(f"Removing failed engines after {max_retries} retries: {failed_ranks}")
+        self._remove_failed_engines(failed_ranks)
+
+        raise RuntimeError(f"No healthy rollout engines available after {max_retries} retries")
 
     _MASTER_PORT_MIN = 11000
     _MASTER_PORT_MAX = 11999
@@ -270,6 +308,8 @@ class DeviceDirectBackend(CommBackend):
                     dist.destroy_process_group(self._model_update_groups)
                     ray.get(futures)
                     self._model_update_groups = None
+                    # Wait for NCCL socket ports to be released by the OS
+                    time.sleep(2.0)
                 except Exception as e:
                     logger.warning(f"Error destroying old process group: {e}")
                     self._model_update_groups = None
@@ -284,32 +324,59 @@ class DeviceDirectBackend(CommBackend):
                 cumulative_offset += gpus_for_node
             world_size = cumulative_offset
 
-            master_port = self._find_free_port_in_range(self._MASTER_PORT_MIN, self._MASTER_PORT_MAX)
+            max_retries = 3
+            last_error = None
+            for attempt in range(1, max_retries + 1):
+                master_port = self._find_free_port_in_range(self._MASTER_PORT_MIN, self._MASTER_PORT_MAX)
 
-            # Prepare init payloads for each rollout node
-            init_payloads = {}
-            for rank, role_info in self.rollout_topology.items():
-                init_payloads[int(rank)] = {
-                    "master_address": master_address,
-                    "master_port": master_port,
-                    "rank_offset": rank_offsets[int(rank)],
-                    "world_size": world_size,
-                    "group_name": self._group_name,
-                    "backend": self.backend_type,
-                }
+                init_payloads = {}
+                for rank, role_info in self.rollout_topology.items():
+                    init_payloads[int(rank)] = {
+                        "master_address": master_address,
+                        "master_port": master_port,
+                        "rank_offset": rank_offsets[int(rank)],
+                        "world_size": world_size,
+                        "group_name": self._group_name,
+                        "backend": self.backend_type,
+                    }
 
-            logger.info(f"Sending init_weights_update_group to {len(self.rollout_topology)} rollout nodes...")
-            futures = self._batch_request("/init_weights_update_group", init_payloads, get_rank=True)
+                logger.info(
+                    f"Sending init_weights_update_group to {len(self.rollout_topology)} rollout nodes "
+                    f"(attempt {attempt}/{max_retries}, port={master_port})..."
+                )
+                futures = self._batch_request("/init_weights_update_group", init_payloads, get_rank=True)
 
-            self._model_update_groups = init_process_group(
-                backend=self.backend_type,
-                init_method=f"tcp://{master_address}:{master_port}",
-                world_size=world_size,
-                rank=0,
-                group_name=self._group_name,
-                timeout=timedelta(seconds=180),
-            )
-            ray.get(futures)
+                try:
+                    self._model_update_groups = init_process_group(
+                        backend=self.backend_type,
+                        init_method=f"tcp://{master_address}:{master_port}",
+                        world_size=world_size,
+                        rank=0,
+                        group_name=self._group_name,
+                        timeout=timedelta(seconds=180),
+                    )
+                    ray.get(futures)
+                    last_error = None
+                    break
+                except Exception as e:
+                    last_error = e
+                    logger.warning(
+                        f"Failed to init process group for rollout (attempt {attempt}/{max_retries}, "
+                        f"port={master_port}): {e}",
+                        exc_info=(attempt == max_retries),
+                    )
+                    self._model_update_groups = None
+                    try:
+                        ray.get(futures, timeout=5)
+                    except Exception:
+                        pass
+                    if attempt < max_retries:
+                        time.sleep(5.0 * attempt)
+
+            if last_error is not None:
+                raise RuntimeError(
+                    f"Failed to init process group for rollout after {max_retries} attempts"
+                ) from last_error
 
     def init_process_groups_for_actor_fwd_ref(self, topology_data) -> None:
         """Initialize process groups used for actor -> actor_fwd weight sync.
@@ -413,7 +480,7 @@ class DeviceDirectBackend(CommBackend):
         converted_named_tensors = []
         origin_named_tensors = []
         # non expert params
-        pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
+        pbar = tqdm(desc=f"[{self._group_name}] Update weights") if self._is_pp_src_rank else None
 
         for name, param in named_params_and_buffers(self.args, self.model):
             if ".experts." in name:
@@ -436,7 +503,6 @@ class DeviceDirectBackend(CommBackend):
                 self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
                 converted_named_tensors.clear()
             origin_named_tensors.clear()
-
         dist.barrier(group=get_gloo_group())
 
         buffer_size = 0
@@ -452,7 +518,6 @@ class DeviceDirectBackend(CommBackend):
             self._update_expert_bucket_weights_from_distributed(
                 named_tensors, rollout_only=rollout_only, actor_fwd_only=actor_fwd_only, pbar=pbar
             )
-
         dist.barrier(group=get_gloo_group())
         if not rollout_only:
             if dist.get_rank() == 0:
@@ -479,6 +544,14 @@ class DeviceDirectBackend(CommBackend):
                 self._batch_request("/continue_generation")
             dist.barrier(group=get_gloo_group())
             self._cleanup_rollout_engines()
+
+        # Release fragmented CUDA reserved memory left behind by the
+        # all_gather + HF-convert buffers that were allocated and freed
+        # during the weight update loop.  Without this, the caching
+        # allocator keeps large reserved blocks that are internally
+        # fragmented, which can cause OOM when the optimizer later tries
+        # to allocate contiguous Adam state buffers.
+        device_utils.empty_cache()
 
     def _update_weight_from_distributed(
         self,
@@ -511,7 +584,12 @@ class DeviceDirectBackend(CommBackend):
                 buffer_size = 0
         origin_named_tensors += [(name, param)]
         if not actor_fwd_only:
-            converted_named_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
+            if self._use_bridge:
+                converted_named_tensors += self._bridge_converter.convert(name, param)
+            else:
+                converted_named_tensors += convert_to_hf(
+                    self.args, self.model_name, name, param, self.quantization_config
+                )
         buffer_size += param_size
         return buffer_size
 
@@ -588,9 +666,12 @@ class DeviceDirectBackend(CommBackend):
         if not actor_fwd_only:
             converted_hf_tensors = []
             for name, param in all_gathered_params:
-                converted_hf_tensors += convert_to_hf(
-                    self.args, self.model_name, name, param, self.quantization_config
-                )
+                if self._use_bridge:
+                    converted_hf_tensors += self._bridge_converter.convert(name, param)
+                else:
+                    converted_hf_tensors += convert_to_hf(
+                        self.args, self.model_name, name, param, self.quantization_config
+                    )
             self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar)
             converted_hf_tensors.clear()
         all_gathered_params.clear()
@@ -671,8 +752,19 @@ class DeviceDirectBackend(CommBackend):
         loop ends when a special 'weight_updated_stop' marker is seen.
         """
         index = 0
+        long_poll_wait_s = float(getattr(self.args, "dcs_recv_weight_meta_wait_timeout_s", 20.0))
+        # Ensure read timeout is longer than long-poll wait duration.
+        recv_timeout = httpx.Timeout(connect=5.0, read=max(long_poll_wait_s + 5.0, 10.0), write=30.0, pool=30.0)
         while True:
-            response = self.http_client.get(f"{self.coordinator_url}/recv_weight_meta", params={"index": index})
+            try:
+                response = self.http_client.get(
+                    f"{self.coordinator_url}/recv_weight_meta",
+                    params={"index": index, "wait_timeout_s": long_poll_wait_s},
+                    timeout=recv_timeout,
+                )
+            except httpx.ReadTimeout:
+                # Long-poll timed out without new metadata; continue waiting.
+                continue
             response.raise_for_status()
             data = response.json()
             if not data:

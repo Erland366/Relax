@@ -31,7 +31,8 @@ def _get_data_parallel_size(args: Namespace) -> int | None:
 
 
 def normalize_single_rank_optimizer_args(args: Namespace, role: str) -> bool:
-    """Disable single-rank optimizer features that only help multi-rank paths."""
+    """Disable single-rank optimizer features that only help multi-rank
+    paths."""
 
     if _get_data_parallel_size(args) != 1:
         return False
@@ -59,7 +60,8 @@ def normalize_single_rank_optimizer_args(args: Namespace, role: str) -> bool:
 
 
 def apply_single_rank_rocm_cpu_offload_safety_args(args: Namespace, role: str) -> bool:
-    """Use a safer CPU-offload configuration on single-rank ROCm actor training."""
+    """Use a safer CPU-offload configuration on single-rank ROCm actor
+    training."""
 
     if role != "actor" or _get_data_parallel_size(args) != 1:
         return False
@@ -87,7 +89,8 @@ def apply_single_rank_rocm_cpu_offload_safety_args(args: Namespace, role: str) -
 
 
 def apply_single_rank_rocm_cpu_offload_optimizer_config(args: Namespace, role: str, kwargs: dict) -> bool:
-    """Avoid Megatron fp32 main-param wrapping for the ROCm CPU-offload fallback."""
+    """Avoid Megatron fp32 main-param wrapping for the ROCm CPU-offload
+    fallback."""
 
     if role != "actor" or _get_data_parallel_size(args) != 1:
         return False
@@ -115,17 +118,15 @@ def apply_single_rank_rocm_cpu_offload_optimizer_config(args: Namespace, role: s
 
 
 def should_disable_pinned_host_weight_backups(args: Namespace, role: str) -> bool:
-    """Avoid large pinned host weight snapshots on fragile single-rank ROCm actor init."""
+    """Avoid large pinned host weight snapshots on fragile single-rank ROCm
+    actor init."""
 
-    return (
-        role == "actor"
-        and _get_data_parallel_size(args) == 1
-        and torch.version.hip is not None
-    )
+    return role == "actor" and _get_data_parallel_size(args) == 1 and torch.version.hip is not None
 
 
 def patch_megatron_cpu_offload_optimizer_for_rocm(args: Namespace, role: str, module=None) -> bool:
-    """Patch Megatron CPU offload to use a safer torch AdamW wrapper on ROCm."""
+    """Patch Megatron CPU offload to use a safer torch AdamW wrapper on
+    ROCm."""
 
     if role != "actor" or _get_data_parallel_size(args) != 1:
         return False

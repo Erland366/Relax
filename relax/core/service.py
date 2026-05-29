@@ -2,9 +2,9 @@
 
 import threading
 import time
-from enum import Enum
 from argparse import Namespace
 from copy import deepcopy
+from enum import Enum
 from typing import Any, Optional
 
 import ray
@@ -14,6 +14,7 @@ from ray.util.placement_group import placement_group, remove_placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from relax.distributed.ray.placement_group import InfoActor, sort_key
+from relax.utils import device as device_utils
 from relax.utils.logging_utils import get_logger
 from relax.utils.utils import get_serve_url, recovery_load_path
 
@@ -25,12 +26,7 @@ def build_service_config(role: str, config: Namespace) -> Namespace:
     if role != "rollout":
         return config
 
-    return Namespace(
-        **{
-            key: value.value if isinstance(value, Enum) else value
-            for key, value in vars(config).items()
-        }
-    )
+    return Namespace(**{key: value.value if isinstance(value, Enum) else value for key, value in vars(config).items()})
 
 
 def build_service_runtime_env(role: str, config: Namespace, runtime_env: Optional[dict]) -> Optional[dict]:
@@ -323,7 +319,8 @@ class Service:
 
 def create_placement_group(num_gpus):
     """Create a placement group with the specified number of GPUs."""
-    bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_gpus)]
+    accel_resource = device_utils.get_ray_accelerator_name()
+    bundles = [{accel_resource: 1, "CPU": 1} for _ in range(num_gpus)]
     pg = placement_group(bundles, strategy="PACK")
     num_bundles = len(bundles)
     ray.get(pg.ready())

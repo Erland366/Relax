@@ -58,8 +58,12 @@ def convert_samples_to_train_data(args: Any, samples: list[Sample] | list[list[S
     train_data["loss_masks"] = loss_masks
 
     # overwriting the raw reward
-    if samples[0].metadata and "raw_reward" in samples[0].metadata:
-        train_data["raw_reward"] = [sample.metadata["raw_reward"] for sample in samples]
+    # populate this field for a subset of samples (e.g. SWE but not code).
+    if any(sample.metadata and "raw_reward" in sample.metadata for sample in samples):
+        train_data["raw_reward"] = [
+            sample.metadata["raw_reward"] if sample.metadata and "raw_reward" in sample.metadata else sample.reward
+            for sample in samples
+        ]
 
     # For rollout buffer
     if samples[0].metadata and "round_number" in samples[0].metadata:
@@ -75,11 +79,30 @@ def convert_samples_to_train_data(args: Any, samples: list[Sample] | list[list[S
     if samples[0].train_metadata is not None:
         train_data["metadata"] = [sample.train_metadata for sample in samples]
 
-    if samples[0].multimodal_train_inputs is not None:
+    if args.multimodal_keys is not None:
         train_data["multimodal_train_inputs"] = [sample.multimodal_train_inputs for sample in samples]
 
     if samples[0].teacher_log_probs is not None:
         train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
+
+    if any(sample.teacher_topk_token_ids is not None for sample in samples):
+        topk_k = max(
+            (
+                len(sample.teacher_topk_token_ids[0])
+                for sample in samples
+                if sample.teacher_topk_token_ids is not None and len(sample.teacher_topk_token_ids) > 0
+            ),
+            default=0,
+        )
+        train_data["teacher_topk_token_ids"] = [
+            (
+                [token_id for step_topk in sample.teacher_topk_token_ids for token_id in step_topk]
+                if sample.teacher_topk_token_ids is not None
+                else []
+            )
+            for sample in samples
+        ]
+        train_data["teacher_topk_k"] = [topk_k for _ in samples]
 
     total_lengths = [len(t) for t in train_data["tokens"]]
     train_data["total_lengths"] = total_lengths
@@ -148,25 +171,22 @@ def dict_to_tensordict(
             return 1 + _nesting_depth(x[0])
         return 0
 
-    def _infer_dtype_from_sample(sample: Any) -> torch.dtype:
-        """Infer a basic torch dtype from a single scalar sample."""
+    def _scalar_dtype(sample) -> Optional[torch.dtype]:
+        """Return an explicit dtype only for bool/float; None lets torch.tensor
+        infer."""
         if isinstance(sample, bool):
             return torch.bool
-        elif isinstance(sample, int):
-            return torch.long
-        elif isinstance(sample, float):
+        if isinstance(sample, float):
             return torch.float32
-        else:
-            # fallback
-            return torch.float32
+        # int or mixed int/float: let torch.tensor auto-promote (C++ level, zero overhead)
+        return None
 
     def _to_tensor_1d(lst):
-        dtype = _infer_dtype_from_sample(lst[0])
-        res = torch.tensor(lst, dtype=dtype, device=device)
-        return res
+        dtype = _scalar_dtype(lst[0])
+        return torch.tensor(lst, dtype=dtype, device=device)
 
     def _to_tensor_2d(lst):
-        dtype = _infer_dtype_from_sample(lst[0][0])
+        dtype = _scalar_dtype(lst[0][0])
         tensors = [torch.tensor(seq, dtype=dtype, device=device) for seq in lst]
         return torch.nested.as_nested_tensor(tensors, layout=torch.jagged)
 
@@ -466,10 +486,14 @@ def get_serve_url(route_prefix: str = "") -> str:
     # 1. Determine head node IP. Prefer Ray cluster state; fall back to
     #    local hostname resolution for client-on-head scenarios.
     try:
-        # ray.nodes() returns info for all nodes
+        # ray.nodes() returns info for all nodes. Ray 2.x auto-registers
+        # "node:__internal_head__" on the head node; some legacy setups also
+        # mark it with a custom "head" resource. Accept either.
         for node in ray.nodes():
-            if node["Alive"] and node.get("Resources", {}).get("head"):
-                # Some setups mark head with a 'head' resource; not always present
+            if not node["Alive"]:
+                continue
+            resources = node.get("Resources", {})
+            if "node:__internal_head__" in resources or resources.get("head"):
                 head_ip = node["NodeManagerAddress"]
                 break
         else:

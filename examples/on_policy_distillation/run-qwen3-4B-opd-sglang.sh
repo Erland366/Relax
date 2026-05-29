@@ -19,7 +19,9 @@ fi
 source "${MODEL_CONFIG_DIR}/qwen3-4B.sh"
 
 PROJECT_NAME="${PROJECT_NAME:=Relax/dev/opd}"
-EXP_DIR="${MODEL_DIR:=${SCRIPT_DIR}/../../exps}"
+EXP_DIR="${EXP_DIR:-${SCRIPT_DIR}/../../../exps}"
+MODEL_DIR="${MODEL_DIR:-${EXP_DIR}}"
+DATA_DIR="${DATA_DIR:-${EXP_DIR}}"
 NUM_ROLLOUT="${NUM_ROLLOUT:=200}"
 
 # ============================================
@@ -42,18 +44,20 @@ nohup python -m sglang.launch_server \
 # Teacher SGLang server configuration
 TEACHER_HOST="${TEACHER_HOST:-127.0.0.1}"
 TEACHER_PORT="${TEACHER_PORT:-30010}"
+OPD_TEACHER_TIMEOUT_S="${OPD_TEACHER_TIMEOUT_S:-30}"
+OPD_LOG_PROB_TOP_K="${OPD_LOG_PROB_TOP_K:-10}"
 
 
 CKPT_ARGS=(
-   --hf-checkpoint ${EXP_DIR}/Qwen3-4B/
-   --ref-load ${EXP_DIR}/Qwen3-4B/
+   --hf-checkpoint ${MODEL_DIR}/Qwen3-4B/
+   --ref-load ${MODEL_DIR}/Qwen3-4B/
    --megatron-to-hf-mode bridge
    # --load ${EXP_DIR}/Qwen3-4B_mcore_8xgpu/
    # --save ${EXP_DIR}/Qwen3-4B_mcore_8xgpu/
    # --save-interval 100
 )
 
-PROMPT_SET=${EXP_DIR}/dapo-math-17k/dapo-math-17k.jsonl
+PROMPT_SET=${DATA_DIR}/dapo-math-17k/dapo-math-17k.jsonl
 
 ROLLOUT_ARGS=(
    --prompt-data ${PROMPT_SET}
@@ -84,13 +88,15 @@ OPD_ARGS=(
    --use-opd
    --opd-type sglang
    --opd-kl-coef 1.0
+   --opd-teacher-timeout-s ${OPD_TEACHER_TIMEOUT_S}
+   --opd-log-prob-top-k ${OPD_LOG_PROB_TOP_K}
    --rm-url http://${TEACHER_HOST}:${TEACHER_PORT}/generate
 )
 
 EVAL_ARGS=(
    --skip-eval-before-train
    --eval-interval 20
-   --eval-prompt-data aime ${EXP_DIR}/aime-2024/aime-2024.jsonl
+   --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 8
    --eval-max-response-len 16384
    --eval-top-p 0.7
@@ -170,7 +176,7 @@ if [ ${MODE} == "sync" ]; then
     ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://127.0.0.1:8265" \
         -- python3 relax/entrypoints/train.py \
         --resource '{"actor": [1, 8], "rollout": [1, 8]}'\
-   --max-staleness 0 \
+        --max-staleness 0 \
         --num-data-storage-units 1 \
         --colocate \
         ${MODEL_ARGS[@]} \
@@ -188,7 +194,7 @@ elif [ ${MODE} == "async" ]; then
     ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://127.0.0.1:8265" \
         -- python3 relax/entrypoints/train.py \
         --resource '{"actor": [1, 2], "rollout": [1, 4], "reference": [1, 1], "actor_fwd": [1, 1], "advantages": [1, 0]}'\
-   --max-staleness 2 \
+        --max-staleness 2 \
         --num-data-storage-units 1 \
         --num-iters-per-train-update 8 \
         --ref-actor-config '{"tensor_model_parallel_size": 1, "max_tokens_per_gpu": 16384, "sequence_parallel": false, "only_load_weight": true}' \

@@ -7,7 +7,68 @@ from sglang.srt.server_args import ServerArgs
 from relax.utils.http_utils import _wrap_ipv6
 
 
-# TODO: use all sglang router arguments with `--sglang-router` prefix
+def _router_passthrough_skip_fields() -> set[str]:
+    return {
+        # Framework-managed addressing and topology.
+        "host",
+        "port",
+        "worker_urls",
+        "prefill",
+        "decode",
+        "prefill_urls",
+        "decode_urls",
+        "pd_disaggregation",
+        "service_discovery",
+        "selector",
+        "service_discovery_port",
+        "service_discovery_namespace",
+        "prefill_selector",
+        "decode_selector",
+        "bootstrap_port_annotation",
+        "prometheus_port",
+        # Backward-compatible explicit flags handled below.
+        "policy",
+        "request_timeout_secs",
+    }
+
+
+def _add_prefixed_router_args(parser) -> None:
+    from sglang_router.router_args import RouterArgs
+
+    old_add_argument = argparse._ActionsContainer.add_argument
+    skipped_args = _router_passthrough_skip_fields()
+
+    def new_add_argument_wrapper(*name_or_flags, **kwargs):
+        canonical_name = kwargs.get("dest")
+        if not canonical_name:
+            for flag_name_candidate in name_or_flags:
+                if isinstance(flag_name_candidate, str) and flag_name_candidate.startswith("--"):
+                    canonical_name = flag_name_candidate[2:].replace("-", "_")
+                    break
+
+        if canonical_name in skipped_args:
+            return
+
+        final_name_or_flags = []
+        for item_flag in name_or_flags:
+            if isinstance(item_flag, str) and item_flag.startswith("--"):
+                final_name_or_flags.append(f"--sglang-router-{item_flag[2:]}")
+            else:
+                final_name_or_flags.append(item_flag)
+
+        final_kwargs = kwargs.copy()
+        if canonical_name and not str(canonical_name).startswith("router_"):
+            final_kwargs["dest"] = f"router_{canonical_name}"
+
+        old_add_argument(*final_name_or_flags, **final_kwargs)
+
+    argparse._ActionsContainer.add_argument = new_add_argument_wrapper
+    try:
+        RouterArgs.add_cli_args(parser, use_router_prefix=False, exclude_host_port=False)
+    finally:
+        argparse._ActionsContainer.add_argument = old_add_argument
+
+
 def add_sglang_router_arguments(parser):
     """Add arguments to the parser for the SGLang router."""
     parser.add_argument(
@@ -34,6 +95,7 @@ def add_sglang_router_arguments(parser):
         default=14400,
         help="Timeout for requests to the SGLang router in seconds",
     )
+    _add_prefixed_router_args(parser)
     return parser
 
 
@@ -42,6 +104,86 @@ def add_sglang_arguments(parser):
     parser = add_sglang_router_arguments(parser)
     parser.set_defaults(router_balance_abs_threshold=10, router_balance_rel_threshold=1.2)
     parser.add_argument("--sglang-server-concurrency", type=int, default=512)
+
+    # SGLang profiling arguments — triggers /start_profile and /stop_profile HTTP API
+    # on all SGLang engines during rollout inference.
+    # Can also be used standalone via: python tools/profile_rollout.py
+    parser.add_argument(
+        "--sglang-profile",
+        action="store_true",
+        default=False,
+        help="Enable torch profiling on SGLang engines during rollout. Profile traces will be saved per rollout step.",
+    )
+    parser.add_argument(
+        "--sglang-profile-output-dir",
+        type=str,
+        default=None,
+        help=("Output directory for SGLang profile traces. Defaults to traces/<tb_experiment_name>/sglang_trace."),
+    )
+    parser.add_argument(
+        "--sglang-profile-num-steps",
+        type=int,
+        default=3,
+        help="Number of SGLang forward steps to profile per rollout. "
+        "If -1, profiles the entire rollout step until stop_profile is called.",
+    )
+    parser.add_argument(
+        "--sglang-profile-activities",
+        type=str,
+        nargs="+",
+        default=["CPU", "GPU"],
+        help="Activities to profile (e.g., CPU GPU).",
+    )
+    parser.add_argument(
+        "--sglang-profile-by-stage",
+        action="store_true",
+        default=False,
+        help="Profile by stage (prefill/decode) separately.",
+    )
+    parser.add_argument(
+        "--sglang-profile-with-stack",
+        action="store_true",
+        default=False,
+        help="Record call stack in profile traces.",
+    )
+    parser.add_argument(
+        "--sglang-profile-record-shapes",
+        action="store_true",
+        default=False,
+        help="Record tensor shapes in profile traces.",
+    )
+    parser.add_argument(
+        "--sglang-profile-steps",
+        type=int,
+        nargs="+",
+        default=None,
+        help=(
+            "List of absolute rollout step IDs (0-indexed) at which to enable SGLang profiling. "
+            "Takes precedence over --sglang-profile-step-start/end when set. "
+            "Example: --sglang-profile-steps 3 10 50"
+        ),
+    )
+    parser.add_argument(
+        "--sglang-profile-step-start",
+        type=int,
+        default=None,
+        help=(
+            "Start of the rollout step range for SGLang profiling (inclusive, 0-indexed). "
+            "Used together with --sglang-profile-step-end to specify a contiguous range. "
+            "Ignored if --sglang-profile-steps is set."
+        ),
+    )
+    parser.add_argument(
+        "--sglang-profile-step-end",
+        type=int,
+        default=None,
+        help=(
+            "End of the rollout step range for SGLang profiling (inclusive, 0-indexed). "
+            "Used together with --sglang-profile-step-start to specify a contiguous range. "
+            "Ignored if --sglang-profile-steps is set. "
+            "Example: --sglang-profile-step-start 2 --sglang-profile-step-end 4 profiles steps 2, 3, 4."
+        ),
+    )
 
     old_add_argument = parser.add_argument
 

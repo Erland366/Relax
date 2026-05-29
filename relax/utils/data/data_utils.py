@@ -26,7 +26,7 @@ import os
 import re
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import tqdm
@@ -86,6 +86,7 @@ def build_messages(
     system_prompt: Optional[str],
     as_conversation: bool,
     multimodal_keys: Optional[dict] = None,
+    custom_prompt_func: Optional[Callable[[Any, dict], Any]] = None,
 ) -> Any:
     """Build message format from raw data.
 
@@ -98,11 +99,17 @@ def build_messages(
         system_prompt: System prompt key or content
         as_conversation: Whether to convert to conversation format
         multimodal_keys: Mapping of multimodal types to data keys
+        custom_prompt_func: Optional callable ``(prompt, data) -> prompt`` applied
+            immediately after extracting the prompt from *data*, before any
+            conversation / multimodal processing.
 
     Returns:
         Processed prompt (string or list of message dicts)
     """
     prompt = data.get(prompt_key)
+
+    if custom_prompt_func is not None:
+        prompt = custom_prompt_func(prompt, data)
 
     if isinstance(prompt, str):
         # If prompt is a string and we don't apply chat template, return as is
@@ -128,7 +135,7 @@ def build_messages(
 
         if multimodals:
             pattern = "(" + "|".join(re.escape(p) for p in multimodals.keys()) + ")"
-
+            built_prompt = []
             for message in prompt:
                 if isinstance(message["content"], str):
                     content_list = []
@@ -146,15 +153,23 @@ def build_messages(
                                 content_list.append({"type": mt.name, mt.name: content.pop(0)})
                         else:
                             content_list.append({"type": "text", "text": segment})
-                    message["content"] = content_list
+                    built_message = dict(message)
+                    built_message["content"] = content_list
+                    built_prompt.append(built_message)
                 elif isinstance(message["content"], list):
-                    # Already processed, skip
-                    logger.warning("message['content'] is a list of dicts, no processing will be done.")
-                    continue
+                    # Pre-structured content: count multimodal items so the
+                    # remain_data check below doesn't false-positive.
+                    for item in message["content"]:
+                        item_type = item.get("type")
+                        if item_type in remain_data:
+                            remain_data[item_type] -= 1
+                    built_prompt.append(message)
                 else:
                     raise ValueError(
                         f"Unsupported content type: {type(message['content'])}, expected str or list of dicts"
                     )
+
+            prompt = built_prompt
 
             if any(v > 0 for v in remain_data.values()):
                 raise RuntimeError(
@@ -184,6 +199,7 @@ def process_raw_sample(
     apply_chat_template_kwargs: Optional[dict] = None,
     use_audio_in_video: Optional[bool] = False,
     multimodal_config: MultimodalConfig = None,
+    custom_prompt_func: Optional[Callable[[Any, dict], Any]] = None,
 ) -> Sample:
     """Process a raw data dictionary into a Sample object.
 
@@ -206,7 +222,7 @@ def process_raw_sample(
     """
     # Both chat templates and multimodal inputs require conversation format
     as_conversation = apply_chat_template or (multimodal_keys is not None)
-    prompt = build_messages(data, prompt_key, system_prompt, as_conversation, multimodal_keys)
+    prompt = build_messages(data, prompt_key, system_prompt, as_conversation, multimodal_keys, custom_prompt_func)
 
     metadata = data.get(metadata_key) or {}
     tools = None
@@ -276,7 +292,10 @@ def check_sample_length(
 
     try:
         if processor and sample.multimodal_inputs:
-            processor_output = processor(text=sample.prompt, **sample.multimodal_inputs)
+            from relax.utils.data.processing_utils import adapt_processor_kwargs
+
+            adapted = adapt_processor_kwargs(processor, sample.multimodal_inputs)
+            processor_output = processor(text=sample.prompt, **adapted)
             input_ids = processor_output["input_ids"][0]
         else:
             input_ids = tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
@@ -453,6 +472,7 @@ def resolve_path_plan(path: Any) -> tuple[list[str], Optional[slice]]:
 
 
 def _build_reader_for_path(path: str):
+    path, row_slice = parse_generalized_path(path)
     if not os.path.exists(path):
         raise FileNotFoundError(f"Prompt dataset path '{path}' does not exist.")
 
@@ -470,7 +490,10 @@ def _build_reader_for_path(path: str):
                         logger.warning(f"JSON decode error at line {line_num}: {e}")
                         continue
 
-        return jsonl_reader(path)
+        reader = jsonl_reader(path)
+        if row_slice is not None:
+            reader = itertools.islice(reader, row_slice.start, row_slice.stop, row_slice.step)
+        return reader
 
     if path.endswith(".parquet"):
         if pq is None:
@@ -479,10 +502,17 @@ def _build_reader_for_path(path: str):
         def parquet_reader(p):
             pf = pq.ParquetFile(p)
 
-            for batch in pf.iter_batches():
-                yield from batch.to_pylist()
+            # Read row groups individually instead of using iter_batches().
+            # iter_batches() creates chunked arrays for multi-row-group files,
+            # which fails with ArrowNotImplementedError on nested types
+            # (e.g. list<struct<...>>, struct<...>).
+            for i in range(pf.metadata.num_row_groups):
+                yield from pf.read_row_group(i).to_pylist()
 
-        return parquet_reader(path)
+        reader = parquet_reader(path)
+        if row_slice is not None:
+            reader = itertools.islice(reader, row_slice.start, row_slice.stop, row_slice.step)
+        return reader
 
     raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
 
@@ -535,6 +565,7 @@ class BaseDataset(abc.ABC):
         apply_chat_template_kwargs: Optional[dict] = None,
         use_audio_in_video: bool = False,
         multimodal_config: MultimodalConfig = None,
+        custom_prompt_func: Optional[Callable[[Any, dict], Any]] = None,
     ):
         """Initialize base dataset configuration.
 
@@ -567,6 +598,7 @@ class BaseDataset(abc.ABC):
         self.apply_chat_template_kwargs = apply_chat_template_kwargs or {}
         self.use_audio_in_video = use_audio_in_video
         self.multimodal_config = multimodal_config
+        self.custom_prompt_func = custom_prompt_func
 
         self.epoch_id = -1
 
@@ -604,4 +636,5 @@ class BaseDataset(abc.ABC):
             apply_chat_template_kwargs=self.apply_chat_template_kwargs,
             use_audio_in_video=self.use_audio_in_video,
             multimodal_config=self.multimodal_config,
+            custom_prompt_func=self.custom_prompt_func,
         )

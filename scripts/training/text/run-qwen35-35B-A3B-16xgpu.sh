@@ -21,12 +21,14 @@ fi
 source "${MODEL_CONFIG_DIR}/qwen35-35B-A3B.sh"
 
 PROJECT_NAME="${PROJECT_NAME:=Relax/dev/dapo-math}"
-EXP_DIR="${MODEL_DIR:=${SCRIPT_DIR}/../../../../exps}"
+EXP_DIR="${EXP_DIR:-${SCRIPT_DIR}/../../../../exps}"
+MODEL_DIR="${MODEL_DIR:-${EXP_DIR}}"
+DATA_DIR="${DATA_DIR:-${EXP_DIR}}"
 NUM_ROLLOUT="${NUM_ROLLOUT:=1000}"
 
 CKPT_ARGS=(
-   --hf-checkpoint ${EXP_DIR}/Qwen3.5-35B-A3B/
-   --ref-load ${EXP_DIR}/Qwen3.5-35B-A3B/
+   --hf-checkpoint ${MODEL_DIR}/Qwen3.5-35B-A3B/
+   --ref-load ${MODEL_DIR}/Qwen3.5-35B-A3B/
    --megatron-to-hf-mode bridge
 
    --load ${EXP_DIR}/Qwen3.5-35B-A3B_mcore_16xgpu/
@@ -35,7 +37,7 @@ CKPT_ARGS=(
    --max-actor-ckpt-to-keep 1
 )
 
-PROMPT_SET=${EXP_DIR}/dapo-math-17k/dapo-math-17k.jsonl
+PROMPT_SET=${DATA_DIR}/dapo-math-17k/dapo-math-17k.jsonl
 
 ROLLOUT_ARGS=(
    --prompt-data ${PROMPT_SET}
@@ -59,26 +61,30 @@ EVAL_ARGS=(
    --log-passrate
    --skip-eval-before-train
    --eval-interval 20
-   --eval-prompt-data aime ${EXP_DIR}/aime-2024/aime-2024.jsonl
+   --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 8
    --eval-max-response-len 8192
    --eval-top-p 0.7
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 2
+   --tensor-model-parallel-size 4
    --sequence-parallel
    --pipeline-model-parallel-size 2
    --context-parallel-size 1
-   --expert-model-parallel-size 4
+   --expert-model-parallel-size 8
    --expert-tensor-parallel-size 1
 
-   --recompute-granularity full
-   --recompute-method uniform
-   --recompute-num-layers 1
+   # --recompute-granularity full
+   # --recompute-method uniform
+   # --recompute-num-layers 1
 
    --use-dynamic-batch-size
    --max-tokens-per-gpu 20480
+   --log-probs-max-tokens-per-gpu 40960
+
+   --moe-flex-dispatcher-backend deepep
+   --moe-token-dispatcher-type flex
 )
 
 GRPO_ARGS=(
@@ -111,7 +117,7 @@ OPTIMIZER_ARGS=(
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 2
+   --rollout-num-gpus-per-engine 8
    --sglang-mem-fraction-static 0.7
    # --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
 )
@@ -134,13 +140,6 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
-PARTIAL_ROLLOUT_ARGS=(
-    --partial-rollout
-    --over-sampling-batch-size 48
-    --mask-offpolicy-in-partial-rollout
-    --partial-rollout-max-aborted-count 3
-)
-
 mkdir -p log
 ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://${HOST_IP}:8265" \
    ${WORKING_DIR:+--working-dir "${WORKING_DIR}"} \
@@ -158,5 +157,4 @@ ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://${HOST_IP}:8265" \
    "${PERF_ARGS[@]}" \
    "${EVAL_ARGS[@]}" \
    "${SGLANG_ARGS[@]}" \
-   "${PARTIAL_ROLLOUT_ARGS[@]}" \
    "${MISC_ARGS[@]}"  2>&1 | tee log/qwen35-35B-A3B-GRPO-gpu16-sync-${now}.log

@@ -22,7 +22,11 @@ def test_install_rocm_bridge_peft_shims_installs_minimal_modules(monkeypatch):
     for name in installed_modules:
         sys.modules.pop(name, None)
 
-    monkeypatch.setattr(megatron_bridge_utils, "find_spec", lambda name: None if name == "transformer_engine" else ModuleSpec(name, None))
+    monkeypatch.setattr(
+        megatron_bridge_utils,
+        "find_spec",
+        lambda name: None if name == "transformer_engine" else ModuleSpec(name, None),
+    )
 
     try:
         megatron_bridge_utils.install_rocm_bridge_peft_shims()
@@ -63,7 +67,9 @@ def test_install_rocm_bridge_modelopt_shims_installs_minimal_modules(monkeypatch
     for name in installed_modules:
         sys.modules.pop(name, None)
 
-    monkeypatch.setattr(megatron_bridge_utils, "find_spec", lambda name: None if name == "modelopt" else ModuleSpec(name, None))
+    monkeypatch.setattr(
+        megatron_bridge_utils, "find_spec", lambda name: None if name == "modelopt" else ModuleSpec(name, None)
+    )
 
     try:
         megatron_bridge_utils.install_rocm_bridge_modelopt_shims()

@@ -10,6 +10,7 @@ from sglang_router.launch_router import RouterArgs
 
 from relax.backends.sglang.arguments import sglang_parse_args
 from relax.backends.sglang.arguments import validate_args as sglang_validate_args
+from relax.utils import device as device_utils
 from relax.utils.logging_utils import get_logger
 from relax.utils.training.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
 
@@ -60,9 +61,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=("Whether to use fully asynchronous training pipeline."),
             )
             parser.add_argument(
+                "--hybrid",
+                action="store_true",
+                default=False,
+                help=(
+                    "Enable hybrid training mode. Combines the fully-async streaming data pipeline "
+                    "(transfer queue + max-staleness) with colocate-style weight sharing "
+                    "(TensorBackuper + _switch_model), so the actor handles ref / actor_fwd / advantages "
+                    "internally on its own GPUs while rollout runs on a separate GPU placement group. "
+                    "Mutually exclusive with passing --fully-async and --colocate together."
+                ),
+            )
+            parser.add_argument(
                 "--checkpoint-engine-backend",
                 type=str,
-                default="nccl",
+                default=device_utils.get_dist_backend(),
                 help=("Backend for checkpoint engine."),
             )
             parser.add_argument(
@@ -184,7 +197,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
 
-            reset_arg(parser, "--distributed-backend", type=str, default="nccl")
+            reset_arg(parser, "--distributed-backend", type=str, default=device_utils.get_dist_backend())
             reset_arg(parser, "--distributed-timeout-minutes", type=int, default=30)
 
             return parser
@@ -202,7 +215,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--true-on-policy-mode",
                 action="store_true",
                 default=False,
-                help="Whether to enable true-on-policy mode.",
+                help=(
+                    "Skip the actor_fwd role and reuse the train forward's log_probs as "
+                    "old_log_probs (ppo_kl ≡ 0, ratio ≡ 1), saving the dedicated actor_fwd "
+                    "GPU group and one weight-sync per step. "
+                    "Auto-enabled when --fully-async and "
+                    "rollout_batch_size * n_samples_per_prompt == global_batch_size; no need "
+                    "to pass this flag explicitly. The caller is responsible for ensuring the "
+                    "regime is actually on-policy (e.g. --max-staleness=0, "
+                    "--num-iters-per-train-update=1); off-policy use yields incorrect gradients. "
+                    "TIS (--use-tis) and --get-mismatch-metrics remain valid in this mode."
+                ),
             )
             parser.add_argument(
                 "--train-env-vars",
@@ -257,6 +280,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 default=False,
                 help="Whether to freeze the vision projection parameters (used in bridge mode for multimodal models).",
+            )
+            parser.add_argument(
+                "--vision-dp-when-tp",
+                action="store_true",
+                default=False,
+                help="Split vision encoder workload across TP ranks (data-parallel over TP). "
+                "Each TP rank processes a chunk of images, then all-reduce gathers the full embedding.",
             )
             parser.add_argument(
                 "--recompute-loss-function",
@@ -325,6 +355,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Note that, we will always update the parameters in sglang with that of megatron before training, "
                     "so you only need to provide a huggingface checkpoint that has the same architecture as the model you want to train. "
                     "It doesn't necessary need to contain the most up-to-date parameters."
+                ),
+            )
+            parser.add_argument(
+                "--sglang-hf-checkpoint",
+                type=str,
+                default=None,
+                help=(
+                    "Optional override for the HF checkpoint that SGLang loads. "
+                    "When set, SGLang's model_path uses this directory instead of "
+                    "args.hf_checkpoint, while training-side consumers (Megatron "
+                    "loader, AutoConfig, tokenizer) keep using args.hf_checkpoint. "
+                    "Used by INT4 QAT runs so SGLang loads the source compressed-"
+                    "tensors directory directly (registering weight_packed/scale/shape "
+                    "params) while training reads from a separately-prepared BF16 "
+                    "checkpoint."
                 ),
             )
             parser.add_argument(
@@ -630,6 +675,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "A single timeout (e.g. engine busy with a large batch) will not kill the engine. "
                 "Only after this many consecutive failures will the engine be killed.",
             )
+            parser.add_argument(
+                "--rollout-engine-init-timeout",
+                type=float,
+                default=3600.0,
+                help="Total timeout in seconds to wait for ALL rollout engines to finish init() "
+                "(server launch + weight loading) at training startup. Acts as a soft barrier so "
+                "stragglers caused by storage/IO jitter on large clusters do not leak into "
+                "downstream NCCL collectives. Progress is logged every 60s while waiting.",
+            )
             # Elastic rollout scale-out arguments
             parser.add_argument(
                 "--scale-out-timeout",
@@ -673,6 +727,33 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=int,
                 default=10000,
                 help="Buffer size for streaming dataset.",
+            )
+            parser.add_argument(
+                "--prefetch-chunk-size",
+                type=int,
+                default=32,
+                help="Number of samples to dispatch to the thread-pool in each prefetch round. "
+                "Larger values increase throughput but also memory pressure. Only effective when "
+                "--use-streaming-dataset is set and the dataset contains multimodal data.",
+            )
+            parser.add_argument(
+                "--prefetch-max-cached",
+                type=int,
+                default=256,
+                help="Maximum number of pre-loaded samples kept in the prefetch cache. "
+                "When the cache is full the background prefetch thread pauses until consumers "
+                "free space. Set to 0 to disable prefetching. Only effective when "
+                "--use-streaming-dataset is set and the dataset contains multimodal data.",
+            )
+            parser.add_argument(
+                "--prefetch-num-workers",
+                type=int,
+                default=1,
+                help="Number of parallel worker threads inside the prefetch buffer for "
+                "I/O-bound media decoding (video/image). Set to 1 to serialise all "
+                "decoding (safest for FFmpeg which is not fully thread-safe). "
+                "Higher values increase parallelism but may trigger EAGAIN errors "
+                "on some platforms. Only effective when prefetching is enabled.",
             )
             # TODO: maybe add an num_epoch and calculate the num_rollout from buffer
             parser.add_argument(
@@ -786,6 +867,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Maximum number of frames for video processing. If not set, uses default value (768).",
             )
             parser.add_argument(
+                "--image-resize-scale-factor",
+                type=int,
+                default=None,
+                help=(
+                    "Scale factor for image resize dimension alignment. "
+                    "Default uses patch_size * spatial_merge_size. Set to 0 to disable alignment."
+                ),
+            )
+            parser.add_argument(
                 "--audio-sample-rate",
                 type=int,
                 default=None,
@@ -808,7 +898,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "for true parallelism without GIL contention."
                 ),
             )
-
+            parser.add_argument(
+                "--custom-prompt-path",
+                type=str,
+                default=None,
+                help=(
+                    "Dotted import path to a custom function that transforms the prompt before "
+                    "conversation/multimodal processing. The function signature must be "
+                    "`def custom_fn(prompt, data: dict) -> prompt`, where `prompt` is the raw "
+                    "value from the dataset and `data` is the full sample dict. "
+                    "Example: my_package.prompt_utils.add_prefix"
+                ),
+            )
             parser.add_argument("--metadata-key", type=str, default="metadata", help="JSON dataset key")
             parser.add_argument(
                 "--tool-key",
@@ -1291,6 +1392,23 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--opd-teacher-ckpt-step", type=int, default=None, help="The checkpoint step for OPD teacher model."
             )
+            parser.add_argument(
+                "--opd-teacher-timeout-s",
+                type=float,
+                default=30.0,
+                help=(
+                    "Timeout (seconds) for OPD teacher HTTP requests when --opd-type=sglang. "
+                    "Increase this for long responses or high-latency cross-host teacher services."
+                ),
+            )
+            parser.add_argument(
+                "--opd-log-prob-top-k",
+                type=int,
+                default=0,
+                help=(
+                    "Top-k token ids to request/collect for OPD overlap metrics. Set to 0 to disable top-k collection."
+                ),
+            )
             return parser
 
         def add_router_arguments(parser):
@@ -1441,9 +1559,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             collection."""
             parser.add_argument(
                 "--use-metrics-service",
-                action="store_true",
-                default=False,
-                help="Enable metrics service for centralized metrics collection and reporting",
+                action=argparse.BooleanOptionalAction,
+                default=True,
+                help=(
+                    "Enable metrics service for centralized metrics collection and reporting. "
+                    "Default: True. Use --no-use-metrics-service to disable."
+                ),
             )
             parser.add_argument(
                 "--timeline-dump-dir",
@@ -1506,12 +1627,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--memory-snapshot-dir",
                 type=str,
-                default=".",
+                default=None,
+                help=("Directory for memory snapshot dumps. Defaults to traces/<tb_experiment_name>/memory_snapshot."),
             )
             parser.add_argument(
                 "--memory-snapshot-num-steps",
                 type=int,
                 default=None,
+                help="Number of rollout steps after which to dump the memory snapshot. "
+                "For example, --memory-snapshot-num-steps 3 dumps after step 2 (0-indexed).",
             )
             parser.add_argument(
                 "--profile-target",
@@ -1684,7 +1808,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "JSON dict for genRM engine initialisation. "
                     "Setting this enables genRM. Example: "
-                    '{ "dp_size": 1, "pp_size": 1, "max_total_tokens": 8192}'
+                    '{ "dp_size": 1, "pp_size": 1, "max_total_tokens": 8192}. '
+                    'When sharing GPUs with rollout, set "mem_fraction_static" here '
+                    "to control genRM's per-GPU memory share independently from rollout."
                 ),
             )
             parser.add_argument(
@@ -1881,6 +2007,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             default=None,
             help="Path to the YAML config for custom function arguments.",
         )
+        parser.add_argument(
+            "--normalize-bbox",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help=(
+                "Convert model-output bbox coordinates from normalized [0, 1000] to absolute pixels. "
+                "Required for Qwen-VL/Qwen2-VL/Qwen3-VL (default True). "
+                "Set --no-normalize-bbox for Qwen2.5-VL which outputs absolute pixel coordinates."
+            ),
+        )
         reset_arg(parser, "--padded-vocab-size", type=int, default=None)
 
         return parser
@@ -1900,6 +2036,7 @@ def _pre_parse_mode():
     temp_parser.add_argument("--debug-rollout-only", action="store_true", default=False)
     temp_parser.add_argument("--debug-train-only", action="store_true", default=False)
     temp_parser.add_argument("--load-debug-rollout-data", type=str, default=None)
+    temp_parser.add_argument("--skip-hf-validate", action="store_true", default=False)
     temp_args, _ = temp_parser.parse_known_args()
     return temp_args
 
@@ -1926,7 +2063,7 @@ def parse_args(add_custom_arguments=None):
 
     args = megatron_parse_args(
         extra_args_provider=add_slime_arguments,
-        skip_hf_validate=pre.debug_rollout_only,
+        skip_hf_validate=pre.debug_rollout_only or pre.skip_hf_validate,
     )
 
     # Merge pre-parsed args into the main namespace
@@ -1994,6 +2131,10 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 
 
 def slime_validate_args(args):
+    # Backward compatibility: old scripts may pass --enable-gloo-process-groups
+    if not hasattr(args, "use_gloo_process_groups"):
+        args.use_gloo_process_groups = getattr(args, "enable_gloo_process_groups", False)
+
     args.eval_datasets = _resolve_eval_datasets(args)
 
     if args.max_staleness < 0:
@@ -2017,6 +2158,11 @@ def slime_validate_args(args):
             )
 
     # Validate on-policy distillation (OPD) arguments
+    if args.opd_teacher_timeout_s <= 0:
+        raise ValueError("--opd-teacher-timeout-s must be > 0.")
+    if args.opd_log_prob_top_k < 0:
+        raise ValueError("--opd-log-prob-top-k must be >= 0.")
+
     if args.use_opd:
         if args.opd_type is None:
             raise ValueError("--opd-type must be specified when --use-opd is enabled. Choose 'sglang' or 'megatron'.")
@@ -2106,6 +2252,37 @@ def slime_validate_args(args):
             " Please set --opd-type to sglang or remove --use-opd."
         )
 
+    # Auto-enable true_on_policy_mode when the per-step rollout output exactly fills
+    # one global batch in fully-async mode. In this regime the train forward's
+    # log_probs equal what actor_fwd would have produced, so the actor_fwd role
+    # can be skipped (see relax/backends/megatron/loss.py:policy_loss_function).
+    if args.fully_async and args.rollout_batch_size * args.n_samples_per_prompt == args.global_batch_size:
+        if not args.true_on_policy_mode:
+            logger.info(
+                "Auto-enabling --true-on-policy-mode: rollout_batch_size * n_samples_per_prompt "
+                f"== global_batch_size ({args.global_batch_size}). actor_fwd will be skipped."
+            )
+        args.true_on_policy_mode = True
+
+    # Validate --resource has the producer roles the trainer will fetch from
+    # TransferQueue in fully-async mode. Without these, train_async would poll
+    # forever for a field nobody writes (see backends/megatron/actor.py:train_async).
+    if args.fully_async and args.resource is not None:
+        if (args.use_kl_loss or args.kl_coef != 0) and "reference" not in args.resource:
+            raise ValueError(
+                "--use-kl-loss / --kl-coef != 0 requires a 'reference' entry in --resource "
+                "(produces ref_log_probs via TransferQueue in fully-async mode). "
+                f"Current --resource keys: {sorted(args.resource.keys())}."
+            )
+        if not args.true_on_policy_mode and "actor_fwd" not in args.resource:
+            raise ValueError(
+                "actor_fwd is required in --resource when true_on_policy_mode is False "
+                "(produces log_probs via TransferQueue in fully-async mode). "
+                "true_on_policy_mode is auto-enabled only when "
+                "rollout_batch_size * n_samples_per_prompt == global_batch_size. "
+                f"Current --resource keys: {sorted(args.resource.keys())}."
+            )
+
     if args.use_rollout_logprobs:
         assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
 
@@ -2174,14 +2351,30 @@ def slime_validate_args(args):
             logger.warning("Force train_memory_margin_bytes=0 since debug_rollout_only does not support it")
             args.train_memory_margin_bytes = 0
 
-    if args.fully_async and args.colocate:
-        args.colocate = False
-
-    if args.fully_async and args.balance_data:
+    # Resolve --hybrid into the underlying execution flags so downstream
+    # machinery (StreamDataLoader broadcast_pp, UpdateWeightFromTensor
+    # selection, sglang_engine DCS gating) keeps a single semantic axis.
+    # `args.hybrid` remains the canonical switch for hybrid-specific
+    # branches (registry, controller dispatch, train_hybrid call site).
+    if args.hybrid:
+        args.fully_async = True
+        args.colocate = True
+        logger.info(
+            "hybrid mode: actor/reference/actor_fwd/advantages will share GPUs "
+            "via offload/onload role switching, while rollout uses separate GPUs."
+        )
+    elif args.fully_async and args.colocate:
         raise ValueError(
-            "--balance-data is not supported in fully-async mode (--fully-async). "
-            "In fully-async training, the component consumes rollout data via transfer queue "
-            "which is incompatible with data balancing. Please remove --balance-data from your command."
+            "--fully-async and --colocate cannot be combined directly. "
+            "Use --hybrid instead, which is the supported public flag for hybrid training mode."
+        )
+
+    if args.fully_async and args.balance_data and not args.hybrid:
+        raise ValueError(
+            "--balance-data is not supported in pure fully-async mode (--fully-async without --hybrid). "
+            "In pure fully-async training, the actor consumes rollout data via StreamDataLoader "
+            "which is incompatible with data balancing. Use --hybrid mode "
+            "or remove --balance-data from your command."
         )
 
     assert not (args.debug_rollout_only and args.debug_train_only), (
@@ -2190,9 +2383,20 @@ def slime_validate_args(args):
 
     # Check if genRM is enabled
     genrm_enabled = args.genrm_model_path is not None
+    args._genrm_colocate_with_rollout = False
 
     # always true on offload for colocate at the moment.
-    if args.colocate and not genrm_enabled:
+    if args.hybrid:
+        # hybrid mode: actor and rollout use SEPARATE GPUs,
+        # so no offload needed between them. Actor internally handles
+        # ref/actor_fwd via _switch_model (same model, weight swap only).
+        if args.offload_train is None:
+            args.offload_train = False
+        if args.offload_rollout is None:
+            args.offload_rollout = False
+        # Mark that actor should compute advantages and ref/actor_fwd internally
+        args.compute_advantages_and_returns = True
+    elif args.colocate and not genrm_enabled:
         if args.offload_train is None:
             args.offload_train = True
         if args.offload_rollout is None:
@@ -2218,26 +2422,40 @@ def slime_validate_args(args):
                 "For example: --rollout-num-gpus 4 --genrm-num-gpus 4 on an 8-GPU machine."
             )
 
-        total_inference_gpus = args.rollout_num_gpus + args.genrm_num_gpus
         actor_total_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
         if args.use_critic:
             actor_total_gpus += args.critic_num_gpus_per_node * args.critic_num_nodes
 
-        if total_inference_gpus > actor_total_gpus:
-            raise ValueError(
-                f"In colocated mode with genRM enabled, total inference GPUs (rollout: {args.rollout_num_gpus} + genrm: {args.genrm_num_gpus} = {total_inference_gpus}) "
-                f"exceed actor GPUs ({actor_total_gpus}). Adjust --rollout-num-gpus and/or --genrm-num-gpus."
-            )
-        elif total_inference_gpus < actor_total_gpus:
+        rollout_g = args.rollout_num_gpus
+        genrm_g = args.genrm_num_gpus
+        if rollout_g + genrm_g == actor_total_gpus:
+            args._genrm_colocate_with_rollout = False
             logger.info(
-                f"In colocated mode with genRM: rollout uses {args.rollout_num_gpus} GPUs, genRM uses {args.genrm_num_gpus} GPUs, "
-                f"total {total_inference_gpus} out of {actor_total_gpus} actor GPUs."
+                f"GenRM colocate (split bundles): rollout={rollout_g}, genrm={genrm_g}, "
+                f"actor total={actor_total_gpus}."
+            )
+        elif rollout_g == actor_total_gpus and genrm_g == actor_total_gpus:
+            args._genrm_colocate_with_rollout = True
+            logger.info(
+                f"GenRM colocate (shared bundles with rollout): rollout=genrm={actor_total_gpus} GPUs. "
+                f"Set per-engine SGLang mem_fraction_static via --sglang-config (rollout) and "
+                f"--genrm-engine-config '{{\"mem_fraction_static\": <float>}}' (genrm)."
+            )
+        else:
+            raise ValueError(
+                "In colocated mode with genRM enabled, GPU allocation must satisfy one of:\n"
+                f"  (1) split: --rollout-num-gpus + --genrm-num-gpus == actor total ({actor_total_gpus}), or\n"
+                f"  (2) shared: --rollout-num-gpus == --genrm-num-gpus == actor total ({actor_total_gpus}).\n"
+                f"Got rollout={rollout_g}, genrm={genrm_g}, actor total={actor_total_gpus}."
             )
 
     if args.offload_train is None:
         args.offload_train = False
     if args.offload_rollout is None:
         args.offload_rollout = False
+
+    if args.use_critic:
+        args.offload_train = True
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path

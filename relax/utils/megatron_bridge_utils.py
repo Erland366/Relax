@@ -1,8 +1,8 @@
+import sys
+import types
 from contextlib import contextmanager
 from importlib.machinery import ModuleSpec
 from importlib.util import find_spec
-import sys
-import types
 
 import torch
 import torch.nn as nn
@@ -40,7 +40,8 @@ def patch_megatron_model(model):
 
 
 def install_rocm_bridge_peft_shims() -> None:
-    """Install minimal PEFT shims so Megatron-Bridge can import on ROCm without Transformer Engine.
+    """Install minimal PEFT shims so Megatron-Bridge can import on ROCm without
+    Transformer Engine.
 
     Megatron-Bridge imports PEFT modules unconditionally when `AutoBridge` is imported.
     Those PEFT modules hard-import Transformer Engine even when the active model/provider
@@ -203,7 +204,8 @@ def install_rocm_bridge_peft_shims() -> None:
 
 
 def install_rocm_bridge_modelopt_shims() -> None:
-    """Install minimal ModelOpt shims so GPT provider imports succeed on ROCm."""
+    """Install minimal ModelOpt shims so GPT provider imports succeed on
+    ROCm."""
 
     if not torch.version.hip:
         return
@@ -240,9 +242,9 @@ def install_rocm_bridge_modelopt_shims() -> None:
 def install_rocm_bridge_qwen3_local_mapping_patch() -> None:
     """Patch Qwen3 bridge mappings so local-layer-spec names work on ROCm.
 
-    Upstream Megatron-Bridge's dense Qwen3 bridge only registers the Transformer
-    Engine layernorm parameter names. When Relax forces the provider onto the
-    local layer spec on ROCm, those weights are exposed as
+    Upstream Megatron-Bridge's dense Qwen3 bridge only registers the
+    Transformer Engine layernorm parameter names. When Relax forces the
+    provider onto the local layer spec on ROCm, those weights are exposed as
     `input_layernorm.weight` and `pre_mlp_layernorm.weight` instead. Without
     aliases, the bridge leaves holes in its conversion task list and crashes
     during HF->Megatron load.

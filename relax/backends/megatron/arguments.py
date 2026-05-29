@@ -1,10 +1,19 @@
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 
+import ast
+
 from megatron.training.arguments import parse_args as _megatron_parse_args
 from megatron.training.arguments import validate_args as _megatron_validate_args
-from megatron.training.tokenizer.tokenizer import _vocab_size_with_padding
+
+
+try:
+    from megatron.training.tokenizer.tokenizer import _vocab_size_with_padding as vocab_size_with_padding
+except ModuleNotFoundError:
+    from megatron.core.tokenizers.utils.build_tokenizer import vocab_size_with_padding
+
 from transformers import AutoConfig
 
+from relax.utils import device as device_utils
 from relax.utils.logging_utils import get_logger
 
 
@@ -17,17 +26,18 @@ def validate_args(args):
     """Run megatron's own validate_args plus slime-specific megatron
     validations."""
 
-    import torch
-
-    if not torch.cuda.is_available():
+    if not device_utils.is_available():
         from unittest.mock import patch
 
-        class _CudaProperty:
+        class _DeviceProperty:
             major = 9
             minor = 0
 
+        # Megatron internally calls torch.cuda.get_device_properties / get_device_capability.
+        # When no real device is available, device_utils.get_device_name() returns "cpu",
+        # so we must patch torch.cuda specifically — that's what Megatron actually invokes.
         with (
-            patch("torch.cuda.get_device_properties", return_value=_CudaProperty()),
+            patch("torch.cuda.get_device_properties", return_value=_DeviceProperty()),
             patch("torch.cuda.get_device_capability", return_value=(9, 0)),
         ):
             _megatron_validate_args(args)
@@ -48,7 +58,43 @@ def validate_args(args):
             "decoder_first_pipeline_num_layers and decoder_last_pipeline_num_layers should be None when "
             "pipeline_model_parallel_size is 1."
         )
+
+    # Megatron-Bridge requires --calculate-per-token-loss when context parallelism is enabled.
+    # See https://github.com/NVIDIA-NeMo/Megatron-Bridge
+    if args.context_parallel_size > 1:
+        assert args.calculate_per_token_loss, (
+            "--calculate-per-token-loss must be set when context_parallel_size > 1 (required by Megatron-Bridge)."
+        )
     return args
+
+
+def _has_dense_moe_layers(args):
+    moe_layer_freq = getattr(args, "moe_layer_freq", None)
+    if moe_layer_freq is None:
+        return True
+
+    if isinstance(moe_layer_freq, str):
+        try:
+            moe_layer_freq = ast.literal_eval(moe_layer_freq)
+        except (SyntaxError, ValueError):
+            return "0" in moe_layer_freq
+
+    try:
+        return any(int(layer_freq) == 0 for layer_freq in moe_layer_freq)
+    except TypeError:
+        return int(moe_layer_freq) == 0
+
+
+def _is_moe_config(hf_config):
+    return any(
+        hasattr(hf_config, attr)
+        for attr in (
+            "moe_intermediate_size",
+            "num_experts",
+            "n_routed_experts",
+            "num_local_experts",
+        )
+    )
 
 
 def _hf_validate_args(args, hf_config):
@@ -56,6 +102,18 @@ def _hf_validate_args(args, hf_config):
         return x == y
 
     errors = []
+
+    # Multimodal models (Qwen3-VL, Qwen3.5, Qwen3-Omni, etc.) use multi-axis RoPE whose
+    # rotary_pos_emb is a Python list of tensors, not a single Tensor. Megatron's fused
+    # RoPE kernel cannot handle this and produces numerically different results from the
+    # unfused HF/SGLang implementation, causing training-inference log-prob mismatch.
+    is_multimodal = hasattr(hf_config, "text_config") or hasattr(hf_config, "thinker_config")
+    if is_multimodal and getattr(args, "apply_rope_fusion", False):
+        errors.append(
+            "Multimodal models use multi-axis RoPE (list of tensors) which is incompatible "
+            "with fused RoPE kernels — this causes training-inference log-prob mismatch. "
+            "Add --no-rope-fusion to the launch script."
+        )
 
     # omni models have different config structure
     if hasattr(hf_config, "thinker_config"):
@@ -65,15 +123,26 @@ def _hf_validate_args(args, hf_config):
     if hasattr(hf_config, "text_config"):
         hf_config = hf_config.text_config
 
-    for hf_config_name, megatron_config_name, compare_fn in [
-        ("hidden_size", "hidden_size", equal),
-        ("num_attention_heads", "num_attention_heads", equal),
-        ("num_hidden_layers", "num_layers", equal),
-        ("intermediate_size", "ffn_hidden_size", equal),
-        ("tie_word_embeddings", "untie_embeddings_and_output_weights", lambda x, y: not x == y),
-        ("rms_norm_eps", "norm_epsilon", equal),
-        ("rope_theta", "rotary_base", equal),
-    ]:
+    validate_dense_ffn = not _is_moe_config(hf_config) or _has_dense_moe_layers(args)
+
+    for hf_config_name, megatron_config_name, compare_fn in (
+        [
+            ("hidden_size", "hidden_size", equal),
+            ("num_attention_heads", "num_attention_heads", equal),
+            ("num_hidden_layers", "num_layers", equal),
+            ("intermediate_size", "ffn_hidden_size", equal),
+            ("moe_intermediate_size", "moe_ffn_hidden_size", equal),
+            ("shared_expert_intermediate_size", "moe_shared_expert_intermediate_size", equal),
+            ("tie_word_embeddings", "untie_embeddings_and_output_weights", lambda x, y: not x == y),
+            ("rope_theta", "rotary_base", equal),
+        ]
+        + [("rms_norm_eps", "norm_epsilon", equal)]
+        if hasattr(args, "norm_epsilon")
+        else [("rms_norm_eps", "layernorm_epsilon", equal)]
+    ):
+        if hf_config_name == "intermediate_size" and not validate_dense_ffn:
+            continue
+
         if hasattr(hf_config, hf_config_name):
             if not compare_fn(getattr(hf_config, hf_config_name), getattr(args, megatron_config_name)):
                 errors.append(
@@ -101,7 +170,7 @@ def _set_default_megatron_args(args):
         args.rope_type = "yarn" if args.multi_latent_attention else "rope"
 
     if args.vocab_size and not args.padded_vocab_size:
-        args.padded_vocab_size = _vocab_size_with_padding(args.vocab_size, args)
+        args.padded_vocab_size = vocab_size_with_padding(args.vocab_size, args)
 
     if not args.tokenizer_model and not args.tokenizer_type:
         logger.info("--tokenizer-model not set, use --hf-checkpoint as tokenizer model.")

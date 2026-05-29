@@ -11,7 +11,7 @@
 set -ex
 set -o pipefail
 
-MODE=${1:-"async"}
+MODE=${1:-"hybrid-async"}
 
 now=$(date "+%Y-%m-%d-%H:%M:%S")
 echo "当前时间: $now"
@@ -25,21 +25,25 @@ source "${MODEL_CONFIG_DIR}/qwen35-9B.sh"
 # source "${MODEL_CONFIG_DIR}/qwen3-vl-4B.sh"
 
 PROJECT_NAME="${PROJECT_NAME:=Relax/dev/fully_async_openr1mm}"
-EXP_DIR="${MODEL_DIR:=${SCRIPT_DIR}/../../../../exps}"
+EXP_DIR="${EXP_DIR:-${SCRIPT_DIR}/../../../../exps}"
+MODEL_DIR="${MODEL_DIR:-${EXP_DIR}}"
+DATA_DIR="${DATA_DIR:-${EXP_DIR}}"
 NUM_ROLLOUT="${NUM_ROLLOUT:=200}"
 
+
 CKPT_ARGS=(
-   --hf-checkpoint ${EXP_DIR}/Qwen3.5-9B
-   --ref-load ${EXP_DIR}/Qwen3.5-9B
-   # --hf-checkpoint ${EXP_DIR}/Qwen3-VL-4B-Instruct
-   # --ref-load ${EXP_DIR}/Qwen3-VL-4B-Instruct
-   --load ${EXP_DIR}/Qwen3.5-9B_mcore_8xgpu/
-   --save ${EXP_DIR}/Qwen3.5-9B_mcore_8xgpu/
-   --save-interval 4
+   --hf-checkpoint ${MODEL_DIR}/Qwen3.5-9B
+   --ref-load ${MODEL_DIR}/Qwen3.5-9B
+   # --hf-checkpoint ${MODEL_DIR}/Qwen3-VL-4B-Instruct
    --megatron-to-hf-mode bridge
+   # --ref-load ${MODEL_DIR}/Qwen3-VL-4B-Instruct
+   # --load ${EXP_DIR}/Qwen3.5-9B_mcore_8xgpu/
+   --save ${EXP_DIR}/Qwen3.5-9B_mcore_8xgpu/
+   --save-interval 100
+   --max-actor-ckpt-to-keep 1
 )
 
-PROMPT_SET=${EXP_DIR}/multimodal-open-r1-8k-verified/data/train-00000-of-00001_converted_noextract.parquet
+PROMPT_SET=${DATA_DIR}/multimodal-open-r1-8k-verified/data/train-00000-of-00001_converted_noextract.parquet
 
 SYSTEM_PROMPT="A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>"
 
@@ -48,7 +52,7 @@ ROLLOUT_ARGS=(
    --input-key prompt
    --label-key label
    --apply-chat-template
-   # --rollout-shuffle
+   --rollout-shuffle
    --rm-type openr1mm
    --num-rollout ${NUM_ROLLOUT}
    --rollout-batch-size 32
@@ -58,14 +62,15 @@ ROLLOUT_ARGS=(
    --rollout-temperature 0.8
    --global-batch-size 256
    --multimodal-keys '{"image":"image"}'
-    --system-prompt "${SYSTEM_PROMPT}"
+   --system-prompt "${SYSTEM_PROMPT}"
+   --use-streaming-dataset
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 4
+   --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size 2
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
 
@@ -73,12 +78,11 @@ PERF_ARGS=(
    --recompute-method uniform
    --recompute-num-layers 1
 
-   # qwen3.5 only
-   --qkv-format bshd
-   --micro-batch-size 1
-   #--micro-batch-size 16 # avoid OOM
-   # --use-dynamic-batch-size
-   --max-tokens-per-gpu 9216
+   --calculate-per-token-loss
+   # --micro-batch-size 16
+   # --qkv-format bshd
+   --use-dynamic-batch-size
+   --max-tokens-per-gpu 4096
 
    --no-rope-fusion
 )
@@ -110,12 +114,12 @@ WANDB_ARGS=(
    --use-clearml
    --use-metrics-service
    --tb-project-name ${PROJECT_NAME}
-   --tb-experiment-name qwen35-9b-GRPO-gpu8-fully-${MODE}-${now}
+   --tb-experiment-name qwen35-9b-GRPO-gpu8-hybrid-${MODE}-${now}
 )
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
-   --sglang-mem-fraction-static 0.8
+   --sglang-mem-fraction-static 0.6
 )
 
 MISC_ARGS=(
@@ -131,17 +135,16 @@ MISC_ARGS=(
 
 
 mkdir -p log
-if [ ${MODE} = "async" ]; then
+if [ ${MODE} = "hybrid-async" ]; then
      ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://127.0.0.1:8265" \
         --runtime-env-json="${RUNTIME_ENV_JSON}" \
         -- python3 -m relax.entrypoints.train \
-        --resource '{"actor": [1, 4], "rollout": [1, 2], "reference": [1, 1], "actor_fwd": [1, 1], "advantages": [1, 0]}'\
+        --resource '{"actor": [1, 4], "rollout": [1, 4]}'\
    --max-staleness 2 \
         --num-data-storage-units 1 \
         --num-iters-per-train-update 8 \
-        --ref-actor-config '{"tensor_model_parallel_size": 1, "max_tokens_per_gpu": 16384, "sequence_parallel": false, "only_load_weight": true}' \
-        --fully-async \
-        --use-health-check \
+         --balance-data \
+        --hybrid \
         "${MODEL_ARGS[@]}" \
         "${CKPT_ARGS[@]}" \
         "${ROLLOUT_ARGS[@]}" \
@@ -150,7 +153,7 @@ if [ ${MODE} = "async" ]; then
         "${WANDB_ARGS[@]}" \
         "${PERF_ARGS[@]}" \
         "${SGLANG_ARGS[@]}" \
-        "${MISC_ARGS[@]}"  2>&1 | tee log/qwen35-9b-GRPO-gpu8-fully-async-${now}.log
+        "${MISC_ARGS[@]}"  2>&1 | tee log/qwen35-9b-GRPO-gpu8-hybrid-async-${now}.log
 else
     ray job submit ${RAY_NO_WAIT:+--no-wait} --address="http://127.0.0.1:8265" \
          --runtime-env-json="${RUNTIME_ENV_JSON}" \
