@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 
+import atexit
 import threading
 from argparse import Namespace
 from collections import defaultdict
@@ -14,7 +15,7 @@ from relax.utils.logging_utils import get_logger
 from relax.utils.metrics.adapters.apprise import _AppriseAdapter
 from relax.utils.metrics.adapters.clearml import _ClearMLAdapter
 from relax.utils.metrics.adapters.tensorboard import _TensorboardAdapter
-from relax.utils.metrics.adapters.wandb import _is_offline_mode
+from relax.utils.metrics.adapters.wandb import _is_offline_mode, init_wandb_secondary
 from relax.utils.metrics.timeline_trace import TimelineTraceAdapter
 
 
@@ -90,6 +91,61 @@ def is_timeline_event(metric_value: Any) -> bool:
     return "ph" in metric_value[0] and "ts" in metric_value[0]
 
 
+def init_metrics_service_wandb(config: Namespace) -> None:
+    """Initialize W&B for the MetricsService.
+
+    When the main process already created a W&B run, MetricsService must join
+    that same run. It owns the aggregated train/rollout metrics, so a separate
+    service-local run would hide the useful training charts.
+    """
+    import os
+
+    if getattr(config, "wandb_run_id", None) is not None:
+        init_wandb_secondary(config)
+        return
+
+    if config.wandb_mode:
+        os.environ["WANDB_MODE"] = config.wandb_mode
+
+    offline = _is_offline_mode(config)
+
+    if (not offline) and getattr(config, "wandb_key", None) is not None:
+        wandb.login(key=config.wandb_key, host=getattr(config, "wandb_host", None))
+
+    project = getattr(config, "wandb_project", None) or getattr(config, "tb_project_name", None)
+    run_name = getattr(config, "tb_experiment_name", None) or "metrics-service"
+
+    init_kwargs = {
+        "project": project,
+        "name": run_name,
+        "entity": getattr(config, "wandb_team", None),
+    }
+
+    if offline:
+        init_kwargs["settings"] = wandb.Settings(mode="offline")
+
+    wandb_dir = getattr(config, "wandb_dir", None)
+    if wandb_dir:
+        os.makedirs(wandb_dir, exist_ok=True)
+        init_kwargs["dir"] = wandb_dir
+
+    wandb.init(**init_kwargs)
+
+    wandb.define_metric("train/step")
+    wandb.define_metric("train/*", step_metric="train/step")
+    wandb.define_metric("rollout/step")
+    wandb.define_metric("rollout/*", step_metric="rollout/step")
+    wandb.define_metric("eval/step")
+    wandb.define_metric("eval/*", step_metric="eval/step")
+    wandb.define_metric("perf/*", step_metric="rollout/step")
+
+
+def finish_metrics_service_wandb() -> None:
+    """Flush W&B from the MetricsService process if a run is active."""
+    if wandb.run is not None:
+        wandb.finish(exit_code=0, quiet=True)
+
+
 @serve.deployment
 @serve.ingress(app)
 class MetricsService:
@@ -107,6 +163,7 @@ class MetricsService:
 
         self.metrics_buffer = MetricsBuffer()
         self._adapters = {}
+        self._wandb_finalized = False
 
         if getattr(config, "use_tensorboard", False):
             try:
@@ -132,7 +189,8 @@ class MetricsService:
         self._use_wandb = getattr(config, "use_wandb", False)
         if self._use_wandb:
             try:
-                self._init_wandb(config)
+                init_metrics_service_wandb(config)
+                atexit.register(self._finish_wandb)
                 logger.info("W&B adapter initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize W&B adapter: {e}")
@@ -148,50 +206,12 @@ class MetricsService:
 
         logger.info(f"MetricsService initialized with adapters: {list(self._adapters.keys())}")
 
-    @staticmethod
-    def _init_wandb(config: Namespace) -> None:
-        """Initialize W&B for the MetricsService.
-
-        Unlike init_wandb_primary (designed for training workers with
-        rank/group), MetricsService is a single Ray Serve replica that only
-        needs basic project and run name configuration.
-        """
-        import os
-
-        if config.wandb_mode:
-            os.environ["WANDB_MODE"] = config.wandb_mode
-
-        offline = _is_offline_mode(config)
-
-        if (not offline) and getattr(config, "wandb_key", None) is not None:
-            wandb.login(key=config.wandb_key, host=getattr(config, "wandb_host", None))
-
-        project = getattr(config, "wandb_project", None) or getattr(config, "tb_project_name", None)
-        run_name = getattr(config, "tb_experiment_name", None) or "metrics-service"
-
-        init_kwargs = {
-            "project": project,
-            "name": run_name,
-            "entity": getattr(config, "wandb_team", None),
-        }
-
-        if offline:
-            init_kwargs["settings"] = wandb.Settings(mode="offline")
-
-        wandb_dir = getattr(config, "wandb_dir", None)
-        if wandb_dir:
-            os.makedirs(wandb_dir, exist_ok=True)
-            init_kwargs["dir"] = wandb_dir
-
-        wandb.init(**init_kwargs)
-
-        wandb.define_metric("train/step")
-        wandb.define_metric("train/*", step_metric="train/step")
-        wandb.define_metric("rollout/step")
-        wandb.define_metric("rollout/*", step_metric="rollout/step")
-        wandb.define_metric("eval/step")
-        wandb.define_metric("eval/*", step_metric="eval/step")
-        wandb.define_metric("perf/*", step_metric="rollout/step")
+    def _finish_wandb(self) -> None:
+        if self._wandb_finalized:
+            return
+        self._wandb_finalized = True
+        if self._use_wandb:
+            finish_metrics_service_wandb()
 
     @app.post("/log_metric")
     async def log_metric(self, request: LogMetricRequest) -> Dict[str, Any]:
@@ -337,6 +357,12 @@ class MetricsService:
     @app.post("/clear_metrics")
     async def clear_metrics(self, request: ClearMetricsRequest) -> Dict[str, Any]:
         return {"status": "success", "message": "Metrics cleared"}
+
+    @app.post("/stop_service")
+    async def stop_service(self) -> Dict[str, Any]:
+        """Flush external metric adapters before Ray Serve stops the replica."""
+        self._finish_wandb()
+        return {"status": "success", "message": "MetricsService stopped"}
 
     @app.post("/log_error")
     async def log_error(self, request: LogErrorRequest) -> Dict[str, Any]:

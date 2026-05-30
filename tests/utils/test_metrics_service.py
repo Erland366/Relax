@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 # MetricsBuffer is defined inside metrics.py, we need to import it correctly
 from relax.utils.metrics.client import MetricsClient
 from relax.utils.metrics.metrics_service_adapter import MetricsServiceAdapter
-from relax.utils.metrics.service import MetricsBuffer
+from relax.utils.metrics.service import MetricsBuffer, finish_metrics_service_wandb, init_metrics_service_wandb
 from relax.utils.misc import create_namespace
 
 
@@ -232,6 +232,58 @@ class TestMetricsServiceAdapter(unittest.TestCase):
         self.assertEqual(result, {"status": "success", "message": "Reported"})
         self.mock_client.log_metrics_batch.assert_called_once_with(42, metrics, immediate=False)
         self.mock_client.report_step.assert_called_once_with(42)
+
+
+class TestMetricsServiceWandb(unittest.TestCase):
+    """Test MetricsService W&B initialization."""
+
+    @patch("relax.utils.metrics.adapters.wandb.wandb.define_metric")
+    @patch("relax.utils.metrics.adapters.wandb.wandb.init")
+    @patch("relax.utils.metrics.adapters.wandb.wandb.Settings")
+    def test_reuses_existing_wandb_run_id(self, mock_settings, mock_init, mock_define_metric):
+        """MetricsService should log into the primary run, not a side run."""
+        mock_settings.side_effect = lambda **kwargs: kwargs
+        args = create_namespace(
+            {
+                "wandb_run_id": "primary-run-123",
+                "wandb_mode": "online",
+                "wandb_key": None,
+                "wandb_host": None,
+                "wandb_team": "test-team",
+                "wandb_project": "test-project",
+                "wandb_dir": None,
+                "sglang_enable_metrics": False,
+            }
+        )
+
+        init_metrics_service_wandb(args)
+
+        mock_init.assert_called_once()
+        init_kwargs = mock_init.call_args.kwargs
+        self.assertEqual(init_kwargs["id"], "primary-run-123")
+        self.assertEqual(init_kwargs["entity"], "test-team")
+        self.assertEqual(init_kwargs["project"], "test-project")
+        self.assertEqual(init_kwargs["resume"], "allow")
+        self.assertNotIn("name", init_kwargs)
+        self.assertNotIn("config", init_kwargs)
+        mock_settings.assert_called_once_with(mode="shared", x_primary=False, x_update_finish_state=False)
+        self.assertTrue(mock_define_metric.called)
+
+    @patch("relax.utils.metrics.service.wandb.finish")
+    @patch("relax.utils.metrics.service.wandb.run", object())
+    def test_finish_wandb_flushes_active_run(self, mock_finish):
+        """MetricsService should finish W&B so queued metrics are flushed."""
+        finish_metrics_service_wandb()
+
+        mock_finish.assert_called_once_with(exit_code=0, quiet=True)
+
+    @patch("relax.utils.metrics.service.wandb.finish")
+    @patch("relax.utils.metrics.service.wandb.run", None)
+    def test_finish_wandb_skips_when_no_run(self, mock_finish):
+        """MetricsService should not finish W&B when no run was initialized."""
+        finish_metrics_service_wandb()
+
+        mock_finish.assert_not_called()
 
 
 class TestTrackingUtilsIntegration(unittest.TestCase):

@@ -12,6 +12,35 @@ Each entry should include:
 
 ---
 
+## 2026-05-30 - Fix W&B MetricsService run split
+
+**Type:** Observation
+**General description:** The post-resume validation run uploaded system/runtime
+data to the primary W&B run, but user-visible train/rollout charts were hidden
+in a separate MetricsService run.
+
+### Details
+
+The primary W&B link for the checkpoint validation was run `5fw7cmi1`. The log
+showed training metrics did reach `MetricsService`:
+
+```text
+POST /metrics/log_metrics_batch 200
+step 2: {'train/loss': ..., 'train/step': 2}
+Reported 71 metrics for step 2
+```
+
+The same log showed `MetricsService` initialized a new run `kbriia47` named
+`metrics-service`, while the primary process, rollout manager, and Megatron
+actor resumed run `5fw7cmi1`. That split explains why the primary run appeared
+to contain only system metrics.
+
+`MetricsService._init_wandb()` now uses the shared secondary W&B initializer
+whenever `config.wandb_run_id` is present. That keeps aggregated metrics on the
+primary run id and avoids hiding train/rollout metrics in a side run.
+MetricsService also finishes W&B during replica shutdown so queued metrics are
+flushed before Ray Serve tears down the process.
+
 ## 2026-05-30 - Validate post-resume ROCm `torch_dist` train and checkpoint
 
 **Type:** Validation
