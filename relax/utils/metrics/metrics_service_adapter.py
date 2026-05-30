@@ -14,6 +14,10 @@ from relax.utils.utils import get_serve_url
 TIMELINE_EVENTS_KEY = "__timeline_events__"
 
 
+def _should_keep_step_metric(step_key: str) -> bool:
+    return step_key.endswith("/step")
+
+
 class MetricsServiceAdapter:
     def __init__(self, args: Namespace):
         self.args = args
@@ -46,7 +50,10 @@ class MetricsServiceAdapter:
             logger.warning(f"MetricsServiceAdapter: Error - step value must be int, got {type(step)}")
             return False
 
-        metrics_to_send = {k: v for k, v in metrics.items() if k != step_key}
+        if _should_keep_step_metric(step_key):
+            metrics_to_send = metrics.copy()
+        else:
+            metrics_to_send = {k: v for k, v in metrics.items() if k != step_key}
 
         # Add timeline events to metrics if enabled
         if self._timeline_enabled:

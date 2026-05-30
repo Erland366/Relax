@@ -36,6 +36,7 @@ from .model_provider import get_model_provider_func, wrap_model_provider_with_fr
 from .optimizer_utils import (
     apply_single_rank_rocm_cpu_offload_optimizer_config,
     apply_single_rank_rocm_cpu_offload_safety_args,
+    install_hybrid_device_optimizer_init_state_fn,
     normalize_single_rank_optimizer_args,
     patch_megatron_cpu_offload_optimizer_for_rocm,
     refresh_hybrid_device_optimizer_param_groups,
@@ -169,6 +170,7 @@ def setup_model_and_optimizer(
     # param_groups with fp32 main params. Rebuild HybridDeviceOptimizer once so
     # its CPU-offload bookkeeping matches those live param groups.
     refresh_hybrid_device_optimizer_param_groups(optimizer)
+    install_hybrid_device_optimizer_init_state_fn(optimizer, args, role)
     opt_param_scheduler = get_optimizer_param_scheduler(args, optimizer)
     return model, optimizer, opt_param_scheduler
 
@@ -933,12 +935,14 @@ def initialize_model_and_optimizer(
     """
 
     if torch.version.hip:
-        import megatron.core.dist_checkpointing.strategies.filesystem_async as filesystem_async_module
+        from relax.utils.rocm_checkpoint_writer import (
+            configure_rocm_torch_dist_checkpoint_args,
+            patch_rocm_checkpoint_writer,
+        )
 
-        from relax.utils.rocm_checkpoint_writer import ROCmFileSystemWriterAsync
-
-        filesystem_async_module.FileSystemWriterAsync = ROCmFileSystemWriterAsync
-        logger.info("[ROCm] Applied FileSystemWriterAsync patch for HIP compatibility")
+        configure_rocm_torch_dist_checkpoint_args(args)
+        patch_rocm_checkpoint_writer()
+        logger.info("[ROCm] Applied FileSystemWriterAsync alias patches for HIP compatibility")
 
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args, role)
     model[0].role = role

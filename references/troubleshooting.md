@@ -31,6 +31,10 @@ This file documents error patterns encountered and their solutions.
 | Actor dies during `set_rollout_manager` after offloaded init sleep | The run survives actor init and rollout bring-up but the actor still dies on the first post-init rollout-manager RPC when CPU optimizer offload is enabled | The offloaded Megatron actor was going to sleep at the end of `_init()` even for the sync path, so the first `set_rollout_manager` call had to wake a partially torn-down process-group state during bootstrap | Track whether the actor is actually sleeping, only wake it when needed, and keep the sync offloaded actor resident until rollout-manager hookup is complete |
 | Ray GCS times out during late rollout startup on single-node MI210 | The run clears actor initialization, reaches rollout creation, then the driver dies with `Failed to connect to GCS within 60 seconds` and Serve reports `Deadline Exceeded` while fetching resource usage | The single-node head was overprovisioned at 128 CPUs for a 2-GPU job and was generating excessive Ray control-plane traffic; internal actors were also still publishing task-event metadata the run did not need | Reduce the head to a modest CPU count, disable task events on internal Relax Ray actors/managers, and increase GCS reconnect timeouts so short control-plane stalls do not kill the whole job |
 | Ray keepalive watchdog timeout during SGLang startup | The rollout replica hangs in `SGLangEngine.init()`, then Serve reports `ActorUnavailableError ... keepalive watchdog timeout rpc_code: 14`, and only later does the controller notice other actors died | The actual failure surface is a Ray control-plane stall during the long SGLang bring-up window: worker backlog reporting grows large enough that actor RPCs trip the keepalive watchdog before rollout initialization finishes | Disable periodic task-event reporting with `RAY_task_events_report_interval_ms=0`, widen Ray gRPC client keepalive time/timeout, and propagate those env vars into the job runtime so the driver, Serve replicas, and workers all use the same control-plane settings |
+| SGLang overlap scheduler future-token kernel fails on ROCm | SGLang loads weights, allocates KV cache, starts Uvicorn, then the scheduler dies in `resolve_future_token_ids_cuda` with `CUDA error: no ROCm-capable device is detected` | The overlap scheduler uses the SGLang future-token JIT kernel path, which is not validated on this MI210/HIP launcher path | Add `--sglang-disable-overlap-schedule` to the AMD launcher and rerun the foreground validation |
+| SGLang JIT KV-cache store kernel fails on ROCm | With overlap scheduling disabled, SGLang reaches the normal scheduler path and then dies in `kvcache.cuh:196` from `store_cache` with `CUDA error: no ROCm-capable device is detected` | SGLang's memory pool treats HIP as eligible for the optimized CUDA JIT KV-cache store path; the module can load, but the launch path is not usable on this MI210/HIP stack | Keep the Relax-side HIP runtime patch in `relax/backends/sglang/sglang_engine.py` enabled so `can_use_store_cache()` returns `False` on ROCm and SGLang uses its tensor assignment fallback |
+| SGLang JIT clamp-position kernel fails on ROCm | After rollout starts decoding, SGLang scheduler dies in `clamp_position.cuh:46` with `CUDA error: no ROCm-capable device is detected`, and the router returns 503 `no_available_workers` | SGLang selects the JIT `clamp_position_cuda` helper on HIP even though the JIT launch path is not usable on this MI210 stack | Keep the Relax-side HIP runtime patch enabled so `sglang.srt.model_executor.forward_batch_info.clamp_position` is redirected to SGLang's `_clamp_position_native` torch fallback |
+| Megatron actor waits on HF checkpoint page-cache warmup | The actor initializes, logs `[local_rank=1] waiting for local_rank=0 to warm HF checkpoint page cache`, and Serve keeps warning that the Actor replica is still initializing | Ray can assign the single Megatron actor to physical GPU/local rank 1 while SGLang owns GPU 0; the actor is distributed rank 0/world size 1, so no Megatron local rank 0 process exists to write the warmup marker | Treat a distributed world-size-1 Megatron process as the page-cache warmup leader even when `LOCAL_RANK != 0`; keep the marker/flock path for duplicate-job protection |
 | `relax.distributed.ray.rollout` imports SGLang/Megatron too early | The rollout replica logs Megatron and SGLang warnings before any engine launch happens, and the `transformers` SGLang backend starts from an already-contaminated interpreter | Importing `sglang.srt.constants` from `rollout.py` triggers `sglang.__init__`, and `SGLangEngine` previously imported the checkpoint-service client at module scope, which pulled Megatron-backed DCS modules immediately | Mirror the small SGLang constants locally in `rollout.py` and make the checkpoint-service client import lazy in `sglang_engine.py` so importing the rollout stack does not import `sglang` or `megatron` |
 | Module-import Megatron blocker kills `SGLangEngine` actor creation | `RolloutManager` dies while creating `SGLangEngine`, and Ray reports `ActorDiedError ... SGLangEngine.__init__()` with `Blocked import of megatron for SGLang transformers backend` | A module-import-time `MetaPathFinder` blocker runs before Ray has finished computing actor creation task inputs, so actor creation itself trips the blocker | At module import time, only prune local Megatron paths and editable import hooks. Install the stronger `megatron` import blocker later inside `SGLangEngine.__init__` and the spawned SGLang subprocess path |
 | Rollout Serve replica unpickles Megatron enum objects before `__init__` | `ServeReplica:rollout:Rollout` dies during actor allocation with `ModuleNotFoundError: Blocked import of megatron.core.transformer.enums for SGLang transformers backend`, and the traceback points to `cloudpickle.loads(serialized_init_args)` inside Ray Serve replica construction | The rollout deployment payload was still carrying at least one Megatron enum object in `config` (for example `attention_backend=AttnBackend.auto`), so deserializing the rollout replica init args imported `megatron.core.transformer.enums` before `Rollout.__init__` could run | Keep the rollout-only module-import blocker, but sanitize the rollout service config before binding the Serve deployment by converting enum-valued args to plain serializable values (e.g. `.value`) so Ray can deserialize init args without importing Megatron |
@@ -38,7 +42,422 @@ This file documents error patterns encountered and their solutions.
 | `core.registry` imports Megatron through the advantages service | `HealthStatus`, `Rollout`, or `RolloutManager` still emit Megatron/TE warnings even after the DCS package leak is fixed, and plain `import relax.core.controller` or `import relax.core.registry` already pulls in Megatron | `relax.core.registry` eagerly imports `relax.components.advantages`, and `advantages.py` was importing `megatron.core.mpu` plus `relax.backends.megatron.loss` at module scope | Move those Megatron imports inside the PPO and OPD branches in `Advantages.compute_advantages_and_returns()` so importing the controller/registry stack stays lightweight |
 | Rollout-side SGLang bootstrap starts before Megatron isolation is active | `Rollout` and `RolloutManager` still emit Megatron/TE warnings even after the controller and DCS imports are cleaned, especially when loading `relax.engine.rollout.sglang_rollout` or preparing SGLang helpers | The stronger Megatron isolation was only installed inside `SGLangEngine`, but `RolloutManager.__init__` loads the rollout function and rollout-side SGLang helpers earlier, and the Serve `Rollout` replica also starts with the unfiltered `Megatron-LM` checkout on `PYTHONPATH` | Install the same transformers-mode process isolation at the start of `Rollout.__init__` and `RolloutManager.__init__`, before loading rollout functions or creating rollout engines |
 | Phase-1 timeout leaves a stale Ray training job behind | A `timeout 300s bash ./amd_qwen3_4b_2gpu_e2e.sh` validation appears to finish, but `python3 -m relax.entrypoints.train` and Ray workers remain alive and contaminate the next run with stale workers and mixed job state | The external shell timeout kills the launcher shell, not the full Ray job tree, so the validation cluster can keep running in the background unless it is explicitly stopped | After any timed-out foreground validation, explicitly run `ray stop --force` and kill leftover Relax train/launcher processes before starting the production tmux run |
+| ROCm torch-dist checkpoint save dies after writing `common.pt` | Older MI210 runs reached `saving checkpoint at iteration N`, created only `iter_*/common.pt`, then the `MegatronTrainRayActor` died with Ray EOF / `SYSTEM_ERROR` and no Python traceback | The active Megatron torch-dist path needed the ROCm hook to patch the torch-strategy writer alias, avoid the pre-MCore 0.14 metadata path on PyTorch >= 2.6, disable PyTorch DCP's extra sharded-tensor flatten traversal, and stream GPU tensors to CPU one tensor at a time | Keep checkpointing enabled with the default `CKPT_FORMAT=torch_dist`. Verify logs contain `flatten_sharded_tensors=False`, `thread-local checkpoint results queue`, and `ROCm streaming checkpoint write`; the validated run saved `.metadata`, two `.distcp` shards, `common.pt`, `metadata.json`, and `latest_checkpointed_iteration.txt` |
+| ROCm lazy torch-dist writer fails with `cannot unpack non-iterable WriteItem object` | The checkpoint save logs `ROCm lazy checkpoint prepare`, then fails in Python before writing bucket contents | Lazy DCP preparation stores raw `WriteItem` objects, but the streaming writer still treated bucket entries as already-resolved `(write_item, tensor)` pairs | Pass the planner and lazy marker through `get_save_function_and_args()`, avoid unpacking lazy entries in pre-write logging, and call `planner.resolve_data(write_item)` inside `_write_streaming_bucket()` one item at a time |
+| Existing checkpoint directory does not resume when used only as `SAVE_DIR` | A launch pointed at an existing `SAVE_DIR` starts `Actor initialized with starting step 0` and begins rollout 0 again | `SAVE_DIR` only maps to Megatron `--save`; fresh-launch resume requires Megatron `--load`, and Relax recovery helpers do not infer `--load` from the save path | Set `LOAD_DIR=/path/to/checkpoint` when resuming. The AMD launcher appends `--load "${LOAD_DIR}"` only when `LOAD_DIR` is non-empty |
+| PyTorch 2.6 rejects Megatron `common.pt` during `torch_dist` resume | Explicit `LOAD_DIR` reaches `_load_global_dist_base_checkpoint`, then fails with `_pickle.UnpicklingError` and `Unsupported global: GLOBAL omegaconf.dictconfig.DictConfig` | PyTorch 2.6 changed `torch.load` to default `weights_only=True`; Megatron's `common.pt` contains trusted non-tensor metadata | Patch Megatron's `TorchCommonLoadStrategy.load_common` through the Relax ROCm checkpoint hook so HIP loads local trusted `common.pt` with `weights_only=False` |
+| ROCm HDO resume fails with missing `init_state_fn` | Explicit `LOAD_DIR` reaches `FP32Optimizer.sharded_state_dict(is_loading=True)` and raises `TypeError: 'NoneType' object is not callable` | The ROCm CPU-offload path wraps `HybridDeviceOptimizer` in `FP32Optimizer`, but Megatron created that wrapper without the Adam-state initializer needed during checkpoint load | Keep `install_hybrid_device_optimizer_init_state_fn()` active for single-rank HIP actor CPU offload; it installs a fail-loud Adam initializer before Megatron loads optimizer state |
+| ROCm HDO optimizer restore dies after `checkpoint version 3.0` | Resume passes common-state load and prints `checkpoint version 3.0`, then the Ray actor exits with `SYSTEM_ERROR` before reporting its restored step | PyTorch's generic optimizer load path maps checkpoint state onto HDO public param groups, which are live GPU model params, instead of HDO inner CPU-offload params | Keep the Relax ROCm HDO load patch enabled so `FP32Optimizer.load_state_dict` loads state onto inner params, syncs HDO sub-optimizer state, and restores public param groups afterward |
+| Megatron scheduler rejects a resume with changed `NUM_ROLLOUT` | Explicit resume loads optimizer state, then fails while loading `opt_param_scheduler` with `class input value ... and checkpointvalue ... for total number of iterations do not match` | `NUM_ROLLOUT`, rollout batch size, or samples per prompt changed the current LR/WD schedule horizon relative to the checkpoint | Keep `SCHEDULER_RESUME_POLICY=strict` by default. For intentional continuation with a new horizon use `SCHEDULER_RESUME_POLICY=override`; to keep checkpoint scheduler values use `SCHEDULER_RESUME_POLICY=checkpoint` |
 | Step-0 `dapo` reward stalls inside the Ray reward-worker pool | The run reaches `Actor training step 0/200` and rollout generation, but the Megatron actor only logs `start to get rollout_id: 0 data from transfer queue for train with mcore.` and then dies much later with `ActorDiedError`, while `RolloutManager` only logs `RewardExecutor: created 16 RewardWorker actors` before a long silent gap | `dapo` is a small local string/regex reward, but it was still being dispatched through the generic `RewardWorker` actor pool. On the MI210 step-0 path, that turned a cheap per-sample reward into extra Ray actor RPCs and left rollout blocked before it could transfer `train_0` to the actor | Keep `dapo` on a local in-process path using `asyncio.to_thread` and reserve the Ray reward-worker pool for the heavier/thread-unsafe reward types. Revalidate from a clean Ray cluster so the 5-minute timeout window no longer wedges at `RewardExecutor: created ... RewardWorker actors` |
+
+## Megatron scheduler rejects a resume with changed `NUM_ROLLOUT`
+
+**Added:** 2026-05-30
+**Domain:** research
+
+### Symptom
+
+A resume run loads the model and optimizer state, prints `checkpoint version
+3.0`, and then fails while loading `opt_param_scheduler`:
+
+```text
+OptimizerParamScheduler: class input value 48 and checkpointvalue 32 for total number of iterations do not match
+```
+
+In the validated failure, the checkpoint came from `NUM_ROLLOUT=2`, while the
+continuation smoke used `NUM_ROLLOUT=3` to force one more post-resume training
+step.
+
+### Cause
+
+Relax derives Megatron scheduler horizon from rollout configuration:
+
+```text
+train_iters = num_rollout * rollout_batch_size * n_samples_per_prompt / global_batch_size
+lr_decay_steps = train_iters * global_batch_size
+```
+
+Changing `NUM_ROLLOUT`, `rollout_batch_size`, `n_samples_per_prompt`, or
+`global_batch_size` changes the current scheduler values. Megatron rejects the
+checkpoint unless the run explicitly chooses whether to keep the checkpoint
+values or override them with the new run's values.
+
+### Solution
+
+The AMD launcher exposes an explicit scheduler resume policy:
+
+```bash
+SCHEDULER_RESUME_POLICY=strict      # default Megatron mismatch check
+SCHEDULER_RESUME_POLICY=override    # append --override-opt-param-scheduler
+SCHEDULER_RESUME_POLICY=checkpoint  # append --use-checkpoint-opt-param-scheduler
+```
+
+Use `override` only when the schedule change is intentional, for example when
+extending a short validation checkpoint from `NUM_ROLLOUT=2` to
+`NUM_ROLLOUT=3`. Use `checkpoint` when the resumed run should keep the old
+schedule values.
+
+### Prevention
+
+Resume validation should first run with matching scheduler-driving args. If a
+test deliberately extends the horizon, set `SCHEDULER_RESUME_POLICY=override`
+and verify the launched command includes `--override-opt-param-scheduler`.
+
+## ROCm HDO optimizer restore dies after `checkpoint version 3.0`
+
+**Added:** 2026-05-30
+**Domain:** research
+
+### Symptom
+
+After fixing `common.pt` loading and the missing HDO initializer, explicit
+`LOAD_DIR` resume reaches Megatron optimizer state loading:
+
+```text
+Installed HybridDeviceOptimizer Adam-state initializer for ROCm checkpoint restore
+Initialized 290 HybridDeviceOptimizer Adam states for ROCm checkpoint restore
+loading distributed checkpoint from ... at iteration 1
+checkpoint version 3.0
+```
+
+Then the `MegatronTrainRayActor` dies with Ray `SYSTEM_ERROR` before the
+`Actor` service reports its restored starting step. There may be no useful
+Python traceback because the worker exits during optimizer state placement.
+
+### Cause
+
+The HDO public optimizer param groups point at the live model parameters on the
+GPU. HDO stores the offloaded Adam state on its inner CPU params. PyTorch's
+generic `Optimizer.load_state_dict()` does not know about that mapping, so
+calling it on the HDO object can load the restored `exp_avg` and `exp_avg_sq`
+state onto the public GPU params. On the MI210 actor, that can kill the worker
+immediately after Megatron reports `checkpoint version 3.0`.
+
+### Solution
+
+Keep the Relax-side HDO load patch in
+`relax/backends/megatron/optimizer_utils.py`. For single-rank HIP actor CPU
+offload, `install_hybrid_device_optimizer_init_state_fn()` now also patches the
+`FP32Optimizer.load_state_dict` method so checkpoint state loads onto HDO inner
+params, then synchronizes the HDO sub-optimizers and restores the public param
+groups.
+
+The validated success signature is:
+
+```text
+Installed HybridDeviceOptimizer Adam-state initializer and load patch for ROCm checkpoint restore
+loading distributed checkpoint from ... at iteration 1
+Initialized 290 HybridDeviceOptimizer Adam states for ROCm checkpoint restore
+checkpoint version 3.0
+Actor initialized with starting step 2
+All training steps finished
+Job 'raysubmit_KiRTCAx7v8RCU9L6' succeeded
+```
+
+### Prevention
+
+Do not work around this by disabling optimizer checkpoint save/load. The
+validated path uses `NO_SAVE_OPTIM=0` and keeps Megatron `torch_dist`
+optimizer state enabled. If this boundary regresses, inspect HDO inner-param
+state placement before changing checkpoint intervals or rollout logic.
+
+## ROCm HDO resume fails with missing `init_state_fn`
+
+**Added:** 2026-05-30
+**Domain:** research
+
+### Symptom
+
+Explicit `LOAD_DIR` resume gets past the PyTorch 2.6 `common.pt` issue but
+then fails during Megatron optimizer state-dict construction:
+
+```text
+TypeError: 'NoneType' object is not callable
+...
+FP32Optimizer.sharded_state_dict(...)
+self.init_state_fn(self.optimizer, self.config)
+```
+
+### Cause
+
+The ROCm safe CPU-offload path disables Megatron's mixed-precision optimizer
+wrappers that are unsafe for this single-rank MI210 actor path, but Megatron
+still wraps `HybridDeviceOptimizer` in `FP32Optimizer` for checkpoint load.
+That wrapper can be created with `init_state_fn=None`. During load,
+Megatron asks the optimizer for a sharded state dict with `is_loading=True`,
+and `FP32Optimizer` calls the missing initializer.
+
+### Solution
+
+Install the Relax-side HDO initializer after optimizer construction:
+
+```python
+install_hybrid_device_optimizer_init_state_fn(optimizer, args, role)
+```
+
+The initializer is intentionally narrow: actor role only, single data-parallel
+rank, HIP runtime, CPU optimizer offload enabled, and Adam optimizer only. For
+non-Adam optimizers it fails loudly instead of inventing incompatible state.
+
+### Prevention
+
+Resume tests must grep for:
+
+```text
+Installed HybridDeviceOptimizer Adam-state initializer and load patch for ROCm checkpoint restore
+Initialized 290 HybridDeviceOptimizer Adam states for ROCm checkpoint restore
+```
+
+If these markers are absent on the MI210 single-rank HDO path, expect resume to
+fail before the actor reports the restored step.
+
+## PyTorch 2.6 rejects Megatron `common.pt` during `torch_dist` resume
+
+**Added:** 2026-05-30
+**Domain:** research
+
+### Symptom
+
+After adding explicit `LOAD_DIR`, the resume path reaches Megatron
+`torch_dist` checkpoint loading and fails before the actor can finish
+initialization:
+
+```text
+_pickle.UnpicklingError: Weights only load failed.
+WeightsUnpickler error: Unsupported global: GLOBAL omegaconf.dictconfig.DictConfig
+```
+
+The traceback points through
+`_load_global_dist_base_checkpoint()` -> `load_common_state_dict()` ->
+`TorchCommonLoadStrategy.load_common()` -> `torch.load(common.pt)`.
+
+### Cause
+
+PyTorch 2.6 changed `torch.load` so `weights_only=True` is the default.
+Megatron's `common.pt` is a trusted local checkpoint metadata file, not only a
+plain tensor payload; it can include OmegaConf `DictConfig` objects and other
+Megatron metadata that the safe weights-only unpickler rejects.
+
+### Solution
+
+Keep this in the Relax ROCm checkpoint hook rather than editing the local
+Megatron checkout silently. On HIP,
+`patch_rocm_checkpoint_writer()` patches Megatron's
+`TorchCommonLoadStrategy.load_common()` so local trusted `common.pt` files load
+with:
+
+```python
+torch.load(load_path, map_location="cpu", weights_only=False)
+```
+
+This patch is deliberately scoped to the Megatron checkpoint common-state load
+path. It does not change arbitrary `torch.load` calls.
+
+### Prevention
+
+Any future PyTorch >= 2.6 `torch_dist` resume validation should check for the
+log marker:
+
+```text
+HIP/ROCm detected: loading Megatron common.pt with weights_only=False
+```
+
+If that marker is absent and the checkpoint contains OmegaConf metadata, expect
+resume to fail before the actor reports its restored starting step.
+
+## Existing checkpoint directory does not resume when used only as `SAVE_DIR`
+
+**Added:** 2026-05-30
+**Domain:** research
+
+### Symptom
+
+After a successful live `torch_dist` checkpoint run, a follow-up launch pointed
+`SAVE_DIR` at the validated checkpoint directory and expected the actor to
+resume. The actor instead initialized from the base HuggingFace/ref load path
+and started from step 0 again:
+
+```text
+Actor initialized with starting step 0
+Starting rollout step 0
+```
+
+### Cause
+
+`SAVE_DIR` only controls Megatron `--save`. It is not a resume signal. The
+fresh launcher path does not infer `--load` from the save path, and
+`recovery_load_path()` only applies to the restart/recovery flow rather than a
+new shell launch.
+
+### Solution
+
+Use the explicit `LOAD_DIR` launcher variable when resuming from an existing
+checkpoint:
+
+```bash
+LOAD_DIR=/path/to/checkpoint SAVE_DIR=/path/to/checkpoint \
+  SAVE_INTERVAL=1 CKPT_FORMAT=torch_dist NO_SAVE_OPTIM=0 NUM_ROLLOUT=2 \
+  bash ./amd_qwen3_4b_2gpu_e2e.sh
+```
+
+The AMD launcher appends `--load "${LOAD_DIR}"` only when `LOAD_DIR` is
+non-empty. Keep `SAVE_DIR` and `LOAD_DIR` separate so a run can save to a new
+directory while loading from an older checkpoint when needed.
+
+### Prevention
+
+When checking resume behavior, grep the launched command for `--load` and
+verify the actor starts at `latest_checkpointed_iteration + 1`. If the actor
+starts at step 0, stop the run before it can overwrite the checkpoint directory.
+
+## ROCm lazy torch-dist writer fails with `cannot unpack non-iterable WriteItem object`
+
+**Added:** 2026-05-30
+**Domain:** research
+
+### Symptom
+
+The ROCm checkpoint hook reaches lazy DCP planning and then fails in Python:
+
+```text
+ROCm lazy checkpoint prepare: write_items=1123, buckets=2
+ROCm streaming checkpoint write failed: cannot unpack non-iterable WriteItem object
+CheckpointException ranks:dict_keys([0])
+```
+
+### Cause
+
+The lazy writer intentionally keeps bucket payloads as raw DCP `WriteItem`
+objects so tensors are not resolved and staged up front. The first streaming
+implementation still assumed `tensor_data` contained `(write_item, tensor)`
+pairs when logging bucket sizes and when deciding how to write the bucket. That
+local mismatch replaced the original native Ray-worker death with a fixable
+Python exception.
+
+### Solution
+
+1. Keep lazy `prepare_write_data()` on HIP so DCP planning does not resolve all
+   tensors before the write starts.
+2. Store the planner and lazy marker on the writer and pass both through
+   `get_save_function_and_args()`.
+3. In `write_data_streaming()`, do not pre-unpack lazy `WriteItem` entries for
+   tensor-byte logging; log `tensor_bytes_gib=unresolved`.
+4. In `_write_streaming_bucket()`, require a planner when `lazy_write_items` is
+   true and call `planner.resolve_data(write_item)` immediately before each
+   item write.
+
+### Prevention
+
+Unit-test the writer at both levels: the top-level `write_data_streaming()`
+should accept lazy `WriteItem` buckets without pre-unpacking, and
+`_write_streaming_bucket()` should fail loudly if lazy items are used without a
+planner.
+
+## ROCm torch-dist checkpoint save previously died after writing `common.pt`
+
+**Added:** 2026-05-29
+**Domain:** research
+
+### Symptom
+
+The long MI210 W&B run reached repeated real training and then died at the
+checkpoint boundary:
+
+```text
+saving checkpoint at iteration      99 to .../Qwen3-4B_mcore_2gpu in torch_dist format
+Overwriting old incomplete / corrupted checkpoint...
+```
+
+The dead checkpoint directory contained only `iter_0000099/common.pt`; the
+sharded torch-dist checkpoint files and metadata were missing. Ray reported the
+`MegatronTrainRayActor` worker death as EOF / `SYSTEM_ERROR`, while the driver,
+rollout service, and SGLang health checks stayed alive and rollout kept polling
+`train_99`.
+
+### Cause
+
+Relax first patched
+`megatron.core.dist_checkpointing.strategies.filesystem_async.FileSystemWriterAsync`.
+That was not enough for the active torch-distributed save path because
+Megatron's `strategies.torch` module imports `FileSystemWriterAsync` from
+`filesystem_async` at module import time and uses the cached alias inside
+`TorchDistSaveShardedStrategy.async_save()`.
+
+After patching both aliases, the failure still reproduced with
+`SAVE_INTERVAL=2 CKPT_FORMAT=torch_dist NO_SAVE_OPTIM=1`. Later debugging
+narrowed the remaining death to Megatron's torch-dist planning path: the active
+ROCm checkout did not use the newer upstream planner setting
+`flatten_sharded_tensors=False`, so PyTorch DCP ran an unnecessary sharded-tensor
+flatten traversal before write preparation. On HIP, the save path also needs
+blocking tensor staging and a thread-local result queue so checkpoint writing
+does not fork/spawn around pinned GPU-staging state.
+
+### Solution
+
+1. Keep checkpointing enabled in `amd_qwen3_4b_2gpu_e2e.sh`: pass `--save`,
+   `--save-interval`, and `--ckpt-format`.
+2. Use the launcher default `CKPT_FORMAT=torch_dist` on the MI210 path.
+3. Keep `relax.utils.rocm_checkpoint_writer.patch_rocm_checkpoint_writer()` in
+   place. It patches both Megatron writer aliases, forces the current
+   torch-dist metadata path on PyTorch >= 2.6, disables
+   `flatten_sharded_tensors` for Megatron DCP planners on HIP, and streams
+   checkpoint tensors through blocking per-tensor CPU staging.
+4. The `torch_dist` path was first validated on 2026-05-30 with a cached
+   rollout smoke. It was then validated on a live non-cached two-rollout run:
+   Ray job `raysubmit_FeKYagrKwzrfrcPU` in `tmux-13` completed actor steps 0
+   and 1, saved iterations 0 and 1, included optimizer state in DCP metadata,
+   and exited successfully.
+
+### Prevention
+
+For MI210 validation, keep the checkpoint log markers in the smoke criteria:
+`HIP/ROCm detected: setting flatten_sharded_tensors=False`, `thread-local
+checkpoint results queue`, `ROCm streaming checkpoint write`, and
+`successfully saved checkpoint`. Also verify `.metadata`, `.distcp`,
+`metadata.json`, `common.pt`, and `latest_checkpointed_iteration.txt` exist.
+
+## Megatron actor waits on HF checkpoint page-cache warmup
+
+**Added:** 2026-05-29
+**Domain:** research
+
+### Symptom
+
+The post-SGLang ROCm run reaches Megatron actor initialization and then stops
+making progress after:
+
+```text
+[local_rank=1] waiting for local_rank=0 to warm HF checkpoint page cache
+```
+
+Ray still shows the `MegatronTrainRayActor` alive, SGLang health checks keep
+succeeding, and Serve repeatedly reports that the Actor replica is taking more
+than 30 seconds to initialize.
+
+### Cause
+
+On the 2-GPU MI210 launcher, SGLang can own GPU 0 while the single Megatron
+training actor owns GPU 1. That actor is distributed rank 0 with world size 1,
+but its environment exposes `LOCAL_RANK=1`. The previous warmup logic treated
+any nonzero `LOCAL_RANK` as a follower and waited for a Megatron local rank 0
+process that did not exist in the actor process group.
+
+### Solution
+
+1. In `relax/backends/megatron/checkpoint.py`, treat
+   `torch.distributed.get_world_size() == 1` as a warmup-leader signal even
+   when `LOCAL_RANK != 0`.
+2. Keep the `/dev/shm` marker and `flock` around the leader path so duplicate
+   jobs or multiple single-rank actors still avoid redundant NFS reads.
+3. Re-run the foreground validation and confirm the next log is page-cache
+   warming or checkpoint loading rather than a repeated wait message.
+
+### Prevention
+
+Do not use physical GPU-local rank as the only ownership signal inside a Ray
+actor. In single-process actor paths, prefer the distributed world-size/rank
+contract for actor-local coordination.
 
 ## Packed sequence with DotProductAttention on ROCm
 
@@ -337,6 +756,54 @@ In shared W&B mode, treat primary and secondary clients differently. The primary
 
 - Code: `relax/utils/metrics/adapters/wandb.py`
 - Tests: `tests/utils/test_wandb_adapter.py`
+- Experiment log: `references/experiment-log.md`
+
+## W&B `train/step` stays at zero with MetricsService
+
+### Symptom
+
+The live training log shows actor steps advancing and metrics being reported:
+
+```text
+step 34: {..., 'train/step': 34}
+Reported 66 metrics for step 34
+```
+
+But the W&B UI shows `train/step` as only `0` or leaves train charts on a
+stale custom x-axis.
+
+### Cause
+
+`MetricsServiceAdapter.log()` used the configured `step_key` only as transport
+metadata and removed it from the metric payload before sending the batch to the
+MetricsService. That was correct for plain `"step"`, but not for W&B custom
+axis metrics such as `train/step`, `rollout/step`, or `eval/step`.
+
+The MetricsService defines:
+
+```python
+wandb.define_metric("train/step")
+wandb.define_metric("train/*", step_metric="train/step")
+```
+
+If `train/step` is stripped from the payload, W&B receives train metrics at the
+global SDK step but not the named custom step metric it uses for `train/*`.
+
+### Solution
+
+Preserve namespaced step metrics ending in `/step` in the MetricsService
+payload, while continuing to remove the generic plain `"step"` helper key.
+
+### Prevention
+
+When adding metrics-service transport logic, keep W&B custom step metrics as
+first-class metrics. The transport step and the named metric step can carry the
+same integer, but the named metric must still reach W&B.
+
+### Related
+
+- Code: `relax/utils/metrics/metrics_service_adapter.py`
+- Tests: `tests/utils/test_metrics_service.py`
 - Experiment log: `references/experiment-log.md`
 
 ## Grouped CPU sub-optimizers can still crash inside `optimizer.step()` on MI210

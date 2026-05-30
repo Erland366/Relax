@@ -347,6 +347,40 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
     )
 
 
+def _disable_sglang_jit_store_cache_on_hip() -> bool:
+    import torch
+
+    if torch.version.hip is None:
+        return False
+
+    changed = False
+
+    from sglang.srt.mem_cache import memory_pool
+
+    if not getattr(memory_pool, "_RELAX_DISABLE_JIT_STORE_CACHE_ON_HIP", False):
+
+        def _can_use_store_cache_on_hip(size: int) -> bool:
+            return False
+
+        memory_pool.can_use_store_cache = _can_use_store_cache_on_hip
+        memory_pool._RELAX_DISABLE_JIT_STORE_CACHE_ON_HIP = True
+        logger.info("Disabled SGLang JIT KV-cache store on ROCm; using tensor assignment fallback")
+        changed = True
+
+    from sglang.srt.model_executor import forward_batch_info
+
+    if not hasattr(forward_batch_info, "_clamp_position_native"):
+        raise RuntimeError("SGLang forward_batch_info is missing _clamp_position_native fallback")
+
+    if not getattr(forward_batch_info, "_RELAX_DISABLE_JIT_CLAMP_POSITION_ON_HIP", False):
+        forward_batch_info.clamp_position = forward_batch_info._clamp_position_native
+        forward_batch_info._RELAX_DISABLE_JIT_CLAMP_POSITION_ON_HIP = True
+        logger.info("Disabled SGLang JIT clamp_position on ROCm; using torch fallback")
+        changed = True
+
+    return changed
+
+
 def _patched_run_scheduler_process(*args, **kwargs):
     """Run the scheduler entrypoint under the same Megatron isolation used by
     the top-level SGLang server process.
@@ -364,6 +398,8 @@ def _patched_run_scheduler_process(*args, **kwargs):
     optimize_routing_replay = os.environ.get("RELAX_OPTIMIZE_ROUTING_REPLAY", "0") == "1"
 
     with _blocked_megatron_imports(enabled), _temporary_pythonpath_without_megatron(enabled):
+        _disable_sglang_jit_store_cache_on_hip()
+
         if optimize_routing_replay:
             from relax.backends.sglang.routing_replay_patch import apply_patch
 
@@ -383,6 +419,8 @@ def _launch_server_with_patch(server_args):
     """
     enabled = server_args.model_impl.lower() == "transformers"
     with _blocked_megatron_imports(enabled), _temporary_pythonpath_without_megatron(enabled):
+        _disable_sglang_jit_store_cache_on_hip()
+
         from sglang.srt.entrypoints.http_server import launch_server
 
         launch_server(
@@ -394,6 +432,8 @@ def _launch_server_with_patch(server_args):
 def _launch_server(server_args):
     enabled = server_args.model_impl.lower() == "transformers"
     with _blocked_megatron_imports(enabled), _temporary_pythonpath_without_megatron(enabled):
+        _disable_sglang_jit_store_cache_on_hip()
+
         from sglang.srt.entrypoints.http_server import launch_server
 
         launch_server(server_args, run_scheduler_process_func=_patched_run_scheduler_process)

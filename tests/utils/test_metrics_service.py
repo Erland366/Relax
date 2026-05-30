@@ -174,8 +174,44 @@ class TestMetricsServiceAdapter(unittest.TestCase):
 
         # Flush should trigger reporting
         adapter.flush(metrics["step"])
-        self.mock_client.log_metrics_batch.assert_called_once()
+        self.mock_client.log_metrics_batch.assert_called_once_with(
+            42,
+            {
+                "train/loss": 0.5,
+                "train/accuracy": 0.9,
+            },
+            immediate=True,
+        )
         self.mock_client.report_step.assert_called_once_with(42)
+
+    @patch("relax.utils.metrics.metrics_service_adapter.get_serve_url")
+    @patch("relax.utils.metrics.metrics_service_adapter.get_metrics_client")
+    def test_log_preserves_namespaced_step_metric(self, mock_get_client, mock_get_serve_url):
+        """Test logging keeps W&B custom step metrics in the payload."""
+        mock_get_serve_url.return_value = "http://test:8000/metrics"
+        mock_get_client.return_value = self.mock_client
+
+        adapter = MetricsServiceAdapter(self.args)
+
+        metrics = {
+            "train/step": 42,
+            "train/loss": 0.5,
+            "train/accuracy": 0.9,
+        }
+
+        result = adapter.log(metrics, step_key="train/step")
+        self.assertTrue(result)
+
+        self.mock_client.log_metrics_batch.assert_called_once_with(
+            42,
+            {
+                "train/step": 42,
+                "train/loss": 0.5,
+                "train/accuracy": 0.9,
+            },
+            immediate=True,
+        )
+        self.mock_client.report_step.assert_not_called()
 
     @patch("relax.utils.metrics.metrics_service_adapter.get_serve_url")
     @patch("relax.utils.metrics.metrics_service_adapter.get_metrics_client")

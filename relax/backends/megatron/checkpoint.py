@@ -173,6 +173,14 @@ def _is_hf_checkpoint(path: str | Path) -> bool:
     return (Path(path) / "config.json").is_file()
 
 
+def _distributed_world_size_or_none() -> int | None:
+    import torch.distributed as torch_dist
+
+    if not torch_dist.is_available() or not torch_dist.is_initialized():
+        return None
+    return torch_dist.get_world_size()
+
+
 @contextmanager
 def _patch_scatter_dtype_cast():
     """Temporarily patch torch.distributed.scatter to auto-cast scatter_list
@@ -214,13 +222,16 @@ def _warm_hf_checkpoint_page_cache(source_path: str) -> None:
     Implementation is pure-Python (``open(...).read()`` in chunks) — no shell
     invocation, so dynamic paths cannot inject commands.
 
-    Coordination — explicit per-node rank-0 pattern:
+    Coordination - explicit per-node leader pattern:
 
     - ``LOCAL_RANK == 0`` (the first GPU actor on each host) does the read
       and writes a done-marker under ``/dev/shm`` (tmpfs, so it naturally
       clears on reboot — avoiding stale-marker / cleared-cache mismatches).
-    - All other local ranks poll for the marker with a generous timeout.
-      They never touch NFS themselves.
+    - A single-process distributed actor also does the read, even when Ray
+      exposes the process as ``LOCAL_RANK != 0`` because another component owns
+      GPU 0 on the node.
+    - All other local ranks poll for the marker with a generous timeout. They
+      never touch NFS themselves.
     - An advisory ``flock`` still wraps the rank-0 path so that two
       independent Relax jobs sharing a host and the same checkpoint don't
       both warm — only the first acquires the lock, the second sees the
@@ -240,6 +251,8 @@ def _warm_hf_checkpoint_page_cache(source_path: str) -> None:
         return
 
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    dist_world_size = _distributed_world_size_or_none()
+    is_warmup_leader = local_rank == 0 or dist_world_size == 1
     digest = hashlib.sha1(abs_path.encode()).hexdigest()[:16]
     marker_dir = "/dev/shm" if os.path.isdir("/dev/shm") else "/tmp"
     lock_path = f"{marker_dir}/relax_hf_warmup_{digest}.lock"
@@ -278,7 +291,10 @@ def _warm_hf_checkpoint_page_cache(source_path: str) -> None:
         pbar.close()
         return total
 
-    if local_rank == 0:
+    if is_warmup_leader:
+        leader_label = f"local_rank={local_rank}"
+        if local_rank != 0:
+            leader_label = f"{leader_label}, dist_world_size={dist_world_size}"
         try:
             lf = open(lock_path, "w")
         except OSError as e:
@@ -298,7 +314,7 @@ def _warm_hf_checkpoint_page_cache(source_path: str) -> None:
                     return
                 t0 = time.time()
                 logger.info(
-                    f"[local_rank=0] Warming HF checkpoint page cache on this node: {abs_path} ({len(files)} files)"
+                    f"[{leader_label}] Warming HF checkpoint page cache on this node: {abs_path} ({len(files)} files)"
                 )
                 total_bytes = _stream_files_to_devnull(files)
                 elapsed = time.time() - t0
@@ -309,7 +325,7 @@ def _warm_hf_checkpoint_page_cache(source_path: str) -> None:
                 except OSError as e:
                     logger.warning(f"HF checkpoint warmup: cannot write marker {done_path}: {e}")
                 logger.info(
-                    f"[local_rank=0] HF checkpoint page cache warmed in {elapsed:.1f}s "
+                    f"[{leader_label}] HF checkpoint page cache warmed in {elapsed:.1f}s "
                     f"({total_bytes / (1024 * 1024):.0f} MiB, {throughput_mb:.0f} MiB/s)"
                 )
             finally:
@@ -317,7 +333,7 @@ def _warm_hf_checkpoint_page_cache(source_path: str) -> None:
         finally:
             lf.close()
     else:
-        # Other local ranks just wait for rank 0's marker.
+        # Other local ranks just wait for the leader marker.
         timeout_s = float(os.environ.get("RELAX_HF_WARMUP_TIMEOUT_S", "1800"))
         poll_interval_s = 1.0
         t0 = time.time()
@@ -331,7 +347,7 @@ def _warm_hf_checkpoint_page_cache(source_path: str) -> None:
                 return
             if not logged_waiting and time.time() - t0 > 5.0:
                 logger.info(
-                    f"[local_rank={local_rank}] waiting for local_rank=0 to warm HF checkpoint page cache: {abs_path}"
+                    f"[local_rank={local_rank}] waiting for HF checkpoint page-cache warmup leader: {abs_path}"
                 )
                 logged_waiting = True
             time.sleep(poll_interval_s)

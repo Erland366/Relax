@@ -40,9 +40,9 @@ Do NOT use when:
 |--------|-------|-------|
 | Hardware | 2x MI210 (`gfx90a`) | ROCm bring-up target |
 | Cleared failure boundaries | Proxy stall, PPO HIP compile helper crash, Adam-state OOM, TE-version crash, several rollout/control-plane Megatron import leaks | All were reproduced and either removed or narrowed in the MI210 pass |
-| Latest validated state | W&B e2e completed actor steps 0-98 and Megatron train/loss reduction for rollout 99 | `log/amd-qwen3-4b-2gpu-20260424_134200.log` |
-| Latest long-run boundary | Actor died after `saving checkpoint at iteration 99` | Ray stayed `RUNNING`, rollout wedged on `train_99`, and `MegatronTrainRayActor` disappeared |
-| Foreground validation exit | `124` | External 10-minute foreground timeout while rollout 6 was decoding, not a traceback |
+| Latest validated state | Explicit `LOAD_DIR` resume from a live `torch_dist` checkpoint completed optimizer restore, post-resume actor training step 2/3, and a new iteration-2 `torch_dist` save with optimizer state enabled | Ray job `raysubmit_tD6jkVCbk6t7cZ21`; W&B `5fw7cmi1`; save checkpoint `Qwen3-4B_mcore_2gpu-resume-train-override-20260530_135915` |
+| Latest checkpoint boundary | Megatron `torch_dist` save and explicit load now work on ROCm with optimizer state | Save requires the Relax ROCm checkpoint hook; load also requires the trusted `common.pt` loader plus the ROCm HDO Adam-state initializer and inner-param load patch |
+| Foreground validation exit | `124` | External 300-second checkpoint-enabled smoke timeout before actor checkpoint save; cleanup was required before tmux |
 | Required Megatron checkout | `/vast/users/qirong.ho/erland/Python_project/ROCm-Megatron-LM` | Do not inherit a stale non-ROCm `Megatron-LM` in `PYTHONPATH` |
 | W&B mode | `online` | Logged under `relax-amd` |
 | Long-run misleading state | Ray and rollout can stay alive after the actor is gone | Judge health by actor liveness and partition drain, not by Ray `RUNNING` alone |
@@ -62,6 +62,7 @@ Use these key launcher settings:
 --sglang-attention-backend triton
 --sglang-sampling-backend pytorch
 --sglang-disable-custom-all-reduce
+--sglang-disable-overlap-schedule
 --optimizer-cpu-offload
 --optimizer-offload-fraction 1.0
 --overlap-cpu-optimizer-d2h-h2d
@@ -196,6 +197,114 @@ reported `RUNNING` and rollout waited forever on `train_99`. Future debugging
 should start at checkpoint/save, GCS/resource pressure, worker-exit logs, or
 late memory/process failure, not at the original optimizer-step boundary.
 
+For the AMD MI210 path, keep checkpointing enabled and use Megatron
+`torch_dist` checkpoint format by default:
+
+```bash
+SAVE_INTERVAL=100
+CKPT_FORMAT=torch_dist
+NO_SAVE_OPTIM=0
+```
+
+The launcher appends `--save`, `--save-interval`, and `--ckpt-format`.
+`CKPT_FORMAT=torch_dist` is validated on this ROCm path only when the Relax
+ROCm checkpoint hook is active. The hook disables the stale
+`dist_ckpt_save_pre_mcore_014` override on PyTorch >= 2.6, patches both
+Megatron torch-dist writer aliases, forces `flatten_sharded_tensors=False` for
+Megatron DCP planners, and streams checkpoint tensors through blocking
+per-tensor CPU staging instead of Megatron's original async fork/preload path.
+
+The checkpoint-enabled torch-dist path was validated on 2026-05-30 with
+`SAVE_INTERVAL=1 CKPT_FORMAT=torch_dist NO_SAVE_OPTIM=0 NUM_ROLLOUT=2` and
+optimizer checkpointing enabled. The tmux run completed live rollout/training
+steps 0/2 and 1/2, saved `iter_0000000` and `iter_0000001` with `.metadata`,
+two `.distcp` files, `common.pt`, and `metadata.json` per iteration, wrote
+`latest_checkpointed_iteration.txt`, logged `All training steps finished`, and
+Ray reported job `raysubmit_FeKYagrKwzrfrcPU` as succeeded.
+
+For fresh-launch resume tests, `SAVE_DIR` is not enough. `SAVE_DIR` maps to
+Megatron `--save`; use `LOAD_DIR=/path/to/checkpoint` to pass `--load`.
+Verify the actor starts at `latest_checkpointed_iteration + 1` before allowing
+the run to continue, otherwise stop it before it overwrites iteration 0.
+On PyTorch 2.6, the same ROCm checkpoint hook must also patch Megatron's
+common-state loader so trusted local `common.pt` uses `weights_only=False`;
+without that, explicit `LOAD_DIR` fails on OmegaConf `DictConfig` metadata
+before the actor can report its restored starting step.
+
+If the resumed run intentionally changes scheduler-driving args such as
+`NUM_ROLLOUT`, choose the scheduler policy explicitly:
+
+```bash
+SCHEDULER_RESUME_POLICY=strict      # default Megatron mismatch check
+SCHEDULER_RESUME_POLICY=override    # keep the new run's scheduler horizon
+SCHEDULER_RESUME_POLICY=checkpoint  # keep checkpoint scheduler values
+```
+
+The post-resume train validation extended the short checkpoint smoke from
+`NUM_ROLLOUT=2` to `NUM_ROLLOUT=3`, so it used
+`SCHEDULER_RESUME_POLICY=override`.
+
+On the single-rank HIP actor CPU-offload path, explicit `LOAD_DIR` also needs
+the ROCm HDO restore hook in `relax/backends/megatron/optimizer_utils.py`.
+There are two separate optimizer restore boundaries:
+
+- `FP32Optimizer.sharded_state_dict(is_loading=True)` needs an HDO Adam-state
+  initializer; otherwise it fails with `TypeError: 'NoneType' object is not
+  callable`.
+- `FP32Optimizer.load_state_dict()` must load checkpoint state onto HDO inner
+  CPU-offload params, not the public live GPU model params; otherwise the actor
+  can die immediately after `checkpoint version 3.0`.
+
+The validated explicit-resume signature is:
+
+```text
+Installed HybridDeviceOptimizer Adam-state initializer and load patch for ROCm checkpoint restore
+loading distributed checkpoint from ... at iteration 1
+Initialized 290 HybridDeviceOptimizer Adam states for ROCm checkpoint restore
+checkpoint version 3.0
+Actor initialized with starting step 2
+All training steps finished
+Job 'raysubmit_KiRTCAx7v8RCU9L6' succeeded
+```
+
+This is not a valid place to disable optimizer checkpointing. The validated
+run used `NO_SAVE_OPTIM=0`; if this path regresses, inspect HDO state placement
+before changing checkpoint intervals or save/load flags.
+
+The stronger post-resume training signature is:
+
+```text
+Actor initialized with starting step 2
+Actor training step 2/3
+saving checkpoint at iteration       2 ... in torch_dist format
+ROCm streaming checkpoint write finished on rank 0: buckets=2
+successfully saved checkpoint from iteration       2
+Actor training completed step 2/3
+All training steps finished
+Job 'raysubmit_tD6jkVCbk6t7cZ21' succeeded
+TMUX_STATUS=0
+```
+
+### Step 13: Re-apply the ROCm JIT checklist after syncing upstream
+
+After merging a newer Relax upstream, revalidate the SGLang and Megatron
+runtime boundaries before assuming the older MI210 recipe still holds. The
+2026-05-29 post-sync run needed all of these checks:
+
+- keep `--sglang-disable-overlap-schedule` enabled on MI210;
+- on HIP, disable SGLang's JIT KV-cache `store_cache` path so SGLang uses the
+  tensor assignment fallback;
+- on HIP, route SGLang clamp-position through `_clamp_position_native` instead
+  of `clamp_position_cuda`;
+- treat Megatron distributed world size 1 as the HF checkpoint warmup leader
+  condition, even when Ray assigns the actor `LOCAL_RANK=1`;
+- do not treat `waiting for data system to catch up` as a wedge by itself. It
+  is only a stale `train_<n>` failure if the actor disappears or the partition
+  stops draining;
+- keep checkpointing enabled and verify the `torch_dist` save markers:
+  `flatten_sharded_tensors=False`, `thread-local checkpoint results queue`,
+  `ROCm streaming checkpoint write`, and `successfully saved checkpoint`.
+
 ## Failure Modes
 
 | What Failed | Why | Lesson Learned |
@@ -216,6 +325,17 @@ late memory/process failure, not at the original optimizer-step boundary.
 | W&B tmux run died after step-99 Megatron train completed | The actor emitted `saving checkpoint at iteration 99`, then Ray reported the worker exited with `SYSTEM_ERROR` and rollout wedged on `train_99` | The next boundary is checkpoint/save or late worker/resource failure, not first-step optimizer stability |
 | Foreground validation exited with code `124` | The external timeout fired while rollout 6 was decoding | Interpret timeout status with log context before treating it as failure |
 | Launcher inherited the old Megatron path | `MEGATRON_DIR` was set, but inherited `PYTHONPATH` could still point at non-ROCm Megatron | Construct `PYTHONPATH` explicitly with ROCm Megatron ahead of stale paths |
+| SGLang overlap scheduler future-token kernel failed on ROCm | SGLang loaded weights and started Uvicorn, then crashed in `resolve_future_token_ids_cuda` with `CUDA error: no ROCm-capable device is detected` | Disable the overlap scheduler on this MI210 launcher with `--sglang-disable-overlap-schedule` until the HIP JIT kernel path is validated |
+| SGLang JIT KV-cache store kernel failed on ROCm | After overlap scheduling was disabled, the normal scheduler crashed in `kvcache.cuh:196` while storing KV cache | Keep Relax's HIP runtime patch active so SGLang bypasses the JIT `store_cache` kernel and uses tensor assignment fallback until the HIP kernel is validated |
+| SGLang JIT clamp-position kernel failed on ROCm | During rollout decode, SGLang crashed in `clamp_position.cuh:46` and the router returned 503 because the worker became unhealthy | Keep Relax's HIP runtime patch active so SGLang uses `_clamp_position_native` instead of the JIT `clamp_position_cuda` helper on ROCm |
+| Megatron actor waited forever on HF checkpoint warmup | Ray placed the single Megatron actor on local GPU 1 while SGLang owned GPU 0, so `LOCAL_RANK=1` waited for a nonexistent Megatron local rank 0 | Treat distributed world size 1 as the HF checkpoint warmup leader condition, while keeping the marker/lock guard for duplicate jobs |
+| Megatron torch-dist checkpoint save killed the actor before the planner patch | Forced saves with `SAVE_INTERVAL=2 CKPT_FORMAT=torch_dist NO_SAVE_OPTIM=1` wrote only `common.pt`, then the actor exited with Ray EOF / `SYSTEM_ERROR` | Keep the Relax ROCm checkpoint hook active; it mirrors Megatron's current `flatten_sharded_tensors=False` planner setting and uses a HIP-safe streaming writer |
+| Lazy ROCm torch-dist writer failed in Python | `ROCm lazy checkpoint prepare` was followed by `cannot unpack non-iterable WriteItem object` | Lazy buckets contain raw DCP `WriteItem` objects; pass the planner into the streaming write path and resolve each item immediately before writing |
+| Resume test restarted at step 0 | Pointing only `SAVE_DIR` at an existing checkpoint still initialized the actor from step 0 | Set `LOAD_DIR` to pass Megatron `--load`; `SAVE_DIR` only controls where the next checkpoint is saved |
+| Explicit `LOAD_DIR` failed on `common.pt` | PyTorch raised `_pickle.UnpicklingError` for `omegaconf.dictconfig.DictConfig` while loading Megatron common state | PyTorch 2.6 defaults `torch.load` to `weights_only=True`; patch Megatron's common loader on HIP to use `weights_only=False` for trusted local checkpoint metadata |
+| Explicit `torch_dist` resume failed in `FP32Optimizer.sharded_state_dict` | Megatron wrapped HDO with a missing `init_state_fn` on the ROCm restore path | Install the narrow Relax HDO Adam-state initializer for single-rank HIP actor CPU offload |
+| Explicit `torch_dist` resume died after `checkpoint version 3.0` | Generic optimizer state load targeted HDO public GPU params instead of inner CPU-offload params | Patch `FP32Optimizer.load_state_dict` on the ROCm HDO path to load state onto inner params and resync sub-optimizers |
+| Extending a resumed smoke changed the scheduler horizon | `NUM_ROLLOUT=3` produced `class input value 48` while the checkpoint stored `32` | Keep strict mode by default, but use `SCHEDULER_RESUME_POLICY=override` for deliberate continuation with a new horizon |
 
 ## Configuration
 
@@ -230,6 +350,11 @@ launcher_flags:
   sglang_attention_backend: triton
   sglang_sampling_backend: pytorch
   sglang_disable_custom_all_reduce: true
+  sglang_disable_overlap_schedule: true
+  save_interval: 100
+  ckpt_format: torch_dist
+  no_save_optim: false
+  load_dir_for_resume: optional
   optimizer_cpu_offload: true
   optimizer_offload_fraction: 1.0
   overlap_cpu_optimizer_d2h_h2d: true
@@ -267,15 +392,42 @@ optimizer_debugging:
 long_run_health_checks:
   require_train_partition_to_drain: true
   require_live_megatron_actor: true
+resume_health_checks:
+  require_explicit_load_dir: true
+  common_pt_weights_only_false: true
+  hdo_adam_init_state_fn: true
+  hdo_load_state_on_inner_params: true
+  scheduler_resume_policy: strict_by_default
 latest_validation:
-  date: 2026-04-24
-  foreground_log: log/amd-qwen3-4b-2gpu-20260424_094405.log
-  wandb_e2e_log: log/amd-qwen3-4b-2gpu-20260424_134200.log
-  foreground_completed_actor_steps: 6
-  wandb_e2e_completed_actor_steps: 99
-  wandb_e2e_last_completed_actor_step: 98
-  wandb_e2e_boundary: "rollout 99 completed Megatron train/loss reduction, emitted checkpoint save, then actor died and rollout wedged on train_99"
-  foreground_timeout_exit_code: 124
+  date: 2026-05-30
+  smoke_log: validation_logs/live_torch_dist_lazyfix_tmux_20260530_112514.log
+  smoke_tmux_session: tmux-13
+  smoke_ray_job: raysubmit_FeKYagrKwzrfrcPU
+  smoke_checkpoint_args: "--save --save-interval 1 --ckpt-format torch_dist"
+  smoke_completed_actor_steps: 2
+  smoke_last_completed_actor_step: 1
+  saved_checkpoint: Qwen3-4B_mcore_2gpu-live-torch-dist-lazyfix-20260530_112514
+  torch_dist_artifacts: ".metadata, __0_0.distcp, __0_1.distcp, common.pt, metadata.json, latest_checkpointed_iteration.txt"
+  checkpoint_metadata_entries: 175
+  checkpoint_storage_entries: 1123
+  optimizer_state_present: true
+  explicit_resume_log: validation_logs/live_torch_dist_explicit_load_hdoload_tmux_20260530_132101.log
+  explicit_resume_tmux_session: tmux-15
+  explicit_resume_ray_job: raysubmit_KiRTCAx7v8RCU9L6
+  explicit_resume_wandb_run: aghbilif
+  explicit_resume_loaded_iteration: 1
+  explicit_resume_starting_step: 2
+  explicit_resume_status: succeeded
+  post_resume_train_log: validation_logs/live_torch_dist_resume_train_override_tmux_20260530_135915.log
+  post_resume_train_tmux_session: tmux-16
+  post_resume_train_ray_job: raysubmit_tD6jkVCbk6t7cZ21
+  post_resume_train_wandb_run: 5fw7cmi1
+  post_resume_scheduler_policy: override
+  post_resume_starting_step: 2
+  post_resume_completed_actor_step: 2
+  post_resume_saved_checkpoint: Qwen3-4B_mcore_2gpu-resume-train-override-20260530_135915
+  post_resume_saved_iteration: 2
+  post_resume_status: succeeded
 ```
 
 ## References

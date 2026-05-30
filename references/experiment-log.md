@@ -12,6 +12,630 @@ Each entry should include:
 
 ---
 
+## 2026-05-30 - Validate post-resume ROCm `torch_dist` train and checkpoint
+
+**Type:** Validation
+**General description:** A resumed MI210 run loaded a `torch_dist` checkpoint
+with optimizer state, trained one additional rollout step, and saved a new
+`torch_dist` checkpoint with optimizer state still enabled.
+
+### Details
+
+The first explicit resume validation used `NUM_ROLLOUT=2`, matching the source
+checkpoint. That proved optimizer restore and step restoration, but because the
+checkpoint already ended at iteration `1`, the actor started at step `2` and
+finished immediately. A stronger validation intentionally extended the run to
+`NUM_ROLLOUT=3` so the actor had to train and checkpoint step `2`.
+
+Changing `NUM_ROLLOUT` also changes Megatron's optimizer scheduler horizon.
+The first `NUM_ROLLOUT=3` attempt correctly failed loud:
+
+```text
+OptimizerParamScheduler: class input value 48 and checkpointvalue 32 for total number of iterations do not match
+```
+
+The AMD launcher now exposes `SCHEDULER_RESUME_POLICY`:
+
+- `strict` keeps Megatron's default mismatch check;
+- `override` appends `--override-opt-param-scheduler` for deliberate
+  continuation with a new schedule horizon;
+- `checkpoint` appends `--use-checkpoint-opt-param-scheduler` to keep the old
+  checkpoint scheduler values.
+
+Validation run:
+
+- tmux session: `tmux-16`
+- Ray job: `raysubmit_tD6jkVCbk6t7cZ21`
+- W&B run: `https://wandb.ai/erlandpg/relax-amd/runs/5fw7cmi1`
+- Load directory:
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-4B_mcore_2gpu-live-torch-dist-lazyfix-20260530_112514`
+- Save directory:
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-4B_mcore_2gpu-resume-train-override-20260530_135915`
+- Args:
+  `LOAD_DIR=<source> SAVE_DIR=<new> SAVE_INTERVAL=1 CKPT_FORMAT=torch_dist NO_SAVE_OPTIM=0 NUM_ROLLOUT=3 SCHEDULER_RESUME_POLICY=override`
+- Log:
+  `validation_logs/live_torch_dist_resume_train_override_tmux_20260530_135915.log`
+
+The run passed the full post-resume train/save path:
+
+```text
+Installed HybridDeviceOptimizer Adam-state initializer and load patch for ROCm checkpoint restore
+loading distributed checkpoint from ... at iteration 1
+checkpoint version 3.0
+Actor initialized with starting step 2
+Actor training step 2/3
+saving checkpoint at iteration       2 ... in torch_dist format
+ROCm streaming checkpoint write finished on rank 0: buckets=2
+successfully saved checkpoint from iteration       2
+Actor training completed step 2/3
+All training steps finished
+Job 'raysubmit_tD6jkVCbk6t7cZ21' succeeded
+TMUX_STATUS=0
+```
+
+The new save directory contains `iter_0000002/.metadata`, `__0_0.distcp`,
+`__0_1.distcp`, `common.pt`, `metadata.json`, and
+`latest_checkpointed_iteration.txt` with value `2`.
+
+### Key Points
+
+- The validated path now covers save, explicit load, optimizer restore,
+  post-resume training, weight update, and a new `torch_dist` checkpoint save.
+- Optimizer state was not disabled: the run used `NO_SAVE_OPTIM=0`.
+- `SCHEDULER_RESUME_POLICY=override` is only needed when intentionally changing
+  the scheduler horizon, such as extending a short checkpoint smoke from
+  `NUM_ROLLOUT=2` to `NUM_ROLLOUT=3`.
+
+## 2026-05-30 - Validate explicit ROCm `torch_dist` resume with optimizer state
+
+**Type:** Validation
+**General description:** An explicit `LOAD_DIR` resume from the live
+`torch_dist` checkpoint completed on MI210 with Megatron optimizer state
+enabled.
+
+### Details
+
+After the live save validation, the explicit resume path exposed two
+ROCm/Megatron optimizer-restore failures:
+
+1. Megatron wrapped the ROCm `HybridDeviceOptimizer` in `FP32Optimizer` with
+   `init_state_fn=None`. During checkpoint load,
+   `FP32Optimizer.sharded_state_dict(is_loading=True)` called that missing
+   initializer and failed with `TypeError: 'NoneType' object is not callable`.
+2. After installing an Adam-state initializer, the actor passed that boundary
+   but died after `checkpoint version 3.0`. The failing phase was optimizer
+   `load_state_dict`: PyTorch maps checkpoint optimizer state to the public HDO
+   param groups, which are the live GPU model params, instead of the HDO inner
+   CPU-offload params.
+
+The Relax ROCm optimizer hook now installs both pieces for the single-rank HIP
+actor CPU-offload path:
+
+- a fail-loud Adam state initializer for `HybridDeviceOptimizer`, so Megatron
+  can build the optimizer sharded state dict during load;
+- an `FP32Optimizer.load_state_dict` override that loads checkpoint optimizer
+  state onto HDO inner params, synchronizes sub-optimizer state, and restores
+  the public HDO param groups.
+
+Validation run:
+
+- tmux session: `tmux-15`
+- Ray job: `raysubmit_KiRTCAx7v8RCU9L6`
+- W&B run: `https://wandb.ai/erlandpg/relax-amd/runs/aghbilif`
+- Checkpoint directory:
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-4B_mcore_2gpu-live-torch-dist-lazyfix-20260530_112514`
+- Args:
+  `LOAD_DIR=<checkpoint> SAVE_DIR=<checkpoint> SAVE_INTERVAL=1 CKPT_FORMAT=torch_dist NO_SAVE_OPTIM=0 NUM_ROLLOUT=2`
+- Log:
+  `validation_logs/live_torch_dist_explicit_load_hdoload_tmux_20260530_132101.log`
+
+The validation used the real optimizer-restore path and completed:
+
+```text
+Installed HybridDeviceOptimizer Adam-state initializer and load patch for ROCm checkpoint restore
+loading distributed checkpoint from .../Qwen3-4B_mcore_2gpu-live-torch-dist-lazyfix-20260530_112514 at iteration 1
+Initialized 290 HybridDeviceOptimizer Adam states for ROCm checkpoint restore
+checkpoint version 3.0
+Actor initialized with starting step 2
+All training steps finished
+Job 'raysubmit_KiRTCAx7v8RCU9L6' succeeded
+```
+
+Because the checkpoint's `latest_checkpointed_iteration.txt` points to
+iteration `1` and the validation used `NUM_ROLLOUT=2`, starting at step `2`
+is the expected resume behavior. No optimizer-save shortcut was used:
+`NO_SAVE_OPTIM=0`, and the source checkpoint still contains optimizer state in
+DCP metadata.
+
+### Key Points
+
+- `torch_dist` resume is now validated for the MI210 single-rank actor path
+  with optimizer checkpoint state enabled.
+- This is not a skip-optimizer workaround. The fix keeps optimizer state load
+  enabled and patches the placement of restored HDO state.
+- The old `common.pt` PyTorch 2.6 failure, the missing HDO `init_state_fn`
+  failure, and the post-`checkpoint version 3.0` HDO load death are separate
+  restore boundaries; all three are now covered by targeted Relax-side hooks.
+
+## 2026-05-30 - Validate live ROCm `torch_dist` checkpoint save and explicit load knob
+
+**Type:** Validation
+**General description:** A live non-cached AMD Qwen3-4B two-GPU run completed
+two rollout/train/checkpoint cycles with Megatron `torch_dist` checkpointing
+and optimizer state enabled.
+
+### Details
+
+The previous cached-rollout smoke proved that the writer could finish one
+checkpoint, but it did not prove that the full Relax/SGLang/Megatron path could
+generate fresh rollouts, train, and checkpoint repeatedly. The follow-up live
+run kept checkpointing required and kept optimizer state enabled:
+
+- tmux session: `tmux-13`
+- Ray job: `raysubmit_FeKYagrKwzrfrcPU`
+- W&B run: `https://wandb.ai/erlandpg/relax-amd/runs/7yi7a38m`
+- Save directory:
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-4B_mcore_2gpu-live-torch-dist-lazyfix-20260530_112514`
+- Args: `SAVE_INTERVAL=1 CKPT_FORMAT=torch_dist NO_SAVE_OPTIM=0 NUM_ROLLOUT=2`
+- Log:
+  `validation_logs/live_torch_dist_lazyfix_tmux_20260530_112514.log`
+
+The live run completed both actor steps and both checkpoint saves:
+
+```text
+rollout 0: {... response_lengths: 768.0 ...}
+step 0: {... 'train/step': 0}
+saving checkpoint at iteration       0 ... in torch_dist format
+ROCm lazy checkpoint prepare: write_items=1123, buckets=2
+ROCm streaming checkpoint write finished on rank 0: buckets=2
+successfully saved checkpoint from iteration       0
+Actor training completed step 0/2
+rollout 1: {... response_lengths: 768.0 ...}
+step 1: {... 'train/step': 1}
+saving checkpoint at iteration       1 ... in torch_dist format
+ROCm lazy checkpoint prepare: write_items=1123, buckets=2
+ROCm streaming checkpoint write finished on rank 0: buckets=2
+successfully saved checkpoint from iteration       1
+Actor training completed step 1/2
+All training steps finished
+Job 'raysubmit_FeKYagrKwzrfrcPU' succeeded
+```
+
+Each saved iteration contains DCP metadata, two `.distcp` shards, `common.pt`,
+and `metadata.json`. `latest_checkpointed_iteration.txt` points to iteration
+`1`. DCP metadata inspection reported 175 state-dict entries and 1123 storage
+entries for both `iter_0000000` and `iter_0000001`, including
+`embedding.word_embeddings.weight` and optimizer state such as
+`optimizer.state.exp_avg.embedding.word_embeddings.weight`.
+
+This validation also exposed a resume contract issue. Setting `SAVE_DIR` to an
+existing checkpoint directory only changes the save target; it does not pass
+Megatron `--load`. A wrong resume attempt with only `SAVE_DIR` initialized the
+actor at step 0, so it was stopped before it could overwrite the validated
+checkpoint. The AMD launcher now has an explicit optional `LOAD_DIR` variable:
+
+```bash
+LOAD_DIR=/path/to/checkpoint SAVE_DIR=/path/to/checkpoint \
+  SAVE_INTERVAL=1 CKPT_FORMAT=torch_dist NO_SAVE_OPTIM=0 NUM_ROLLOUT=2 \
+  bash ./amd_qwen3_4b_2gpu_e2e.sh
+```
+
+The first explicit `LOAD_DIR` run then reached Megatron checkpoint loading and
+exposed a separate PyTorch 2.6 load issue. Megatron's common checkpoint
+strategy loaded `common.pt` with `torch.load(load_path, map_location="cpu")`;
+on PyTorch 2.6 that defaults to `weights_only=True`, but this `common.pt`
+contains trusted Megatron metadata with OmegaConf `DictConfig` objects. The
+ROCm checkpoint hook now patches Megatron's `TorchCommonLoadStrategy` on HIP so
+the local trusted `common.pt` load uses `weights_only=False`.
+
+### Key Points
+
+- The validated checkpoint path is no longer the temporary legacy `torch`
+  workaround and no longer only a cached-rollout smoke.
+- `torch_dist` checkpoint save works on a live two-rollout run with optimizer
+  state enabled.
+- The ROCm writer must keep lazy DCP `WriteItem` planning and resolve tensors
+  one at a time during bucket writes; pre-resolving all tensors can kill the
+  worker before Python gets a useful traceback.
+- Resume is explicit: use `LOAD_DIR` to pass `--load`. `SAVE_DIR` alone is not
+  a resume signal.
+- On PyTorch 2.6, trusted Megatron `common.pt` loads need
+  `weights_only=False`; otherwise resume fails before the actor can restore its
+  step.
+
+## 2026-05-30 - Fix ROCm Megatron `torch_dist` checkpoint save
+
+**Type:** Validation
+**General description:** The AMD Qwen3-4B two-GPU debug-train smoke run
+completed with Megatron `torch_dist` checkpointing and optimizer state enabled.
+
+### Details
+
+The previous `torch_dist` failure died after `common.pt` and before any DCP
+writer logs. The fix keeps checkpointing enabled and keeps the sharded
+`torch_dist` format, but changes the ROCm checkpoint hook to match the current
+Megatron/PyTorch DCP expectations:
+
+- disable the stale `dist_ckpt_save_pre_mcore_014` override on HIP when
+  `torch_dist` runs on PyTorch >= 2.6;
+- patch both Megatron writer aliases, including the cached
+  `strategies.torch.FileSystemWriterAsync` alias;
+- avoid PyTorch's legacy `ShardedTensor` construction for old MCore
+  `prepend_axis_num` / `flattened_range` tensors by using DCP checkpointable
+  sharded tensors;
+- force `flatten_sharded_tensors=False` for Megatron DCP planners on HIP,
+  matching the newer upstream Megatron save path;
+- write checkpoint tensors through a thread-local result queue and blocking
+  per-tensor CPU staging instead of Megatron's original async fork/preload path.
+
+Validation run:
+
+- tmux session: `tmux-10`
+- Ray job: `raysubmit_fnyW8C56FnBpgbhs`
+- W&B group: `qwen3-4b-mi210-2gpu-torch-dist-fix4-20260530_101423`
+- Save directory:
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-4B_mcore_2gpu-torch-dist-fix4-20260530_101423`
+- Args: `SAVE_INTERVAL=1 CKPT_FORMAT=torch_dist NUM_ROLLOUT=1`
+- Debug data:
+  `Qwen3-4B_mcore_2gpu-torch-dist-fix3-20260530_094730/debug_rollout/0.pt`
+
+The run completed actor step 0/1 and checkpoint finalization:
+
+```text
+HIP/ROCm detected: setting flatten_sharded_tensors=False for Megatron torch_dist checkpoint planners
+HIP/ROCm detected: using thread-local checkpoint results queue
+ROCm streaming checkpoint write rank 0 bucket 1/2
+ROCm streaming checkpoint write rank 0 bucket 2/2
+ROCm streaming checkpoint write finished on rank 0: buckets=2
+successfully saved checkpoint from iteration       0
+All training steps finished
+Job 'raysubmit_fnyW8C56FnBpgbhs' succeeded
+```
+
+The resulting checkpoint contains:
+
+```text
+iter_0000000/.metadata 165366 bytes
+iter_0000000/__0_0.distcp 12059698420 bytes
+iter_0000000/__0_1.distcp 12076849495 bytes
+iter_0000000/common.pt 41058 bytes
+iter_0000000/metadata.json 119 bytes
+latest_checkpointed_iteration.txt 1 bytes
+```
+
+`FileSystemReader.read_metadata()` also loaded the DCP metadata successfully
+with the ROCm Megatron checkout on `PYTHONPATH`, reporting 175 state-dict
+entries and 1123 storage entries, including model embeddings and optimizer
+state.
+
+### Key Points
+
+- `CKPT_FORMAT=torch_dist` is now the default checkpoint format for
+  `amd_qwen3_4b_2gpu_e2e.sh`.
+- Checkpointing and optimizer state remain enabled by default:
+  `SAVE_INTERVAL=100`, `CKPT_FORMAT=torch_dist`, `NO_SAVE_OPTIM=0`.
+- Legacy `CKPT_FORMAT=torch` remains only a fallback/debug override, not the
+  validated default path.
+
+## 2026-05-30 - Validate ROCm Megatron smoke run with checkpointing
+
+**Type:** Validation
+**General description:** The AMD Qwen3-4B two-GPU smoke run completed with
+Megatron checkpointing enabled by using the legacy Megatron `torch` checkpoint
+format before the later `torch_dist` fix was available.
+
+### Details
+
+Checkpointing is required for this launcher. The practical fix is to keep
+`--save` and `--save-interval` enabled, but set `--ckpt-format torch` on ROCm.
+For the single-rank MI210 actor, `torch` selects Megatron's legacy checkpoint
+path (`use_dist_ckpt=False`) and avoids the `torch_dist` sharded checkpoint
+writer that had been killing the actor after writing only `common.pt`.
+
+At that point the launcher temporarily defaulted to:
+
+```bash
+SAVE_INTERVAL=100
+CKPT_FORMAT=torch
+NO_SAVE_OPTIM=0
+```
+
+Phase-1 foreground validation used `SAVE_INTERVAL=1 CKPT_FORMAT=torch
+NUM_ROLLOUT=1`. The generated Ray entrypoint included `--save`,
+`--save-interval 1`, and `--ckpt-format torch`. It reached service startup
+before the external 300-second validation timeout. That timeout sent SIGTERM to
+the validation Ray cluster before the actor reached checkpoint save, so the
+stale foreground driver and Ray state were cleaned up before the tmux run.
+
+Phase-2 tmux validation then ran the checkpoint-enabled path:
+
+- tmux session: `tmux-6`
+- Ray job: `raysubmit_tqwQYHbbhAfD7RDi`
+- Log: `log/amd-qwen3-4b-2gpu-20260530_080242.log`
+- W&B group: `qwen3-4b-mi210-2gpu-torch-ckpt-20260530_080241`
+- Save directory:
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-4B_mcore_2gpu-torch-ckpt-20260530_080241`
+
+The job completed rollout generation, actor training step 0, checkpoint save,
+weight update, and graceful shutdown:
+
+```text
+saving checkpoint at iteration       0 to .../Qwen3-4B_mcore_2gpu-torch-ckpt-20260530_080241 in torch format
+successfully saved checkpoint from iteration       0 to .../Qwen3-4B_mcore_2gpu-torch-ckpt-20260530_080241 [ t 1/1, p 1/1 ]
+Actor training completed step 0/1
+All training steps finished
+Main func successfully
+Job 'raysubmit_tqwQYHbbhAfD7RDi' succeeded
+```
+
+The resulting checkpoint contains:
+
+```text
+iter_0000000/mp_rank_00/model_optim_rng.pt 24135297502 bytes
+latest_checkpointed_iteration.txt 1 bytes
+```
+
+### Key Points
+
+- The Relax + SGLang + Megatron ROCm smoke path now works for the
+  checkpoint-required MI210 validation.
+- This entry records the temporary legacy `torch` workaround.
+- The later 2026-05-30 `torch_dist` validation supersedes this workaround as
+  the default path.
+
+## 2026-05-29 - Patch ROCm Megatron checkpoint writer aliases
+
+**Type:** Runtime fix
+**General description:** The late W&B MI210 run reached the first scheduled
+checkpoint and then died because the active Megatron torch-dist save strategy
+could still hold the original async filesystem writer alias.
+
+### Details
+
+The run that reached step 99/200 failed immediately after:
+
+```text
+saving checkpoint at iteration      99 to .../Qwen3-4B_mcore_2gpu in torch_dist format
+Overwriting old incomplete / corrupted checkpoint...
+```
+
+The checkpoint directory contained `iter_0000099/common.pt` but not the sharded
+checkpoint metadata/files, which points to failure during the torch-dist
+sharded save rather than during training, rollout, or optimizer step.
+
+The Relax ROCm patch previously replaced
+`megatron.core.dist_checkpointing.strategies.filesystem_async.FileSystemWriterAsync`.
+However, Megatron's `strategies.torch` module also imports
+`FileSystemWriterAsync` into its own module namespace and uses that cached alias
+inside `TorchDistSaveShardedStrategy.async_save()`. If that module was imported
+first, the runtime save path could bypass the ROCm-safe writer.
+
+The fix adds `patch_rocm_checkpoint_writer()`, which patches both the source
+`filesystem_async` module and the cached `strategies.torch` alias before
+Megatron model/optimizer setup. The AMD launcher also now supports
+environment-overridden `SAVE_DIR`, `SAVE_INTERVAL`, and `NO_SAVE_OPTIM`, so a
+fresh short validation can force checkpoint save around rollout 3 instead of
+waiting until rollout 99.
+
+### Validation
+
+- Focused tests passed in the `relaxrl_rocm` environment:
+  `tests/utils/test_rocm_checkpoint_writer.py`,
+  `tests/utils/test_megatron_model.py`, and
+  `tests/backends/megatron/test_checkpoint_warmup.py`.
+- The required `.venv` path could not run those tests because it does not have
+  `pytest` or `pip`; the training environment is the conda `relaxrl_rocm`
+  environment used by the launcher.
+- Forced `torch_dist` validation did not pass. `SAVE_INTERVAL=4` reached
+  `saving checkpoint at iteration 3`, and
+  `SAVE_INTERVAL=2 CKPT_FORMAT=torch_dist NO_SAVE_OPTIM=1` reached
+  `saving checkpoint at iteration 1`; both runs wrote only `common.pt` before
+  `MegatronTrainRayActor` died with Ray `SYSTEM_ERROR` / EOF. Excluding
+  optimizer state ruled out optimizer checkpoint state as the primary trigger.
+- The AMD launcher temporarily checkpointed by default with `CKPT_FORMAT=torch`
+  as a workaround. A later 2026-05-30 validation fixed and restored
+  `CKPT_FORMAT=torch_dist` as the default path.
+
+## 2026-05-29 - Preserve W&B custom step metrics in MetricsService
+
+**Type:** Fix
+**General description:** The live MI210 run was advancing in the logs, but W&B
+could show `train/step` stuck at zero because the MetricsService adapter
+stripped namespaced step metrics before reporting to W&B.
+
+### Details
+
+The active tmux run showed repeated actor progress, for example:
+
+```text
+step 34: {..., 'train/step': 34}
+Reported 66 metrics for step 34
+```
+
+The Megatron train path correctly emits `train/step` in the log dictionary.
+However, when `use_metrics_service=True`, `MetricsServiceAdapter.log()` removed
+the configured `step_key` from the payload before forwarding the metrics batch.
+That behavior is useful for a generic helper key such as `"step"`, but it is
+wrong for W&B custom step metrics such as `train/step`, `rollout/step`, and
+`eval/step`. W&B defines `train/*` against `train/step`, so the named step
+metric must be present in the reported payload.
+
+The adapter now preserves step keys ending in `/step` and only strips plain
+helper step keys. The focused regression test asserts that generic `"step"` is
+still removed while `train/step` remains in the metrics batch.
+
+### Key Points
+
+- The running job was not stuck at train step zero; this was a metrics transport
+  issue.
+- The fix applies to the next run or a restarted MetricsService, not to an
+  already-imported running worker.
+
+## 2026-05-29 - Retrospective on post-sync ROCm SGLang and Megatron bring-up
+
+**Type:** Retrospective
+**General description:** After merging the newer upstream `origin/main`, the
+AMD Qwen3-4B two-GPU run failed through several ROCm-specific SGLang and
+Megatron boundaries before reaching repeated real actor training steps again.
+
+### What We Tried
+
+- Ran the two-phase validation flow for `amd_qwen3_4b_2gpu_e2e.sh` from the
+  `relaxrl_rocm` environment.
+- Kept the ROCm Megatron checkout ahead of stale Megatron paths in the launcher.
+- Added `--sglang-disable-overlap-schedule` after the SGLang overlap scheduler
+  failed in a CUDA-named future-token JIT helper on ROCm.
+- Patched Relax's SGLang bootstrap on HIP so SGLang uses existing safe fallback
+  paths for KV-cache store and clamp-position instead of CUDA-centric JIT
+  kernels.
+- Patched Megatron HF checkpoint warmup so a single-process distributed actor
+  can be the warmup leader even when Ray assigns it `LOCAL_RANK=1`.
+
+### Key Findings
+
+- The post-sync failures were not one bug. The run advanced through a sequence:
+  overlap scheduler JIT failure, KV-cache store JIT failure, Megatron warmup
+  wait, then clamp-position JIT failure.
+- The `LOCAL_RANK=1` warmup hang was a placement/configuration mismatch, not a
+  dead Megatron process: SGLang owned GPU 0 and the one-rank actor legitimately
+  ran on GPU 1.
+- After the fixes, the production tmux run reached real rollout, Megatron train
+  metrics, weight sync, and repeated actor completion. At the time of this
+  retrospective it had completed step 18 and entered step 19 of 200.
+- The visible `waiting for data system to catch up` messages are normal for
+  this run shape when they clear after each actor step. They are not the stale
+  `train_<n>` wedge unless the actor disappears or the partition stops
+  draining.
+
+### What Failed
+
+- SGLang still exposes CUDA-named JIT helpers on ROCm even when higher-level
+  launcher flags look ROCm-safe.
+- Megatron's checkpoint page-cache warmup assumed `LOCAL_RANK=0` exists for the
+  local actor group, which is false in this one-rank actor / one-GPU rollout
+  split.
+- The full script is not a quick smoke test: it is configured for 200 steps and
+  is currently taking roughly 80 seconds per step after startup.
+
+### Open Questions
+
+- Whether this post-sync run can pass the old long-run checkpoint boundary near
+  step 99.
+- Whether SGLang has additional CUDA-centric JIT helpers that only appear under
+  later sampling or scheduling paths.
+- Whether the 200-step script should get a shorter explicit smoke-test variant
+  so future sync validation can prove "Relax runs on Megatron" without waiting
+  multiple hours.
+
+### Key Points
+
+- The practical fix is to keep the ROCm launcher conservative and install
+  Relax-side HIP runtime patches before SGLang scheduler code imports the JIT
+  helpers.
+- Treat single-rank actor placement independently from physical GPU local rank.
+  Distributed world size is the correct leader signal for the HF checkpoint
+  warmup edge case.
+- Current validation status is "working and still running", not "finished".
+
+## 2026-05-29 - Route SGLang clamp-position to torch fallback on ROCm
+
+**Type:** Runtime fix
+**General description:** The first post-warmup tmux run reached rollout
+generation and actor step 0, then exposed another SGLang HIP-incompatible JIT
+helper during decode.
+
+### Details
+
+The production run after the HF checkpoint warmup fix confirmed the actor no
+longer waited for a nonexistent local rank 0:
+
+```text
+[local_rank=1, dist_world_size=1] Warming HF checkpoint page cache
+Actor training step 0/200
+```
+
+The next failure moved back to SGLang decode. During rollout generation, the
+scheduler crashed in `clamp_position_cuda`:
+
+```text
+Runtime check failed at .../jit_kernel/csrc/elementwise/clamp_position.cuh:46:
+CUDA error: no ROCm-capable device is detected
+```
+
+SGLang's `forward_batch_info.py` already provides `_clamp_position_native`,
+which computes the same `torch.clamp(seq_lens - 1, min=0).to(torch.int64)`
+fallback. Relax now patches `forward_batch_info.clamp_position` to that native
+fallback on `torch.version.hip`, alongside the existing KV-cache store JIT
+disablement.
+
+## 2026-05-29 - Let single-process Megatron actors warm HF checkpoints on ROCm
+
+**Type:** Runtime fix
+**General description:** The post-sync AMD run got past SGLang bring-up and
+then exposed a Megatron actor initialization wait caused by using physical
+`LOCAL_RANK` as the only HF checkpoint warmup leader signal.
+
+### Details
+
+After disabling the SGLang overlap scheduler and JIT KV-cache store path, the
+production tmux run brought up SGLang, registered rollout, and started the
+Megatron actor. The actor stayed alive but stopped progressing after:
+
+```text
+[local_rank=1] waiting for local_rank=0 to warm HF checkpoint page cache
+```
+
+Ray actor state showed the `MegatronTrainRayActor` was still alive, and SGLang
+continued to answer health checks. The process was distributed rank 0/world
+size 1, but Ray had placed it on the second GPU while SGLang owned GPU 0, so
+the environment exposed `LOCAL_RANK=1`. No Megatron process with
+`LOCAL_RANK=0` existed in that single-rank actor path.
+
+The fix updates `relax/backends/megatron/checkpoint.py` so a distributed
+world-size-1 process warms the HF checkpoint page cache even when
+`LOCAL_RANK != 0`. The existing `/dev/shm` marker and advisory lock remain the
+cross-job guard against duplicate checkpoint reads.
+
+## 2026-05-29 - Disable SGLang JIT KV-cache store on ROCm
+
+**Type:** Runtime fix
+**General description:** The post-sync AMD launcher now gets past the overlap
+scheduler JIT failure, then exposes and avoids the next SGLang HIP-incompatible
+KV-cache store kernel path.
+
+### Details
+
+The first validation after syncing with newer `origin/main` reached SGLang
+weight loading and Uvicorn startup, but the scheduler crashed in
+`resolve_future_token_ids_cuda` with `CUDA error: no ROCm-capable device is
+detected`. Adding `--sglang-disable-overlap-schedule` moved the run onto
+SGLang's normal scheduler path.
+
+The next foreground run confirmed that the flag took effect, but then the
+normal scheduler crashed while storing KV cache:
+
+```text
+Runtime check failed at .../jit_kernel/csrc/elementwise/kvcache.cuh:196:
+CUDA error: no ROCm-capable device is detected
+```
+
+The local SGLang memory pool already has a safe fallback: if
+`can_use_store_cache(row_bytes)` returns `False`, it writes KV cache with direct
+tensor assignment. Because the external SGLang checkout is outside this
+workspace, the fix lives in Relax's SGLang process bootstrap: on
+`torch.version.hip`, `relax/backends/sglang/sglang_engine.py` patches
+`sglang.srt.mem_cache.memory_pool.can_use_store_cache` to return `False`
+inside both the SGLang server process and scheduler subprocess.
+
+### Links
+
+- Runtime file: `relax/backends/sglang/sglang_engine.py`
+- Test: `tests/backends/sglang/test_sglang_engine.py`
+- Launcher: `amd_qwen3_4b_2gpu_e2e.sh`
+- Failed log before KV-cache fallback:
+  `log/amd-qwen3-4b-2gpu-20260529_165722.log`
+- Troubleshooting: `references/troubleshooting.md`
+
 ## 2026-04-24 - Retrospective on W&B e2e ROCm Megatron run
 
 **Type:** Retrospective

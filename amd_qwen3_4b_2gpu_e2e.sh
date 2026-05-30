@@ -42,7 +42,14 @@ PROJECT_NAME="${PROJECT_NAME:-Relax/amd/dapo-math}"
 WANDB_PROJECT="${WANDB_PROJECT:-relax-amd}"
 WANDB_GROUP="${WANDB_GROUP:-qwen3-4b-mi210-2gpu-${NOW}}"
 WANDB_DIR="${WANDB_DIR:-${ASSET_DIR}/wandb}"
-SAVE_DIR="${ASSET_DIR}/Qwen3-4B_mcore_2gpu"
+SAVE_DIR="${SAVE_DIR:-${ASSET_DIR}/Qwen3-4B_mcore_2gpu-${NOW}}"
+LOAD_DIR="${LOAD_DIR:-}"
+# The single-rank MI210 actor must checkpoint. The ROCm hook keeps Megatron's
+# torch_dist path on the PyTorch 2.6-compatible planner/writer flow.
+SAVE_INTERVAL="${SAVE_INTERVAL:-100}"
+CKPT_FORMAT="${CKPT_FORMAT:-torch_dist}"
+NO_SAVE_OPTIM="${NO_SAVE_OPTIM:-0}"
+SCHEDULER_RESUME_POLICY="${SCHEDULER_RESUME_POLICY:-strict}"
 PROMPT_SET="${ASSET_DIR}/dapo-math-17k/dapo-math-17k.jsonl"
 HF_CHECKPOINT="${ASSET_DIR}/Qwen3-4B"
 RUN_LOG="${LOG_DIR}/amd-qwen3-4b-2gpu-${NOW}.log"
@@ -280,8 +287,29 @@ CKPT_ARGS=(
     --ref-load "${HF_CHECKPOINT}"
     --megatron-to-hf-mode bridge
     --save "${SAVE_DIR}"
-    --save-interval 100
+    --save-interval "${SAVE_INTERVAL}"
+    --ckpt-format "${CKPT_FORMAT}"
 )
+if [ -n "${LOAD_DIR}" ]; then
+    CKPT_ARGS+=(--load "${LOAD_DIR}")
+fi
+if [ "${NO_SAVE_OPTIM}" = "1" ]; then
+    CKPT_ARGS+=(--no-save-optim)
+fi
+case "${SCHEDULER_RESUME_POLICY}" in
+    strict)
+        ;;
+    override)
+        CKPT_ARGS+=(--override-opt-param-scheduler)
+        ;;
+    checkpoint)
+        CKPT_ARGS+=(--use-checkpoint-opt-param-scheduler)
+        ;;
+    *)
+        echo "Unsupported SCHEDULER_RESUME_POLICY=${SCHEDULER_RESUME_POLICY}; expected strict, override, or checkpoint" >&2
+        exit 2
+        ;;
+esac
 
 ROLLOUT_ARGS=(
     --use-streaming-dataset
@@ -378,6 +406,7 @@ SGLANG_ARGS=(
     --sglang-sampling-backend pytorch
     --sglang-disable-custom-all-reduce
     --sglang-disable-cuda-graph
+    --sglang-disable-overlap-schedule
 )
 
 MISC_ARGS=(

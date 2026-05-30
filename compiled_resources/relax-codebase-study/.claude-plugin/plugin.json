@@ -1,0 +1,6 @@
+{
+  "name": "relax-codebase-study",
+  "version": "0.1.0",
+  "description": "Local codebase study scaffold for the Relax ROCm Megatron checkout.",
+  "author": "local"
+}
