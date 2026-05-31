@@ -26,3 +26,4 @@ commit	status	description
 9e8265f	startup-failure	attempt=23 exit=1 runtime=345s started_at=2026-04-15 15:47:37 ended_at=2026-04-15 15:53:22 log=/vast/users/qirong.ho/erland/Python_project/Relax/log/amd-qwen3-4b-overnight-attempt-23-20260415_154737.log
 9e8265f	startup-failure	attempt=24 exit=1 runtime=345s started_at=2026-04-15 15:54:22 ended_at=2026-04-15 16:00:07 log=/vast/users/qirong.ho/erland/Python_project/Relax/log/amd-qwen3-4b-overnight-attempt-24-20260415_155422.log
 9e8265f	startup-failure	attempt=25 exit=1 runtime=345s started_at=2026-04-15 16:01:07 ended_at=2026-04-15 16:06:52 log=/vast/users/qirong.ho/erland/Python_project/Relax/log/amd-qwen3-4b-overnight-attempt-25-20260415_160107.log
+32700f8	healthy	attempt=1 runtime=600s log=/vast/users/qirong.ho/erland/Python_project/Relax-rocm-megatron/log/amd-qwen3-4b-overnight-attempt-1-20260424_164257.log

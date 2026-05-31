@@ -18,6 +18,10 @@ def _should_keep_step_metric(step_key: str) -> bool:
     return step_key.endswith("/step")
 
 
+def _should_report_immediately(step_key: str) -> bool:
+    return _should_keep_step_metric(step_key)
+
+
 class MetricsServiceAdapter:
     def __init__(self, args: Namespace):
         self.args = args
@@ -72,6 +76,12 @@ class MetricsServiceAdapter:
         if not result:
             logger.error(f"MetricsServiceAdapter: Failed to log metrics for step {step}")
             return False
+
+        if _should_report_immediately(step_key):
+            report_result = self.client.report_step(step)
+            if report_result.get("status") != "success":
+                logger.error(f"MetricsServiceAdapter: Failed to report step {step}: {report_result.get('message')}")
+                return False
 
         return True
 

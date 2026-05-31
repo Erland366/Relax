@@ -146,6 +146,18 @@ def finish_metrics_service_wandb() -> None:
         wandb.finish(exit_code=0, quiet=True)
 
 
+def _has_namespaced_step_metric(metrics: Dict[str, Any]) -> bool:
+    return any(metric_name.endswith("/step") for metric_name in metrics)
+
+
+def log_metrics_to_wandb(metrics: Dict[str, Any], step: int) -> None:
+    """Log metrics to W&B while respecting custom namespaced step axes."""
+    if _has_namespaced_step_metric(metrics):
+        wandb.log(metrics)
+        return
+    wandb.log(metrics, step=step)
+
+
 @serve.deployment
 @serve.ingress(app)
 class MetricsService:
@@ -282,7 +294,7 @@ class MetricsService:
 
                 if self._use_wandb:
                     try:
-                        wandb.log(metrics_dict, step=step)
+                        log_metrics_to_wandb(metrics_dict, step)
                         report_results["wandb"] = "success"
                         logger.debug(f"Reported {len(metrics_dict)} metrics to W&B for step {step}")
                     except Exception as e:
@@ -360,7 +372,8 @@ class MetricsService:
 
     @app.post("/stop_service")
     async def stop_service(self) -> Dict[str, Any]:
-        """Flush external metric adapters before Ray Serve stops the replica."""
+        """Flush external metric adapters before Ray Serve stops the
+        replica."""
         self._finish_wandb()
         return {"status": "success", "message": "MetricsService stopped"}
 

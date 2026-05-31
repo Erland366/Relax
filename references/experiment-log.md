@@ -12,6 +12,584 @@ Each entry should include:
 
 ---
 
+## 2026-05-31 - Retrospective on Qwen3-0.5B four-GPU ROCm overnight regression
+
+**Type:** Retrospective
+**General description:** The 0.5B mock Qwen3 path is now the standing fast
+ROCm e2e regression for Relax/SGLang/Megatron integration, with real W&B
+application metrics and optimizer-inclusive `torch_dist` checkpoints.
+
+### What we tried
+
+- Generated a Qwen3-compatible mock checkpoint at the requested mini-model
+  scale instead of keeping the earlier 1M toy asset.
+- Validated a two-GPU smoke path with one actor GPU, one rollout GPU,
+  `TENSOR_MODEL_PARALLEL_SIZE=1`, `SAVE_INTERVAL=1`,
+  `CKPT_FORMAT=torch_dist`, and `NO_SAVE_OPTIM=0`.
+- Validated a four-GPU foreground path with two Megatron actor GPUs, two SGLang
+  rollout GPUs, actor TP2, and sequence parallel.
+- Launched the four-GPU overnight production shape from tmux with:
+  `NUM_ROLLOUT=1000`, `SAVE_INTERVAL=20`, `CKPT_FORMAT=torch_dist`,
+  `NO_SAVE_OPTIM=0`, `MOCK_ROLLOUT_BATCH_SIZE=2`,
+  `MOCK_N_SAMPLES_PER_PROMPT=4`, `MOCK_GLOBAL_BATCH_SIZE=4`, and
+  `MOCK_ROLLOUT_MAX_RESPONSE_LEN=128`.
+
+### Key findings
+
+- The standing mock asset is
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-Mock-0.5B`
+  with `533,126,144` parameters and the real Qwen3 tokenizer.
+- The four-GPU overnight run is tmux session `tmux-28`, Ray job
+  `raysubmit_ixWfXAnuy6cjSAwc`, W&B run `jr6tid47`, and save directory
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-Mock-0.5B_mcore_4gpu-20260531_161442`.
+- Both SGLang engines loaded the mock model with `mem usage=1.04 GB` and
+  allocated `#tokens: 65536`, matching the smoke caps
+  `SGLANG_MEM_FRACTION_STATIC=0.2`, `SGLANG_MAX_TOTAL_TOKENS=65536`, and
+  `SGLANG_MAX_RUNNING_REQUESTS=128`.
+- The production run crossed multiple real checkpoint boundaries: iterations
+  19 and 39 were saved in `torch_dist` format, and the live tmux pane later
+  showed training step 48 still running.
+- Checkpoint metadata for `iter_0000019` and `iter_0000039` contained
+  optimizer moment keys and fp32 parameter keys, and
+  `dataset/global_dataset_state_dict_19.pt` plus
+  `dataset/global_dataset_state_dict_39.pt` were present. This proves
+  checkpointing stayed real; it was not a weights-only save and did not disable
+  optimizer state.
+- W&B application metrics were present in the primary run after the metrics
+  service fixes. The system-only W&B failure mode is not acceptable evidence of
+  a healthy training run.
+
+### What failed
+
+- The `Qwen3-Mock-1M` asset was too small to be the standing target. It can
+  remain historical context, but the standing mock should be the 0.5B asset.
+- Treating startup or step 0 as "overnight health" is too weak. With
+  `SAVE_INTERVAL=20`, the first production checkpoint is zero-based iteration
+  19, so the run is not checkpoint-proven until that boundary is crossed.
+- Disabling checkpointing, disabling optimizer save, or moving optimizer state
+  to CPU would invalidate this regression. The validated path keeps
+  `CKPT_FORMAT=torch_dist` and `NO_SAVE_OPTIM=0`.
+- The reward and loss values are not quality evidence. The mock model is
+  random, so invalid generated answers, reward `-1.0`, collapsed advantages,
+  and `train/loss=0.0` are expected.
+
+### Open questions
+
+- Let the overnight run continue when possible, then audit the latest
+  checkpoint after manual stop or completion. The latest observed durable
+  checkpoint during this retrospective is iteration 39.
+- After a later checkpoint is available, run one short explicit resume from the
+  latest save directory to verify continuation still starts at `latest + 1`
+  without a step reset.
+
+### Reusable lessons captured
+
+- Added `skills/qwen3-mock-0-5b-rocm-e2e/SKILL.md` for the 0.5B mock ROCm
+  e2e regression path.
+- Updated `skills/registry.json` so future retrospective/advisor workflows
+  discover the new result skill.
+- Updated `references/troubleshooting.md` with the checkpoint-boundary pitfall
+  for long mock runs.
+
+## 2026-05-31 - Validate mock Qwen3-0.5B AMD e2e smoke path
+
+**Type:** Observation
+**General description:** The generated Qwen3-compatible smoke model was resized
+from the rejected 1M scale to a 0.5B-class checkpoint, close to the
+`Erland/mini-glm-moe` test-model size, while preserving the fast ROCm e2e path.
+
+### Details
+
+The mock path uses:
+
+- `scripts/tools/create_mock_qwen3.py`
+- `scripts/models/qwen3-mock.sh`
+- `amd_qwen3_mock_2gpu_e2e.sh`
+- model asset
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-Mock-0.5B`
+- two logical Ray GPUs with one actor GPU and one rollout GPU
+- `TENSOR_MODEL_PARALLEL_SIZE=1` and sequence parallel disabled
+- `CKPT_FORMAT=torch_dist`, `NO_SAVE_OPTIM=0`, and `SAVE_INTERVAL=1` for the
+  validation run
+
+The generated model keeps Qwen3/HF compatibility and the real Qwen3 tokenizer,
+but uses a 0.5B-class dense architecture:
+
+```text
+num_parameters=533,126,144
+hidden_size=1024
+intermediate_size=3072
+num_hidden_layers=24
+num_attention_heads=16
+num_key_value_heads=8
+head_dim=128
+vocab_size=151936
+```
+
+The earlier `Qwen3-Mock-1M` / `Erland/mini-qwen3-1m` asset is historical only.
+It proved the code path, but it is too small to be the standing mock model.
+
+The 0.5B mock wrapper still caps SGLang's smoke-test memory use with
+`SGLANG_MEM_FRACTION_STATIC=0.2`, `SGLANG_MAX_TOTAL_TOKENS=65536`, and
+`SGLANG_MAX_RUNNING_REQUESTS=128`. In the successful run, SGLang loaded the
+533M model with `mem usage=1.04 GB` and logged
+`KV Cache is allocated. #tokens: 65536`.
+
+The successful tmux run was:
+
+```bash
+NUM_ROLLOUT=2 SAVE_INTERVAL=1 CKPT_FORMAT=torch_dist NO_SAVE_OPTIM=0 \
+WANDB_GROUP="qwen3-mock-0.5b-tmux-20260531_154301" \
+./amd_qwen3_mock_2gpu_e2e.sh
+```
+
+Evidence:
+
+- tmux session: `tmux-27`
+- Ray job: `raysubmit_i2PLzbjh1F48f5am`
+- W&B run: `hd2ddkjo`
+- log: `log/amd-qwen3-mock-0.5b-2gpu-20260531_154301.log`
+- save directory:
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-Mock-0.5B_mcore_2gpu-20260531_154301`
+- Hugging Face repo: `https://huggingface.co/Erland/mini-qwen3-0.5b`
+- Hugging Face commit: recorded after upload
+
+The job succeeded and completed both rollout/training steps:
+
+```text
+> number of parameters on (tensor, pipeline) model parallel rank (0, 0): 533126144
+Actor training completed step 0/2
+saving checkpoint at iteration       0 ... in torch_dist format
+successfully saved checkpoint from iteration       0 ...
+Actor training completed step 1/2
+saving checkpoint at iteration       1 ... in torch_dist format
+successfully saved checkpoint from iteration       1 ...
+Job 'raysubmit_i2PLzbjh1F48f5am' succeeded
+```
+
+Checkpoint verification:
+
+- `latest_checkpointed_iteration.txt` contains `1`.
+- `iter_0000000/` and `iter_0000001/` each contain `.metadata`,
+  two `.distcp` shards, `common.pt`, and `metadata.json`.
+- Both `.metadata` files contain optimizer state keys, including
+  `optimizer.state.exp_avg` and `optimizer.state.exp_avg_sq`.
+
+### Key Points
+
+- This is the current Qwen3 mock regression path for the ROCm Relax stack.
+- The loss and rewards are not meaningful because the model is random;
+  generated answers are invalid, rewards are all `-1.0`, advantages collapse to
+  zero, and `train/loss` is `0.0`. That is expected for this smoke path.
+- The run still proves the important infrastructure boundaries: HF asset load,
+  SGLang transformers rollout, Megatron Qwen3Bridge import, distributed weight
+  update, optimizer step, W&B application metrics, and optimizer-inclusive
+  `torch_dist` checkpoint save.
+
+## 2026-05-31 - Add and validate tiny Qwen3-0.6B AMD launcher
+
+**Type:** Observation
+**General description:** The Qwen3-0.6B AMD path now has a dedicated two-GPU
+launcher that reuses the ROCm Megatron/SGLang fixes while keeping real
+`torch_dist` checkpointing and optimizer-state save enabled.
+
+### Details
+
+The tiny launcher uses:
+
+- `amd_qwen3_0_6b_2gpu_e2e.sh`
+- `scripts/models/qwen3-0.6B.sh`
+- `Qwen/Qwen3-0.6B` materialized under
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-0.6B`
+- two logical Ray GPUs with one actor GPU and one rollout GPU
+- `TENSOR_MODEL_PARALLEL_SIZE=1` and sequence parallel disabled
+- `CKPT_FORMAT=torch_dist`, `NO_SAVE_OPTIM=0`, and production
+  `SAVE_INTERVAL=20`
+
+The first smoke gate proved the topology needed to override conda's inherited
+`HIP_VISIBLE_DEVICES`. The wrapper now passes
+`RELAX_HIP_VISIBLE_DEVICES_OVERRIDE=0,1` so the base launcher reapplies the
+two-GPU topology after conda activation and `.env` loading.
+
+The production tiny run is Ray job `raysubmit_qrTv36H5f7qiRdnG` in `tmux-25`,
+with W&B run `sb6k87bn` and log
+`log/amd-qwen3-0.6b-2gpu-20260531_090253.log`. It reached real training,
+completed step 20, and continued to step 21. The first checkpoint boundary
+completed successfully:
+
+```text
+saving checkpoint at iteration      19 ... in torch_dist format
+ROCm streaming checkpoint write finished on rank 0: buckets=2
+successfully saved checkpoint from iteration      19 ...
+Actor training completed step 19/200
+```
+
+Checkpoint directory:
+
+```text
+/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-0.6B_mcore_2gpu-20260531_090253/iter_0000019
+```
+
+`latest_checkpointed_iteration.txt` contains `19`, and `.metadata` contains
+optimizer state keys including `optimizer.state.exp_avg` and
+`optimizer.state.exp_avg_sq`, confirming this is not a weights-only save.
+
+### Key Points
+
+- Tiny Qwen3 is training with W&B application metrics and real optimizer
+  checkpoint state.
+- The run is still active; this entry validates startup, training, and the
+  first checkpoint boundary, not final 200-step completion.
+- The base launcher is now model-parameterized so Qwen3-4B defaults are
+  preserved while the tiny wrapper can select Qwen3-0.6B explicitly.
+
+## 2026-05-31 - Retrospective on the no-offload TP2 ROCm e2e path
+
+**Type:** Retrospective
+**General description:** The viable AMD Qwen3-4B path is the four-GPU TP2
+Megatron actor with GPU optimizer state, W&B application metrics, and real
+`torch_dist` checkpoint save/resume; CPU optimizer offload and checkpoint
+shortcuts are not acceptable for this objective.
+
+### What we tried
+
+- rejected CPU optimizer offload after the single-GPU actor OOM and the
+  historical HybridDeviceOptimizer instability made offload a misleading fix;
+- moved the AMD launcher to a four-GPU topology with two actor GPUs and two
+  rollout GPUs:
+  `HIP_VISIBLE_DEVICES=0,1,2,3 RAY_NUM_GPUS=4 ACTOR_RESOURCE_GPUS=2 ROLLOUT_RESOURCE_GPUS=2 TENSOR_MODEL_PARALLEL_SIZE=2`;
+- enabled sequence parallel for the TP2 actor and patched the TE-less Megatron
+  `WrappedTorchNorm` path on HIP so torch RMSNorm/LayerNorm can be used on
+  sequence-parallel shards;
+- kept checkpointing required with `CKPT_FORMAT=torch_dist`, `SAVE_INTERVAL=20`,
+  and `NO_SAVE_OPTIM=0`;
+- fixed W&B reporting so MetricsService joins the primary run and namespaced
+  `train/step` / `rollout/step` metrics are not hidden in a system-only run;
+- explicitly resumed by setting both `LOAD_DIR` and `SAVE_DIR` to the same
+  checkpoint directory, keeping `SCHEDULER_RESUME_POLICY=strict` because the
+  scheduler-driving settings did not change.
+
+### Key findings
+
+- The original long run reached step 100 and saved complete `torch_dist`
+  checkpoints through iteration 99. Iterations 19, 39, 59, 79, and 99 all
+  contained `.metadata`, four `.distcp` shards, `common.pt`, `metadata.json`,
+  and optimizer state entries while `NO_SAVE_OPTIM=0`.
+- The resume run loaded checkpoint iteration 99, loaded streaming dataset state
+  at `epoch=0, position=404`, initialized the actor at step 100, saved newer
+  checkpoints at iterations 119 and 139, and continued through completed step
+  154 before manual stop at step 155.
+- W&B application metrics were present after the metrics fixes. The resumed run
+  reported values including `train/step=154`, `rollout/step=154`,
+  `train/loss=0`, `train/entropy_loss=0.18966230750083923`, and
+  `perf/step_time=157.73920893669128`.
+- The latest durable checkpoint at the time of this retrospective is iteration
+  139 with `dataset/global_dataset_state_dict_139.pt` present. That proves
+  checkpoint save after resume, but not final 200-step completion.
+- A fresh production resume from checkpoint 139 was launched as Ray job
+  `raysubmit_npbaWGLVyyJMxhD8` in `tmux-24`, with W&B run `bkzsnt9k`. It loaded
+  iteration 139, completed step 141, started step 142, emitted W&B application
+  metrics for step 141, and was then manually stopped when the direction moved
+  to a smaller Qwen3 bring-up.
+
+### What failed
+
+- CPU optimizer offload is the wrong path for this objective. It avoids one
+  memory boundary but repeatedly introduces ROCm HDO crashes and violates the
+  current "no cheating" constraint.
+- Treating checkpointing as optional was wrong. The validation only matters if
+  `torch_dist` checkpointing and optimizer-state save remain enabled.
+- Treating a healthy partial run as completion was too weak. Stopping after step
+  154 proves resume and continued training, but it does not prove the final
+  checkpoint boundary for `NUM_ROLLOUT=200`.
+- W&B "system only" views were misleading until MetricsService joined the
+  primary run and namespaced step metrics were flushed promptly.
+
+### Open questions
+
+- The Qwen3-4B run still has not produced the final 200-step save boundary,
+  likely iteration 199 with `SAVE_INTERVAL=20` and zero-based Megatron
+  iteration numbering, because the active objective moved to tiny Qwen3 first.
+- After the final checkpoint is present, a fresh resume from the latest
+  checkpoint should be tested quickly to prove the final saved state can be
+  used without a loss spike or step reset.
+
+### Reusable lessons captured
+
+- Added `skills/rocm-megatron-tp2-checkpoint-resume/SKILL.md` for the current
+  no-CPU-offload TP2 GPU optimizer path.
+- Updated `skills/registry.json` so future agents discover the new result
+  skill.
+- Updated the existing ROCm bring-up skill so its current AMD Qwen3 path no
+  longer recommends CPU optimizer offload.
+
+## 2026-05-30 - Reject ROCm CPU optimizer offload and validate TP2 GPU optimizer
+
+**Type:** Observation
+**General description:** The current AMD Qwen3-4B path no longer treats CPU
+optimizer offload as an acceptable workaround; fitting the actor uses tensor
+parallel GPU optimizer state instead.
+
+### Details
+
+The four-GPU overnight attempt first proved that a single MI210 actor rank with
+GPU Adam cannot fit the first lazy Adam state allocation:
+
+```text
+torch.OutOfMemoryError ... state["exp_avg_sq"] = torch.zeros_like
+```
+
+CPU optimizer offload was explicitly rejected as a workaround. The AMD launcher
+therefore removed `--optimizer-cpu-offload`,
+`--use-torch-optimizer-for-cpu-offload`, precision-aware CPU-offload flags, and
+the pinning overrides. `relax/backends/megatron/optimizer_utils.py` now only
+normalizes unsupported single-DP-rank optimizer flags and raises immediately if
+any ROCm Megatron training role requests `optimizer_cpu_offload=True`.
+
+The active fit path is:
+
+- four visible GPUs;
+- two actor GPUs and two rollout GPUs;
+- `--tensor-model-parallel-size 2`;
+- `--sequence-parallel`;
+- GPU Adam optimizer state;
+- `NO_SAVE_OPTIM=0`, so checkpoint optimizer state remains enabled.
+
+TP2 exposed a TE-less Megatron assertion:
+
+```text
+AssertionError: sequence parallel not supported by torch LayerNorm
+```
+
+Relax now patches Megatron's `WrappedTorchNorm` at runtime on HIP so Torch
+RMSNorm/LayerNorm can be created on sequence-parallel shards and still mark
+norm parameters with `sequence_parallel=True`.
+
+Validation status from the active tmux run `tmux-22`:
+
+```text
+optimizer_cpu_offload ........................... False
+Patched Megatron WrappedTorchNorm for ROCm sequence-parallel torch norms
+Actor training step 0/200
+train_one_step rollout=0 step=0: finished forward_backward
+train_one_step rollout=0 step=0: finished optimizer.step (update_successful=True, ...)
+train_one_step rollout=0 step=0: scheduler step completed
+train_one_step rollout=0 step=0: loss reduction completed
+step 0: {'train/loss': ..., 'train/step': 0}
+```
+
+By `2026-05-31 00:47:14 UTC`, the same run had completed actor step 20 and
+moved to rollout/training step 21. The first save boundary completed at Megatron
+iteration 19 because the training loop uses a zero-based iteration index with
+`SAVE_INTERVAL=20`:
+
+```text
+saving checkpoint at iteration      19 ... in torch_dist format
+ROCm streaming checkpoint write finished on rank 1: buckets=2
+ROCm streaming checkpoint write finished on rank 0: buckets=2
+successfully saved checkpoint from iteration      19 ...
+Actor training completed step 19/200
+Actor training completed step 20/200
+```
+
+The checkpoint directory contains `.metadata`, four `.distcp` shards,
+`common.pt`, `metadata.json`, and `latest_checkpointed_iteration.txt`.
+`latest_checkpointed_iteration.txt` contains `19`, and `.metadata` inspection
+found optimizer entries while the launch kept `NO_SAVE_OPTIM=0`. This confirms
+the checkpoint is not the weights-only path.
+
+By `2026-05-31 01:47:28 UTC`, the same run had completed actor step 41, started
+step 42, and passed the second save boundary:
+
+```text
+saving checkpoint at iteration      39 ... in torch_dist format
+ROCm streaming checkpoint write finished on rank 1: buckets=2
+ROCm streaming checkpoint write finished on rank 0: buckets=2
+successfully saved checkpoint from iteration      39 ...
+Actor training completed step 40/200
+Actor training completed step 41/200
+```
+
+The save directory contains both `iter_0000019` and `iter_0000039`.
+`latest_checkpointed_iteration.txt` contains `39`. The `iter_0000039/.metadata`
+file contains optimizer state keys such as
+`optimizer.state.exp_avg.embedding.word_embeddings.weight` and
+`optimizer.state.exp_avg_sq.embedding.word_embeddings.weight`, confirming again
+that optimizer checkpoint state is enabled. W&B API inspection for run
+`gult6g9a` showed application metrics, not only system metrics:
+
+```text
+train/step=40
+rollout/step=41
+perf/step_time=349.7924120426178
+```
+
+By `2026-05-31 02:41:04 UTC`, the same run had completed the third save
+boundary at iteration 59 and continued through step 61:
+
+```text
+saving checkpoint at iteration      59 ... in torch_dist format
+ROCm streaming checkpoint write finished on rank 1: buckets=2
+ROCm streaming checkpoint write finished on rank 0: buckets=2
+successfully saved checkpoint from iteration      59 ...
+Actor training completed step 59/200
+Actor training completed step 60/200
+Actor training completed step 61/200
+```
+
+The save directory now contains `iter_0000019`, `iter_0000039`, and
+`iter_0000059`, and `latest_checkpointed_iteration.txt` contains `59`.
+Inspection of `iter_0000059/.metadata` again found optimizer state entries
+including `optimizer.state.exp_avg.*` and `optimizer.state.exp_avg_sq.*`. W&B
+API inspection showed the run still active with application metrics through:
+
+```text
+train/step=61
+rollout/step=61
+perf/step_time rows=62
+```
+
+By `2026-05-31 03:35:13 UTC`, the same run had completed the fourth save
+boundary at iteration 79 and continued through step 80 into step 81:
+
+```text
+saving checkpoint at iteration      79 ... in torch_dist format
+ROCm streaming checkpoint write finished on rank 1: buckets=2
+ROCm streaming checkpoint write finished on rank 0: buckets=2
+successfully saved checkpoint from iteration      79 ...
+Actor training completed step 79/200
+Actor training completed step 80/200
+Actor training step 81/200
+```
+
+The save directory now contains `iter_0000019`, `iter_0000039`,
+`iter_0000059`, and `iter_0000079`; `latest_checkpointed_iteration.txt`
+contains `79`. Inspection of `iter_0000079/.metadata` found 30 optimizer
+metadata entries, including `optimizer.state.exp_avg.*`,
+`optimizer.state.exp_avg_sq.*`, and `optimizer.state.fp32_param.*`, plus RNG
+state entries. W&B API inspection showed the run still active with application
+metrics through:
+
+```text
+train/step=80
+rollout/step=80
+perf/step_time rows=81
+```
+
+By `2026-05-31 04:31:46 UTC`, the same run had crossed the old step-99
+checkpoint failure window. Iteration 99 saved successfully and the actor
+continued to step 100:
+
+```text
+saving checkpoint at iteration      99 ... in torch_dist format
+ROCm streaming checkpoint write finished on rank 1: buckets=2
+ROCm streaming checkpoint write finished on rank 0: buckets=2
+successfully saved checkpoint from iteration      99 ...
+Actor training completed step 99/200
+Actor training step 100/200
+```
+
+The save directory now contains a complete `iter_0000099` checkpoint with
+`.metadata`, four `.distcp` shards, `common.pt`, and `metadata.json`;
+`latest_checkpointed_iteration.txt` contains `99`. Inspection of
+`iter_0000099/.metadata` found optimizer state entries, fp32 optimizer
+parameter entries, and RNG entries. W&B API inspection showed the run still
+active with application metrics through:
+
+```text
+train/step=99
+rollout/step=99
+perf/step_time rows=100
+```
+
+The host TensorBackuper path is separate from optimizer offload. It keeps actor
+and ref weight snapshots for the colocated actor/ref workflow. The ROCm guard
+only disables pinned host memory for those snapshots; it does not move optimizer
+state or Adam updates to CPU. That helper now lives in
+`relax/backends/megatron/weight_backup_utils.py` so `optimizer_utils.py` stays
+optimizer-only.
+
+## 2026-05-30 - Fix W&B namespaced metric flush after actor crash
+
+**Type:** Observation
+**General description:** The 4-GPU overnight run produced rollout metrics, but
+they stayed buffered in MetricsService because the Megatron actor died before
+the end-of-step flush.
+
+### Details
+
+The W&B run `s9z00ddu` initially appeared to contain only system metrics. The
+log showed that application metrics were not missing:
+
+```text
+POST /metrics/log_metrics_batch 200
+rollout 0: {...}
+Actor training failed at step 0: ActorDiedError
+```
+
+The missing boundary was `/metrics/report_step`. Preserving namespaced step
+metrics such as `rollout/step` and `train/step` fixed the earlier W&B x-axis
+problem, but those metrics were still buffered until the actor called
+`flush_metrics()` after completing the training step. In this run the actor
+died before that flush, so W&B did not receive the buffered rollout metrics.
+
+The metrics adapter now reports immediately for namespaced step keys ending in
+`/step`. That keeps `train/step` and `rollout/step` in the payload for W&B
+custom axes, while avoiding a system-only W&B run when a later actor crash
+prevents the normal end-of-step flush.
+
+When a reported payload already contains a namespaced step metric, MetricsService
+logs it to W&B without forcing the global W&B `step=` argument. This avoids
+dropping later same-step batches while still letting W&B charts use
+`train/step` or `rollout/step` as their x-axis.
+
+For the interrupted run, the buffered step-0 metrics were manually flushed:
+
+```text
+POST /metrics/report_step {"step": 0}
+Reported 38 metrics for step 0
+```
+
+## 2026-05-30 - Launch 4-GPU overnight AMD Qwen3-4B run
+
+**Type:** Plan
+**General description:** Start a longer MI210 run that uses all four local GPUs
+while preserving the validated single-rank Megatron actor/checkpoint path.
+
+### Details
+
+The AMD launcher now derives its Ray and Relax resource topology from
+environment variables instead of hardcoding a two-GPU run:
+
+- `HIP_VISIBLE_DEVICES` controls the visible GPU list and defaults to `0,1`.
+- `RAY_NUM_GPUS` defaults to the number of visible GPUs.
+- `NUM_GPUS_PER_NODE` defaults to `RAY_NUM_GPUS`.
+- `ACTOR_RESOURCE_GPUS` defaults to `1`.
+- `ROLLOUT_RESOURCE_GPUS` defaults to `RAY_NUM_GPUS - ACTOR_RESOURCE_GPUS`.
+- `RESOURCE_JSON` defaults to `{"actor": [1, ACTOR_RESOURCE_GPUS], "rollout": [1, ROLLOUT_RESOURCE_GPUS]}`.
+
+The overnight run uses four visible MI210 GPUs with one GPU reserved for the
+single-rank Megatron actor and three GPUs reserved for rollout engines. This
+uses all four GPUs without changing the actor path that validated ROCm
+`torch_dist` checkpoint save/resume with optimizer state enabled.
+
+Launch metadata:
+
+- tmux session: `tmux-17`
+- Ray job: `raysubmit_PEf7qZPy4MwWgBpt`
+- W&B run: `https://wandb.ai/erlandpg/relax-amd/runs/s9z00ddu`
+- Save directory:
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-4B_mcore_4gpu-overnight-20260530_205124`
+- Log:
+  `log/amd-qwen3-4b-4gpu-20260530_205125.log`
+- Args:
+  `HIP_VISIBLE_DEVICES=0,1,2,3 RAY_NUM_GPUS=4 NUM_GPUS_PER_NODE=4 ACTOR_RESOURCE_GPUS=1 ROLLOUT_RESOURCE_GPUS=3 SAVE_INTERVAL=20 NUM_ROLLOUT=200`
+
+Checkpointing remains enabled. The launch uses `CKPT_FORMAT=torch_dist`, omits
+`NO_SAVE_OPTIM`, and therefore keeps optimizer checkpoint save enabled through
+the launcher default `NO_SAVE_OPTIM=0`. `SAVE_INTERVAL=20` means the first
+overnight checkpoint is expected at iteration 20, not every step.
+
 ## 2026-05-30 - Fix W&B MetricsService run split
 
 **Type:** Observation

@@ -17,10 +17,74 @@ if [ -f "${ROOT_DIR}/.env" ]; then
     source "${ROOT_DIR}/.env"
     set +a
 fi
+if [ -n "${RELAX_HIP_VISIBLE_DEVICES_OVERRIDE:-}" ]; then
+    export HIP_VISIBLE_DEVICES="${RELAX_HIP_VISIBLE_DEVICES_OVERRIDE}"
+fi
 
 export PYTHONUNBUFFERED=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0,1}"
+IFS=',' read -ra RELAX_VISIBLE_GPU_IDS <<< "${HIP_VISIBLE_DEVICES}"
+DEFAULT_VISIBLE_GPU_COUNT="${#RELAX_VISIBLE_GPU_IDS[@]}"
+RAY_NUM_GPUS="${RAY_NUM_GPUS:-${DEFAULT_VISIBLE_GPU_COUNT}}"
+NUM_GPUS_PER_NODE="${NUM_GPUS_PER_NODE:-${RAY_NUM_GPUS}}"
+ACTOR_RESOURCE_GPUS="${ACTOR_RESOURCE_GPUS:-1}"
+ROLLOUT_RESOURCE_GPUS="${ROLLOUT_RESOURCE_GPUS:-$((RAY_NUM_GPUS - ACTOR_RESOURCE_GPUS))}"
+if [ "${RAY_NUM_GPUS}" -lt 1 ]; then
+    echo "RAY_NUM_GPUS must be >= 1, got ${RAY_NUM_GPUS}" >&2
+    exit 2
+fi
+if [ "${ACTOR_RESOURCE_GPUS}" -lt 1 ]; then
+    echo "ACTOR_RESOURCE_GPUS must be >= 1, got ${ACTOR_RESOURCE_GPUS}" >&2
+    exit 2
+fi
+if [ "${ROLLOUT_RESOURCE_GPUS}" -lt 1 ]; then
+    echo "ROLLOUT_RESOURCE_GPUS must be >= 1, got ${ROLLOUT_RESOURCE_GPUS}" >&2
+    exit 2
+fi
+if [ "$((ACTOR_RESOURCE_GPUS + ROLLOUT_RESOURCE_GPUS))" -gt "${RAY_NUM_GPUS}" ]; then
+    echo "ACTOR_RESOURCE_GPUS + ROLLOUT_RESOURCE_GPUS exceeds RAY_NUM_GPUS" >&2
+    exit 2
+fi
+GPU_LABEL="${GPU_LABEL:-${RAY_NUM_GPUS}gpu}"
+RESOURCE_JSON="${RESOURCE_JSON:-{\"actor\": [1, ${ACTOR_RESOURCE_GPUS}], \"rollout\": [1, ${ROLLOUT_RESOURCE_GPUS}]}}"
+TENSOR_MODEL_PARALLEL_SIZE="${TENSOR_MODEL_PARALLEL_SIZE:-${ACTOR_RESOURCE_GPUS}}"
+PIPELINE_MODEL_PARALLEL_SIZE="${PIPELINE_MODEL_PARALLEL_SIZE:-1}"
+CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-1}"
+EXPERT_MODEL_PARALLEL_SIZE="${EXPERT_MODEL_PARALLEL_SIZE:-1}"
+EXPERT_TENSOR_PARALLEL_SIZE="${EXPERT_TENSOR_PARALLEL_SIZE:-1}"
+MODEL_PARALLEL_SIZE=$((TENSOR_MODEL_PARALLEL_SIZE * PIPELINE_MODEL_PARALLEL_SIZE * CONTEXT_PARALLEL_SIZE))
+if [ -z "${ENABLE_SEQUENCE_PARALLEL+x}" ]; then
+    if [ "${TENSOR_MODEL_PARALLEL_SIZE}" -gt 1 ]; then
+        ENABLE_SEQUENCE_PARALLEL=1
+    else
+        ENABLE_SEQUENCE_PARALLEL=0
+    fi
+fi
+if [ "${TENSOR_MODEL_PARALLEL_SIZE}" -lt 1 ]; then
+    echo "TENSOR_MODEL_PARALLEL_SIZE must be >= 1, got ${TENSOR_MODEL_PARALLEL_SIZE}" >&2
+    exit 2
+fi
+case "${ENABLE_SEQUENCE_PARALLEL}" in
+    0 | 1)
+        ;;
+    *)
+        echo "ENABLE_SEQUENCE_PARALLEL must be 0 or 1, got ${ENABLE_SEQUENCE_PARALLEL}" >&2
+        exit 2
+        ;;
+esac
+if [ "${TENSOR_MODEL_PARALLEL_SIZE}" -gt 1 ] && [ "${ENABLE_SEQUENCE_PARALLEL}" != "1" ]; then
+    echo "ENABLE_SEQUENCE_PARALLEL=1 is required when TENSOR_MODEL_PARALLEL_SIZE > 1" >&2
+    exit 2
+fi
+if [ "${ACTOR_RESOURCE_GPUS}" -lt "${MODEL_PARALLEL_SIZE}" ]; then
+    echo "ACTOR_RESOURCE_GPUS=${ACTOR_RESOURCE_GPUS} is smaller than model parallel size ${MODEL_PARALLEL_SIZE}" >&2
+    exit 2
+fi
+if [ "$((ACTOR_RESOURCE_GPUS % MODEL_PARALLEL_SIZE))" -ne 0 ]; then
+    echo "ACTOR_RESOURCE_GPUS=${ACTOR_RESOURCE_GPUS} must be divisible by model parallel size ${MODEL_PARALLEL_SIZE}" >&2
+    exit 2
+fi
 export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-bond0}"
 export TP_SOCKET_IFNAME="${TP_SOCKET_IFNAME:-bond0}"
 export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-bond0}"
@@ -38,11 +102,14 @@ export MODEL_CONFIG_DIR="${ROOT_DIR}/scripts/models"
 
 export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 NOW="$(date '+%Y%m%d_%H%M%S')"
+MODEL_CONFIG_NAME="${MODEL_CONFIG_NAME:-qwen3-4B}"
+MODEL_ASSET_NAME="${MODEL_ASSET_NAME:-Qwen3-4B}"
+MODEL_LOG_NAME="${MODEL_LOG_NAME:-qwen3-4b}"
 PROJECT_NAME="${PROJECT_NAME:-Relax/amd/dapo-math}"
 WANDB_PROJECT="${WANDB_PROJECT:-relax-amd}"
-WANDB_GROUP="${WANDB_GROUP:-qwen3-4b-mi210-2gpu-${NOW}}"
+WANDB_GROUP="${WANDB_GROUP:-${MODEL_LOG_NAME}-mi210-${GPU_LABEL}-${NOW}}"
 WANDB_DIR="${WANDB_DIR:-${ASSET_DIR}/wandb}"
-SAVE_DIR="${SAVE_DIR:-${ASSET_DIR}/Qwen3-4B_mcore_2gpu-${NOW}}"
+SAVE_DIR="${SAVE_DIR:-${ASSET_DIR}/${MODEL_ASSET_NAME}_mcore_${GPU_LABEL}-${NOW}}"
 LOAD_DIR="${LOAD_DIR:-}"
 # The single-rank MI210 actor must checkpoint. The ROCm hook keeps Megatron's
 # torch_dist path on the PyTorch 2.6-compatible planner/writer flow.
@@ -51,8 +118,8 @@ CKPT_FORMAT="${CKPT_FORMAT:-torch_dist}"
 NO_SAVE_OPTIM="${NO_SAVE_OPTIM:-0}"
 SCHEDULER_RESUME_POLICY="${SCHEDULER_RESUME_POLICY:-strict}"
 PROMPT_SET="${ASSET_DIR}/dapo-math-17k/dapo-math-17k.jsonl"
-HF_CHECKPOINT="${ASSET_DIR}/Qwen3-4B"
-RUN_LOG="${LOG_DIR}/amd-qwen3-4b-2gpu-${NOW}.log"
+HF_CHECKPOINT="${HF_CHECKPOINT:-${ASSET_DIR}/${MODEL_ASSET_NAME}}"
+RUN_LOG="${LOG_DIR}/amd-${MODEL_LOG_NAME}-${GPU_LABEL}-${NOW}.log"
 RAY_DASHBOARD_URL="http://${MASTER_ADDR}:8265"
 
 localhost_bypass() {
@@ -187,7 +254,11 @@ wait_for_ray_dashboard() {
     return 1
 }
 
-source "${MODEL_CONFIG_DIR}/qwen3-4B.sh"
+MODEL_CONFIG_PATH="${MODEL_CONFIG_DIR}/${MODEL_CONFIG_NAME}"
+if [[ "${MODEL_CONFIG_PATH}" != *.sh ]]; then
+    MODEL_CONFIG_PATH="${MODEL_CONFIG_PATH}.sh"
+fi
+source "${MODEL_CONFIG_PATH}"
 
 append_no_proxy
 
@@ -196,7 +267,7 @@ localhost_bypass python3 -m ray.scripts.scripts stop --force >/dev/null 2>&1 || 
 localhost_bypass python3 -m ray.scripts.scripts start --head \
     --node-ip-address "${MASTER_ADDR}" \
     --num-cpus "${RAY_NUM_CPUS:-16}" \
-    --num-gpus 2 \
+    --num-gpus "${RAY_NUM_GPUS}" \
     --disable-usage-stats \
     --dashboard-host=0.0.0.0 \
     --dashboard-port=8265
@@ -322,27 +393,30 @@ ROLLOUT_ARGS=(
     --rm-type dapo
     --reward-key score
     --num-rollout "${NUM_ROLLOUT:-200}"
-    --rollout-batch-size 2
-    --n-samples-per-prompt 8
-    --rollout-max-response-len 768
+    --rollout-batch-size "${ROLLOUT_BATCH_SIZE:-2}"
+    --n-samples-per-prompt "${N_SAMPLES_PER_PROMPT:-8}"
+    --rollout-max-response-len "${ROLLOUT_MAX_RESPONSE_LEN:-768}"
     --rollout-temperature 0.8
-    --global-batch-size 8
+    --global-batch-size "${GLOBAL_BATCH_SIZE:-8}"
     --num-steps-per-rollout 2
     --balance-data
     --use-fault-tolerance
 )
 
 PERF_ARGS=(
-    --tensor-model-parallel-size 1
-    --pipeline-model-parallel-size 1
-    --context-parallel-size 1
-    --expert-model-parallel-size 1
-    --expert-tensor-parallel-size 1
+    --tensor-model-parallel-size "${TENSOR_MODEL_PARALLEL_SIZE}"
+    --pipeline-model-parallel-size "${PIPELINE_MODEL_PARALLEL_SIZE}"
+    --context-parallel-size "${CONTEXT_PARALLEL_SIZE}"
+    --expert-model-parallel-size "${EXPERT_MODEL_PARALLEL_SIZE}"
+    --expert-tensor-parallel-size "${EXPERT_TENSOR_PARALLEL_SIZE}"
     --micro-batch-size 1
     --recompute-granularity full
     --recompute-method uniform
     --recompute-num-layers 1
 )
+if [ "${ENABLE_SEQUENCE_PARALLEL}" = "1" ]; then
+    PERF_ARGS+=(--sequence-parallel)
+fi
 
 GRPO_ARGS=(
     --advantage-estimator grpo
@@ -357,12 +431,6 @@ GRPO_ARGS=(
 
 OPTIMIZER_ARGS=(
     --optimizer adam
-    --optimizer-cpu-offload
-    --optimizer-offload-fraction 1.0
-    --use-torch-optimizer-for-cpu-offload
-    --use-precision-aware-optimizer
-    --no-pin-cpu-grads
-    --no-pin-cpu-params
     --lr 1e-6
     --lr-decay-style constant
     --weight-decay 0.1
@@ -398,9 +466,9 @@ if [ -n "${RELAX_LOAD_DEBUG_ROLLOUT_DATA_SUBSAMPLE:-}" ]; then
 fi
 
 SGLANG_ARGS=(
-    --num-gpus-per-node 2
+    --num-gpus-per-node "${NUM_GPUS_PER_NODE}"
     --rollout-num-gpus-per-engine 1
-    --sglang-mem-fraction-static 0.7
+    --sglang-mem-fraction-static "${SGLANG_MEM_FRACTION_STATIC:-0.7}"
     --sglang-model-impl transformers
     --sglang-attention-backend triton
     --sglang-sampling-backend pytorch
@@ -408,6 +476,14 @@ SGLANG_ARGS=(
     --sglang-disable-cuda-graph
     --sglang-disable-overlap-schedule
 )
+if [ -n "${SGLANG_MAX_TOTAL_TOKENS:-}" ]; then
+    SGLANG_ARGS+=(--sglang-max-total-tokens "${SGLANG_MAX_TOTAL_TOKENS}")
+fi
+if [ -n "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]; then
+    SGLANG_ARGS+=(--sglang-max-running-requests "${SGLANG_MAX_RUNNING_REQUESTS}")
+fi
+
+echo "Launching Relax AMD ${MODEL_LOG_NAME} run with HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES}, RAY_NUM_GPUS=${RAY_NUM_GPUS}, RESOURCE_JSON=${RESOURCE_JSON}, TENSOR_MODEL_PARALLEL_SIZE=${TENSOR_MODEL_PARALLEL_SIZE}" >&2
 
 MISC_ARGS=(
     --attention-dropout 0.0
@@ -424,7 +500,7 @@ MISC_ARGS=(
 localhost_bypass python3 -m ray.scripts.scripts job submit --address="${RAY_DASHBOARD_URL}" \
     --runtime-env-json="${RUNTIME_ENV_JSON}" \
     -- python3 -m relax.entrypoints.train \
-    --resource '{"actor": [1, 1], "rollout": [1, 1]}' \
+    --resource "${RESOURCE_JSON}" \
     --max-staleness 0 \
     --num-data-storage-units 1 \
     "${MODEL_ARGS[@]}" \

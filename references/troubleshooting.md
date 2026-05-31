@@ -20,20 +20,22 @@ This file documents error patterns encountered and their solutions.
 | `scaled_masked_softmax_cuda` import on ROCm | Training crashes inside Megatron fused softmax even after passing `--no-masked-softmax-fusion` | The launcher flag alone did not reach every Megatron-Bridge override path, and upstream fused softmax code still assumes the NVIDIA extension import exists | Propagate `masked_softmax_fusion` through the provider path and ensure fused softmax falls back cleanly when CUDA extensions are unavailable |
 | TorchInductor ROCm `KernelMetadata.cluster_dims` failure | First actor training step crashes after rollout generation and reward execution | TorchInductor/Triton on this ROCm stack generates a kernel metadata object without `cluster_dims`, but the launcher code path expects it | Treat this as a compiler/runtime compatibility issue: reduce or disable the affected compiled path, or move to a PyTorch/Triton build where ROCm launcher metadata matches TorchInductor expectations |
 | ROCm Megatron `jit_fuser` uses compiler decorators on HIP | The no-CPU-offload run either fails in `megatron/core/fusions/fused_cross_entropy.py` with `torch._inductor.exc.InductorError: AttributeError: 'KernelMetadata' object has no attribute 'cluster_dims'`, or fails during import when TorchScript compiles `L2Norm` and cannot resolve `self.eps` | `ROCm-Megatron-LM/megatron/core/jit.py` promotes `jit_fuser` from `torch.jit.script` to `torch.compile` on PyTorch >= 2.2; avoiding `torch.compile` still leaves TorchScript method limitations on HIP | Patch the local ROCm Megatron checkout so `jit_fuser` is an eager no-op when `torch.version.hip` is set, then rerun the foreground validation past import and the old step-0 boundary |
-| ROCm CPU-offload safe path is undone by fp32 main-param wrapping | The actor reaches `optimizer.step()` but either wedges on a large CPU AdamW step with fp32 CPU copies, raises `RuntimeError: attempting to assign a gradient with dtype 'float' to a tensor with dtype 'c10::BFloat16'`, or hits a fp32-only clip-grad assertion | Megatron's mixed-precision optimizer wrapper can rebuild HDO over fp32 main params, then later routes bf16 live params through optimizer helper code that assumes CUDA float grads | On the single-rank ROCm actor CPU-offload path, force the optimizer config away from fp32/bf16 mixed wrappers, refresh HDO only when the wrapped optimizer is not `FP32Optimizer`, keep HDO CPU copies bf16, cast `main_grad` to the live param dtype in `FP32Optimizer.prepare_grads()`, and allow bf16 CUDA grads in `clip_grad_by_total_norm_fp32()` |
+| ROCm CPU-offload safe path is undone by fp32 main-param wrapping | Historical CPU-offload attempts reached `optimizer.step()` but wedged on CPU AdamW, dtype, or clip-grad boundaries | Megatron's mixed-precision optimizer wrapper can rebuild HDO over fp32 main params, then later routes bf16 live params through optimizer helper code that assumes CUDA float grads | Treat this as superseded for the current AMD Qwen3 path. Do not maintain the CPU-offload workaround; keep the fail-fast guard and use the TP2 GPU optimizer path |
 | Internal proxy intercepts local SGLang health checks | Rollout initialization hangs even though SGLang reports the server is ready | Internal HTTP requests to the node-local SGLang server go through the corporate proxy because the node hostname/IP is missing from `no_proxy` | Add `MASTER_ADDR`, the resolved local hostname/IP, and localhost entries to both `no_proxy` and `NO_PROXY` for the launcher runtime env and child processes |
-| Adam state OOM on MI210 actor rank | First actor update dies on `torch.optim.adam._init_group` with HIP OOM while allocating `exp_avg`/`exp_avg_sq` | A single MI210 actor rank can hold the 4B bf16 model, but lazy Adam state allocation still exceeds device memory during the first optimizer step | Use Megatron CPU optimizer offload with `--optimizer-cpu-offload --optimizer-offload-fraction 1.0 --overlap-cpu-optimizer-d2h-h2d --use-precision-aware-optimizer` |
-| CPU optimizer offload crashes when TE is absent | Actor initialization fails before training with `TypeError: '>=' not supported between instances of 'NoneType' and 'Version'` | Megatron's `is_te_min_version()` assumes `get_te_version()` always returns a version object, but on TE-less ROCm systems it returns `None` | Patch the local Megatron checkout so `is_te_min_version()` returns `False` when Transformer Engine is not installed |
+| Adam state OOM on MI210 actor rank | First actor update dies on `torch.optim.adam._init_group` with HIP OOM while allocating `exp_avg`/`exp_avg_sq` | A single MI210 actor rank can hold the 4B bf16 model, but lazy Adam state allocation still exceeds device memory during the first optimizer step | Do not switch to CPU optimizer offload. Use the GPU optimizer path with enough actor GPUs, currently TP2 plus sequence parallel on two actor GPUs |
+| CPU optimizer offload crashes when TE is absent | Historical CPU-offload actor initialization failed before training with `TypeError: '>=' not supported between instances of 'NoneType' and 'Version'` | Megatron's `is_te_min_version()` assumes `get_te_version()` always returns a version object, but on TE-less ROCm systems it returns `None` | Current AMD Qwen3 launches should not enter CPU optimizer offload. If this appears, remove `--optimizer-cpu-offload` and use the TP2 GPU optimizer path |
 | SGLang transformers backend discovers local Megatron-LM | The actor dies during rollout startup with a generic Ray `ActorDiedError`, while the SGLang child logs Megatron-FSDP / optimizer warnings from the local `Megatron-LM` checkout | The rollout-side SGLang subprocess inherits `PYTHONPATH`, finds the local Megatron checkout, and switches into Megatron-specific code paths even though the launcher requested the plain `transformers` backend | When spawning SGLang with `model_impl=transformers`, temporarily strip `Megatron-LM` entries from the child `PYTHONPATH` so the SGLang server cannot discover the local Megatron checkout |
 | ROCm launcher inherits stale non-ROCm Megatron path | A run from `Relax-rocm-megatron` still logs imports from `/vast/users/qirong.ho/erland/Python_project/Megatron-LM` instead of `ROCm-Megatron-LM` | The launcher set `MEGATRON_DIR` but built `PYTHONPATH` from the inherited shell value, so an older `Megatron-LM` entry could remain ahead of the ROCm fork in Ray's runtime env | Make `amd_qwen3_4b_2gpu_e2e.sh` construct `PYTHONPATH` explicitly as SGLang, `${MEGATRON_DIR}`, then `${ROOT_DIR}` instead of appending inherited `PYTHONPATH` |
 | SGLang transformers import fails on optional Quark `aiter` path | Rollout startup fails inside `SGLangEngine.init()` with `Exception: Server process terminated unexpectedly`, and the scheduler traceback ends in `ValueError: Model architectures ['TransformersForCausalLM'] are not supported for now` | The generic SGLang transformers model class never registers because importing `sglang.srt.models.transformers` pulls in `ep_moe.layer`, which hard-imports Quark MXFP4 MoE schemes that require the missing optional `aiter` package | Patch the local SGLang checkout so the Quark MXFP4 MoE import is optional in `ep_moe.layer`, log that Quark support is unavailable, and allow the generic transformers backend to load without `aiter` |
 | Actor dies during sync `set_rollout_manager` startup on MI210 | The run gets through actor init, rollout init, RolloutManager creation, and SGLang server launch, then dies when the controller calls `Actor.set_rollout_manager`, with the nested failure at `MegatronTrainRayActor.set_rollout_manager` | The sync training path was still doing fully-async rollout-manager setup: it made extra Ray round-trips to `set_train_parallel_config()` and `get_weight_sync_lock()` even though those fields are only used by the fully-async DCS weight-sync path | In `TrainRayActor.set_rollout_manager()`, return early for non-`fully_async` runs after storing the rollout-manager handle, and keep the extra rollout-manager wiring only for the fully-async path |
-| Actor dies during `set_rollout_manager` after offloaded init sleep | The run survives actor init and rollout bring-up but the actor still dies on the first post-init rollout-manager RPC when CPU optimizer offload is enabled | The offloaded Megatron actor was going to sleep at the end of `_init()` even for the sync path, so the first `set_rollout_manager` call had to wake a partially torn-down process-group state during bootstrap | Track whether the actor is actually sleeping, only wake it when needed, and keep the sync offloaded actor resident until rollout-manager hookup is complete |
+| Actor dies during `set_rollout_manager` after offloaded init sleep | Historical CPU-offload runs survived actor init and rollout bring-up but died on the first post-init rollout-manager RPC | The offloaded Megatron actor went to sleep at the end of `_init()` even for the sync path, so the first `set_rollout_manager` call woke a partially torn-down process-group state during bootstrap | Current AMD Qwen3 launches should not enter CPU optimizer offload. If this appears, remove the offload flags before debugging rollout-manager wiring |
 | Ray GCS times out during late rollout startup on single-node MI210 | The run clears actor initialization, reaches rollout creation, then the driver dies with `Failed to connect to GCS within 60 seconds` and Serve reports `Deadline Exceeded` while fetching resource usage | The single-node head was overprovisioned at 128 CPUs for a 2-GPU job and was generating excessive Ray control-plane traffic; internal actors were also still publishing task-event metadata the run did not need | Reduce the head to a modest CPU count, disable task events on internal Relax Ray actors/managers, and increase GCS reconnect timeouts so short control-plane stalls do not kill the whole job |
 | Ray keepalive watchdog timeout during SGLang startup | The rollout replica hangs in `SGLangEngine.init()`, then Serve reports `ActorUnavailableError ... keepalive watchdog timeout rpc_code: 14`, and only later does the controller notice other actors died | The actual failure surface is a Ray control-plane stall during the long SGLang bring-up window: worker backlog reporting grows large enough that actor RPCs trip the keepalive watchdog before rollout initialization finishes | Disable periodic task-event reporting with `RAY_task_events_report_interval_ms=0`, widen Ray gRPC client keepalive time/timeout, and propagate those env vars into the job runtime so the driver, Serve replicas, and workers all use the same control-plane settings |
 | SGLang overlap scheduler future-token kernel fails on ROCm | SGLang loads weights, allocates KV cache, starts Uvicorn, then the scheduler dies in `resolve_future_token_ids_cuda` with `CUDA error: no ROCm-capable device is detected` | The overlap scheduler uses the SGLang future-token JIT kernel path, which is not validated on this MI210/HIP launcher path | Add `--sglang-disable-overlap-schedule` to the AMD launcher and rerun the foreground validation |
 | SGLang JIT KV-cache store kernel fails on ROCm | With overlap scheduling disabled, SGLang reaches the normal scheduler path and then dies in `kvcache.cuh:196` from `store_cache` with `CUDA error: no ROCm-capable device is detected` | SGLang's memory pool treats HIP as eligible for the optimized CUDA JIT KV-cache store path; the module can load, but the launch path is not usable on this MI210/HIP stack | Keep the Relax-side HIP runtime patch in `relax/backends/sglang/sglang_engine.py` enabled so `can_use_store_cache()` returns `False` on ROCm and SGLang uses its tensor assignment fallback |
 | SGLang JIT clamp-position kernel fails on ROCm | After rollout starts decoding, SGLang scheduler dies in `clamp_position.cuh:46` with `CUDA error: no ROCm-capable device is detected`, and the router returns 503 `no_available_workers` | SGLang selects the JIT `clamp_position_cuda` helper on HIP even though the JIT launch path is not usable on this MI210 stack | Keep the Relax-side HIP runtime patch enabled so `sglang.srt.model_executor.forward_batch_info.clamp_position` is redirected to SGLang's `_clamp_position_native` torch fallback |
+| ROCm Megatron role requests CPU optimizer offload | Megatron setup reaches optimizer creation with `optimizer_cpu_offload=True`, or a launcher reintroduces `--optimizer-cpu-offload` | CPU optimizer offload on this MI210 Megatron path repeatedly crashed in `HybridDeviceOptimizer` and hides the real GPU fit problem | Do not use CPU optimizer offload for the current AMD Qwen3 path. Keep the fail-fast guard in `optimizer_utils.py`; fit the actor with GPU optimizer state by using multiple actor GPUs, TP2, and sequence parallel |
+| TE-less Torch Norm rejects TP sequence parallel | TP2 actor startup fails with `AssertionError: sequence parallel not supported by torch LayerNorm` after enabling `--sequence-parallel` | Megatron requires sequence parallelism with tensor parallelism for this model, but the TE/Apex-free Torch norm fallback rejects the same flag | Keep the Relax runtime patch for Megatron `WrappedTorchNorm` on HIP. It builds the Torch norm with a local non-sequence-parallel config and then marks the returned norm parameters as sequence-parallel |
 | Megatron actor waits on HF checkpoint page-cache warmup | The actor initializes, logs `[local_rank=1] waiting for local_rank=0 to warm HF checkpoint page cache`, and Serve keeps warning that the Actor replica is still initializing | Ray can assign the single Megatron actor to physical GPU/local rank 1 while SGLang owns GPU 0; the actor is distributed rank 0/world size 1, so no Megatron local rank 0 process exists to write the warmup marker | Treat a distributed world-size-1 Megatron process as the page-cache warmup leader even when `LOCAL_RANK != 0`; keep the marker/flock path for duplicate-job protection |
 | `relax.distributed.ray.rollout` imports SGLang/Megatron too early | The rollout replica logs Megatron and SGLang warnings before any engine launch happens, and the `transformers` SGLang backend starts from an already-contaminated interpreter | Importing `sglang.srt.constants` from `rollout.py` triggers `sglang.__init__`, and `SGLangEngine` previously imported the checkpoint-service client at module scope, which pulled Megatron-backed DCS modules immediately | Mirror the small SGLang constants locally in `rollout.py` and make the checkpoint-service client import lazy in `sglang_engine.py` so importing the rollout stack does not import `sglang` or `megatron` |
 | Module-import Megatron blocker kills `SGLangEngine` actor creation | `RolloutManager` dies while creating `SGLangEngine`, and Ray reports `ActorDiedError ... SGLangEngine.__init__()` with `Blocked import of megatron for SGLang transformers backend` | A module-import-time `MetaPathFinder` blocker runs before Ray has finished computing actor creation task inputs, so actor creation itself trips the blocker | At module import time, only prune local Megatron paths and editable import hooks. Install the stronger `megatron` import blocker later inside `SGLangEngine.__init__` and the spawned SGLang subprocess path |
@@ -42,15 +44,82 @@ This file documents error patterns encountered and their solutions.
 | `core.registry` imports Megatron through the advantages service | `HealthStatus`, `Rollout`, or `RolloutManager` still emit Megatron/TE warnings even after the DCS package leak is fixed, and plain `import relax.core.controller` or `import relax.core.registry` already pulls in Megatron | `relax.core.registry` eagerly imports `relax.components.advantages`, and `advantages.py` was importing `megatron.core.mpu` plus `relax.backends.megatron.loss` at module scope | Move those Megatron imports inside the PPO and OPD branches in `Advantages.compute_advantages_and_returns()` so importing the controller/registry stack stays lightweight |
 | Rollout-side SGLang bootstrap starts before Megatron isolation is active | `Rollout` and `RolloutManager` still emit Megatron/TE warnings even after the controller and DCS imports are cleaned, especially when loading `relax.engine.rollout.sglang_rollout` or preparing SGLang helpers | The stronger Megatron isolation was only installed inside `SGLangEngine`, but `RolloutManager.__init__` loads the rollout function and rollout-side SGLang helpers earlier, and the Serve `Rollout` replica also starts with the unfiltered `Megatron-LM` checkout on `PYTHONPATH` | Install the same transformers-mode process isolation at the start of `Rollout.__init__` and `RolloutManager.__init__`, before loading rollout functions or creating rollout engines |
 | Phase-1 timeout leaves a stale Ray training job behind | A `timeout 300s bash ./amd_qwen3_4b_2gpu_e2e.sh` validation appears to finish, but `python3 -m relax.entrypoints.train` and Ray workers remain alive and contaminate the next run with stale workers and mixed job state | The external shell timeout kills the launcher shell, not the full Ray job tree, so the validation cluster can keep running in the background unless it is explicitly stopped | After any timed-out foreground validation, explicitly run `ray stop --force` and kill leftover Relax train/launcher processes before starting the production tmux run |
-| ROCm torch-dist checkpoint save dies after writing `common.pt` | Older MI210 runs reached `saving checkpoint at iteration N`, created only `iter_*/common.pt`, then the `MegatronTrainRayActor` died with Ray EOF / `SYSTEM_ERROR` and no Python traceback | The active Megatron torch-dist path needed the ROCm hook to patch the torch-strategy writer alias, avoid the pre-MCore 0.14 metadata path on PyTorch >= 2.6, disable PyTorch DCP's extra sharded-tensor flatten traversal, and stream GPU tensors to CPU one tensor at a time | Keep checkpointing enabled with the default `CKPT_FORMAT=torch_dist`. Verify logs contain `flatten_sharded_tensors=False`, `thread-local checkpoint results queue`, and `ROCm streaming checkpoint write`; the validated run saved `.metadata`, two `.distcp` shards, `common.pt`, `metadata.json`, and `latest_checkpointed_iteration.txt` |
+| ROCm torch-dist checkpoint save dies after writing `common.pt` | Older MI210 runs reached `saving checkpoint at iteration N`, created only `iter_*/common.pt`, then the `MegatronTrainRayActor` died with Ray EOF / `SYSTEM_ERROR` and no Python traceback | The active Megatron torch-dist path needed the ROCm hook to patch the torch-strategy writer alias, avoid the pre-MCore 0.14 metadata path on PyTorch >= 2.6, disable PyTorch DCP's extra sharded-tensor flatten traversal, and stream GPU tensors to CPU one tensor at a time | Keep checkpointing enabled with the default `CKPT_FORMAT=torch_dist`. Verify logs contain `flatten_sharded_tensors=False`, `thread-local checkpoint results queue`, and `ROCm streaming checkpoint write`; validated runs save `.metadata`, `.distcp` shards, `common.pt`, `metadata.json`, and `latest_checkpointed_iteration.txt` |
 | ROCm lazy torch-dist writer fails with `cannot unpack non-iterable WriteItem object` | The checkpoint save logs `ROCm lazy checkpoint prepare`, then fails in Python before writing bucket contents | Lazy DCP preparation stores raw `WriteItem` objects, but the streaming writer still treated bucket entries as already-resolved `(write_item, tensor)` pairs | Pass the planner and lazy marker through `get_save_function_and_args()`, avoid unpacking lazy entries in pre-write logging, and call `planner.resolve_data(write_item)` inside `_write_streaming_bucket()` one item at a time |
 | Existing checkpoint directory does not resume when used only as `SAVE_DIR` | A launch pointed at an existing `SAVE_DIR` starts `Actor initialized with starting step 0` and begins rollout 0 again | `SAVE_DIR` only maps to Megatron `--save`; fresh-launch resume requires Megatron `--load`, and Relax recovery helpers do not infer `--load` from the save path | Set `LOAD_DIR=/path/to/checkpoint` when resuming. The AMD launcher appends `--load "${LOAD_DIR}"` only when `LOAD_DIR` is non-empty |
+| Qwen3 mock overnight judged healthy before first checkpoint | The run starts, logs rollout/training steps, or reaches W&B system metrics, but no production checkpoint has been saved yet | With `SAVE_INTERVAL=20`, the first durable production checkpoint is zero-based iteration 19, so early step progress does not prove checkpointing or optimizer-state save | Wait for iteration 19, then audit `latest_checkpointed_iteration.txt`, `.metadata` optimizer keys, and `dataset/global_dataset_state_dict_19.pt` before reporting checkpoint health |
+| Mock Qwen3 SGLang smoke path wastes KV cache | A mock model reaches SGLang KV-cache sizing and allocates much more cache than the short e2e validation needs | SGLang derives token capacity from available memory and per-token KV size, while the mock launcher only needs enough room to exercise rollout/training/checkpointing | Cap the smoke path explicitly with `SGLANG_MEM_FRACTION_STATIC`, `SGLANG_MAX_TOTAL_TOKENS`, and `SGLANG_MAX_RUNNING_REQUESTS`. The validated mock Qwen3-0.5B run used `0.2`, `65536`, and `128` respectively |
+| Historical Qwen3-1M mock provider keeps default `kv_channels` | The deprecated 1M mock with `hidden_size=8` initializes a provider with `kv_channels=128`, causing incompatible attention dimensions | Megatron-Bridge's Qwen3 provider default is not derived from that tiny Relax model config unless `kv_channels` is propagated as an explicit provider override | The standing mock is now Qwen3-0.5B with `hidden_size=1024` and `kv_channels=128`. Keep the provider override allowlist because it protects custom mock configs, but do not treat the 1M asset as the target scale |
 | PyTorch 2.6 rejects Megatron `common.pt` during `torch_dist` resume | Explicit `LOAD_DIR` reaches `_load_global_dist_base_checkpoint`, then fails with `_pickle.UnpicklingError` and `Unsupported global: GLOBAL omegaconf.dictconfig.DictConfig` | PyTorch 2.6 changed `torch.load` to default `weights_only=True`; Megatron's `common.pt` contains trusted non-tensor metadata | Patch Megatron's `TorchCommonLoadStrategy.load_common` through the Relax ROCm checkpoint hook so HIP loads local trusted `common.pt` with `weights_only=False` |
-| ROCm HDO resume fails with missing `init_state_fn` | Explicit `LOAD_DIR` reaches `FP32Optimizer.sharded_state_dict(is_loading=True)` and raises `TypeError: 'NoneType' object is not callable` | The ROCm CPU-offload path wraps `HybridDeviceOptimizer` in `FP32Optimizer`, but Megatron created that wrapper without the Adam-state initializer needed during checkpoint load | Keep `install_hybrid_device_optimizer_init_state_fn()` active for single-rank HIP actor CPU offload; it installs a fail-loud Adam initializer before Megatron loads optimizer state |
-| ROCm HDO optimizer restore dies after `checkpoint version 3.0` | Resume passes common-state load and prints `checkpoint version 3.0`, then the Ray actor exits with `SYSTEM_ERROR` before reporting its restored step | PyTorch's generic optimizer load path maps checkpoint state onto HDO public param groups, which are live GPU model params, instead of HDO inner CPU-offload params | Keep the Relax ROCm HDO load patch enabled so `FP32Optimizer.load_state_dict` loads state onto inner params, syncs HDO sub-optimizer state, and restores public param groups afterward |
+| ROCm HDO resume fails with missing `init_state_fn` | Historical explicit `LOAD_DIR` CPU-offload resume reached `FP32Optimizer.sharded_state_dict(is_loading=True)` and raised `TypeError: 'NoneType' object is not callable` | The ROCm CPU-offload path wraps `HybridDeviceOptimizer` in `FP32Optimizer`, but Megatron created that wrapper without the Adam-state initializer needed during checkpoint load | Treat this as historical CPU-offload context only. Current ROCm actor launches should fail fast if CPU optimizer offload is requested |
+| ROCm HDO optimizer restore dies after `checkpoint version 3.0` | Historical CPU-offload resume passed common-state load and printed `checkpoint version 3.0`, then the Ray actor exited with `SYSTEM_ERROR` before reporting its restored step | PyTorch's generic optimizer load path maps checkpoint state onto HDO public param groups, which are live GPU model params, instead of HDO inner CPU-offload params | Treat this as historical CPU-offload context only. Current checkpoint validation should use the TP2 GPU optimizer path with optimizer state enabled |
 | Megatron scheduler rejects a resume with changed `NUM_ROLLOUT` | Explicit resume loads optimizer state, then fails while loading `opt_param_scheduler` with `class input value ... and checkpointvalue ... for total number of iterations do not match` | `NUM_ROLLOUT`, rollout batch size, or samples per prompt changed the current LR/WD schedule horizon relative to the checkpoint | Keep `SCHEDULER_RESUME_POLICY=strict` by default. For intentional continuation with a new horizon use `SCHEDULER_RESUME_POLICY=override`; to keep checkpoint scheduler values use `SCHEDULER_RESUME_POLICY=checkpoint` |
 | W&B primary run shows only system metrics | The main run link opens, but train/rollout charts are missing while logs show `POST /metrics/log_metrics_batch 200` and `Reported ... metrics for step N` | `MetricsService` created its own W&B run named `metrics-service` instead of joining the primary run id, and that Serve replica could be stopped before the side run flushed | Initialize MetricsService through the same secondary W&B path as actor/rollout workers when `wandb_run_id` is present, and finish W&B from MetricsService shutdown so queued metrics flush; verify the service no longer logs `setting up run <new-id>` |
+| W&B primary run is system-only after an actor dies at step 0 | Logs show `POST /metrics/log_metrics_batch 200` and rollout metrics, but W&B still has only system charts; later the actor reports `ActorDiedError` or Ray `SYSTEM_ERROR` before any `Reported ... metrics for step 0` line | MetricsService accepted the metrics but buffered them until `flush_metrics()` at the end of the actor train step; the actor crash prevented `/metrics/report_step` from running | For namespaced step metrics ending in `/step`, report immediately after `log_metrics_batch` so W&B receives rollout/train metrics even if a later actor failure prevents the normal end-of-step flush. When payloads already contain `train/step` or `rollout/step`, log to W&B without forcing the global `step=` argument so same-step batches are not dropped |
+| Four-GPU AMD launcher still starts a two-GPU or single-rank actor topology | Ray starts with fewer GPUs than expected, rollout placement waits for resources, or a 4-GPU command still logs `RESOURCE_JSON={"actor": [1, 1], "rollout": [1, 1]}` | The older `amd_qwen3_4b_2gpu_e2e.sh` launcher hardcoded Ray as two GPUs, `--num-gpus-per-node 2`, and one rollout GPU; the current Qwen3 path also needs two actor GPUs for TP2 GPU optimizer state | Use the environment-driven launcher topology: set `HIP_VISIBLE_DEVICES=0,1,2,3 RAY_NUM_GPUS=4 NUM_GPUS_PER_NODE=4 ACTOR_RESOURCE_GPUS=2 ROLLOUT_RESOURCE_GPUS=2 TENSOR_MODEL_PARALLEL_SIZE=2 GPU_LABEL=4gpu-tp2`. This keeps CPU optimizer offload disabled while fitting GPU optimizer state |
 | Step-0 `dapo` reward stalls inside the Ray reward-worker pool | The run reaches `Actor training step 0/200` and rollout generation, but the Megatron actor only logs `start to get rollout_id: 0 data from transfer queue for train with mcore.` and then dies much later with `ActorDiedError`, while `RolloutManager` only logs `RewardExecutor: created 16 RewardWorker actors` before a long silent gap | `dapo` is a small local string/regex reward, but it was still being dispatched through the generic `RewardWorker` actor pool. On the MI210 step-0 path, that turned a cheap per-sample reward into extra Ray actor RPCs and left rollout blocked before it could transfer `train_0` to the actor | Keep `dapo` on a local in-process path using `asyncio.to_thread` and reserve the Ray reward-worker pool for the heavier/thread-unsafe reward types. Revalidate from a clean Ray cluster so the 5-minute timeout window no longer wedges at `RewardExecutor: created ... RewardWorker actors` |
+
+## Qwen3 mock overnight judged healthy before first checkpoint
+
+**Added:** 2026-05-31
+**Domain:** research
+
+### Symptom
+
+A 0.5B Qwen3 mock overnight run starts correctly, occupies all four GPUs, logs
+rollout/training progress, and may show W&B system charts, but no durable
+production checkpoint has been written yet.
+
+```text
+Actor training completed step 1/1000
+```
+
+This is not enough evidence for the overnight regression because the production
+save interval may not have been reached.
+
+### Cause
+
+The validated overnight configuration uses:
+
+```bash
+SAVE_INTERVAL=20
+CKPT_FORMAT=torch_dist
+NO_SAVE_OPTIM=0
+```
+
+Megatron uses zero-based iteration numbering. With `SAVE_INTERVAL=20`, the
+first real production checkpoint is iteration 19, not step 0 or step 1.
+Before that boundary, the run has not proven checkpoint writer health,
+optimizer-state save, or dataset-state save.
+
+### Solution
+
+Wait for the first save boundary and audit the checkpoint:
+
+```bash
+SAVE_DIR=/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-Mock-0.5B_mcore_4gpu-20260531_161442
+cat "$SAVE_DIR/latest_checkpointed_iteration.txt"
+grep -a "optimizer.state.exp_avg" "$SAVE_DIR/iter_0000019/.metadata" | head
+grep -a "optimizer.state.exp_avg_sq" "$SAVE_DIR/iter_0000019/.metadata" | head
+test -f "$SAVE_DIR/dataset/global_dataset_state_dict_19.pt"
+```
+
+The validated run saved iteration 19 in `torch_dist` format and its metadata
+contained optimizer moment keys plus fp32 parameter keys.
+
+### Prevention
+
+For long mock regressions, do not report checkpoint health until:
+
+- `latest_checkpointed_iteration.txt` exists and is at least `19`;
+- `.metadata` for the latest iteration contains optimizer state keys;
+- the matching `dataset/global_dataset_state_dict_<iteration>.pt` file exists;
+- W&B contains application metrics, not only system charts.
+
+### Related
+
+- Skill: `qwen3-mock-0-5b-rocm-e2e`
+- Similar issue: `rocm-megatron-tp2-checkpoint-resume`
 
 ## Megatron scheduler rejects a resume with changed `NUM_ROLLOUT`
 
@@ -109,6 +178,9 @@ and verify the launched command includes `--override-opt-param-scheduler`.
 
 **Added:** 2026-05-30
 **Domain:** research
+**Current status:** Historical CPU-offload path. The current AMD Qwen3 path
+rejects ROCm actor CPU optimizer offload and validates checkpointing on the TP2
+GPU optimizer path instead.
 
 ### Symptom
 
@@ -137,12 +209,10 @@ immediately after Megatron reports `checkpoint version 3.0`.
 
 ### Solution
 
-Keep the Relax-side HDO load patch in
-`relax/backends/megatron/optimizer_utils.py`. For single-rank HIP actor CPU
-offload, `install_hybrid_device_optimizer_init_state_fn()` now also patches the
-`FP32Optimizer.load_state_dict` method so checkpoint state loads onto HDO inner
-params, then synchronizes the HDO sub-optimizers and restores the public param
-groups.
+This was the historical CPU-offload fix. It should not be used as the current
+AMD Qwen3 solution. Current launches should fail fast if
+`optimizer_cpu_offload=True` and should validate checkpoint save/resume with the
+TP2 GPU optimizer path.
 
 The validated success signature is:
 
@@ -158,15 +228,16 @@ Job 'raysubmit_KiRTCAx7v8RCU9L6' succeeded
 
 ### Prevention
 
-Do not work around this by disabling optimizer checkpoint save/load. The
-validated path uses `NO_SAVE_OPTIM=0` and keeps Megatron `torch_dist`
-optimizer state enabled. If this boundary regresses, inspect HDO inner-param
-state placement before changing checkpoint intervals or rollout logic.
+Do not work around optimizer restore problems by disabling optimizer
+checkpoint save/load. The current validation still uses `NO_SAVE_OPTIM=0`, but
+it should do so on the GPU optimizer path rather than HDO CPU offload.
 
 ## ROCm HDO resume fails with missing `init_state_fn`
 
 **Added:** 2026-05-30
 **Domain:** research
+**Current status:** Historical CPU-offload path. The current AMD Qwen3 path
+rejects ROCm actor CPU optimizer offload before this boundary.
 
 ### Symptom
 
@@ -191,27 +262,15 @@ and `FP32Optimizer` calls the missing initializer.
 
 ### Solution
 
-Install the Relax-side HDO initializer after optimizer construction:
-
-```python
-install_hybrid_device_optimizer_init_state_fn(optimizer, args, role)
-```
-
-The initializer is intentionally narrow: actor role only, single data-parallel
-rank, HIP runtime, CPU optimizer offload enabled, and Adam optimizer only. For
-non-Adam optimizers it fails loudly instead of inventing incompatible state.
+This was the historical CPU-offload fix. Current launches should not install an
+HDO initializer from Relax; they should remove CPU optimizer offload and use the
+TP2 GPU optimizer path.
 
 ### Prevention
 
-Resume tests must grep for:
-
-```text
-Installed HybridDeviceOptimizer Adam-state initializer and load patch for ROCm checkpoint restore
-Initialized 290 HybridDeviceOptimizer Adam states for ROCm checkpoint restore
-```
-
-If these markers are absent on the MI210 single-rank HDO path, expect resume to
-fail before the actor reports the restored step.
+Current resume tests should instead grep for `optimizer_cpu_offload False` and
+verify Megatron reports checkpoint optimizer state restore/save on the GPU
+optimizer path.
 
 ## PyTorch 2.6 rejects Megatron `common.pt` during `torch_dist` resume
 
@@ -556,6 +615,8 @@ than moving allocation earlier.
 
 **Added:** 2026-04-24
 **Domain:** research
+**Current status:** Historical CPU-offload path. The current AMD Qwen3 path
+rejects CPU optimizer offload and uses TP2 GPU optimizer state.
 
 ### Symptom
 
@@ -582,9 +643,9 @@ AssertionError
 
 ### Cause
 
-The single-rank MI210 path needs CPU optimizer offload to fit, but the default
-Megatron mixed-precision optimizer stack keeps trying to widen or validate the
-path as fp32:
+The historical single-rank MI210 path used CPU optimizer offload to fit, but
+the default Megatron mixed-precision optimizer stack kept trying to widen or
+validate the path as fp32:
 
 1. `HybridDeviceOptimizer` can be built over fp32 main params instead of the
    bf16 model params, making the offloaded CPU AdamW state too large and slow.
@@ -596,17 +657,9 @@ path as fp32:
 
 ### Solution
 
-1. In the Relax actor path, only for single-rank ROCm CPU offload, set the
-   optimizer config to avoid the fp32/bf16 mixed wrapper fields that rebuild HDO
-   over fp32 main params.
-2. Keep `refresh_hybrid_device_optimizer_param_groups()` from rebuilding an HDO
-   instance wrapped by `FP32Optimizer`.
-3. In the local ROCm Megatron checkout, keep HDO CPU copies in bf16 when the
-   safe path is unpinned and non-overlapped.
-4. In `FP32Optimizer.prepare_grads()`, cast `main_grad` to the target parameter
-   dtype before assigning `param.grad`.
-5. In `clip_grad_by_total_norm_fp32()`, accept CUDA bf16 grads in addition to
-   CUDA fp32 grads.
+This historical workaround is superseded. The current solution is to reject CPU
+optimizer offload and fit the actor by assigning multiple GPUs to the actor,
+using TP2 and sequence parallel, and keeping Adam state on GPU.
 
 The validation log `log/amd-qwen3-4b-2gpu-20260424_094405.log` confirms this
 path completes multiple actor optimizer steps on the 2-GPU MI210 foreground
@@ -614,9 +667,9 @@ run.
 
 ### Prevention
 
-When debugging ROCm CPU offload, inspect the actual CPU-copy dtype in HDO logs
-or direct smokes. A launcher flag can look correct while Megatron's optimizer
-wrappers have already rebuilt the offload path around fp32 main params.
+When debugging current AMD Qwen3 runs, seeing HDO logs means the launcher has
+regressed into CPU optimizer offload. Remove that path before changing rollout
+or checkpointing.
 
 ### Related
 
@@ -628,7 +681,7 @@ wrappers have already rebuilt the offload path around fp32 main params.
 - Tests: `tests/utils/test_megatron_model.py`
 - Experiment log: `references/experiment-log.md`
 
-## Disabling CPU optimizer offload is a valid MI210 diagnostic branch
+## Disable CPU optimizer offload for the AMD Qwen3 path
 
 **Added:** 2026-04-21
 **Domain:** research
@@ -655,17 +708,16 @@ on the single-rank MI210 actor path.
 1. Remove `--optimizer-cpu-offload`, `--optimizer-offload-fraction`,
    `--overlap-cpu-optimizer-d2h-h2d`, and
    `--use-precision-aware-optimizer` from the AMD launcher.
-2. Re-run the clean 5-minute foreground gate first.
-3. Use the result to classify the next boundary:
-   - if the actor now dies with HIP OOM, then CPU offload was required for fit
-   - if the actor gets past `optimizer.step()`, then CPU offload was the real
-     bottleneck
+2. Allocate enough actor GPUs for GPU optimizer state. The current validated
+   layout uses two actor GPUs, TP2, and sequence parallel.
+3. Keep checkpoint optimizer state enabled with `NO_SAVE_OPTIM=0`.
 
 ### Prevention
 
 When a run consistently reaches real step-0 training and then dies inside
-`HybridDeviceOptimizer`, stop broad debugging and branch the launcher into a
-no-offload diagnostic run before changing more Ray or rollout code.
+`HybridDeviceOptimizer`, the launcher has regressed into the old CPU offload
+path. Remove the offload flags and use the GPU optimizer topology before
+changing Ray or rollout code.
 
 ### Related
 

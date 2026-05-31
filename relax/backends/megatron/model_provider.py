@@ -8,6 +8,7 @@ import os
 import pickle
 import re
 from contextlib import nullcontext
+from copy import copy
 from typing import Any, Literal
 
 import torch
@@ -28,6 +29,75 @@ from relax.utils.misc import load_function
 
 
 logger = get_logger(__name__)
+_TORCH_NORM_SEQUENCE_PARALLEL_PATCHED = False
+
+
+def patch_torch_norm_sequence_parallel_for_rocm() -> None:
+    """Allow Megatron's TE-less torch norm path to run with sequence
+    parallelism on ROCm.
+
+    Megatron requires sequence parallelism when tensor parallelism is enabled,
+    but its ``WrappedTorchNorm`` fallback rejects sequence parallelism when TE
+    and Apex are unavailable. Torch LayerNorm/RMSNorm operate over the hidden
+    dimension, so they can run on sequence-parallel shards as long as their
+    parameters are marked for sequence-parallel gradient handling.
+    """
+
+    global _TORCH_NORM_SEQUENCE_PARALLEL_PATCHED
+    if _TORCH_NORM_SEQUENCE_PARALLEL_PATCHED or torch.version.hip is None:
+        return
+
+    from megatron.core.transformer import torch_norm
+
+    wrapped_torch_norm = torch_norm.WrappedTorchNorm
+    if getattr(wrapped_torch_norm, "_relax_rocm_sequence_parallel_patched", False):
+        _TORCH_NORM_SEQUENCE_PARALLEL_PATCHED = True
+        return
+
+    original_new = wrapped_torch_norm.__new__
+
+    def _relax_new(
+        cls,
+        config: TransformerConfig,
+        hidden_size: int,
+        eps: float = 1e-5,
+        persist_layer_norm: bool = False,
+        zero_centered_gamma: bool = False,
+        normalization: str = "LayerNorm",
+    ):
+        if not getattr(config, "sequence_parallel", False):
+            return original_new(
+                cls,
+                config,
+                hidden_size,
+                eps=eps,
+                persist_layer_norm=persist_layer_norm,
+                zero_centered_gamma=zero_centered_gamma,
+                normalization=normalization,
+            )
+
+        local_config = copy(config)
+        local_config.sequence_parallel = False
+        norm = original_new(
+            cls,
+            local_config,
+            hidden_size,
+            eps=eps,
+            persist_layer_norm=persist_layer_norm,
+            zero_centered_gamma=zero_centered_gamma,
+            normalization=normalization,
+        )
+        norm.sequence_parallel = True
+        if getattr(norm, "weight", None) is not None:
+            setattr(norm.weight, "sequence_parallel", True)
+        if getattr(norm, "bias", None) is not None:
+            setattr(norm.bias, "sequence_parallel", True)
+        return norm
+
+    wrapped_torch_norm.__new__ = staticmethod(_relax_new)
+    wrapped_torch_norm._relax_rocm_sequence_parallel_patched = True
+    _TORCH_NORM_SEQUENCE_PARALLEL_PATCHED = True
+    logger.info("Patched Megatron WrappedTorchNorm for ROCm sequence-parallel torch norms")
 
 
 def _make_json_safe(value: Any, seen: set[int] | None = None) -> Any:
@@ -287,6 +357,9 @@ def get_model_provider_func(
             # Allow CLI to override layer count / MoE frequency for layer-reduced training
             "num_layers",
             "moe_layer_freq",
+            # Qwen3 mock/debug checkpoints may keep the production tokenizer
+            # but shrink hidden size and head dimension aggressively.
+            "kv_channels",
             # Kimi K2 / MLA / MoE override surface — required because published K2 configs
             # declare DeepseekV3ForCausalLM and route through DeepSeekV3Bridge, which has
             # different defaults than what slime's K2 launch scripts assume.

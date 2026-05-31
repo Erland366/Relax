@@ -24,6 +24,11 @@ metadata:
 
 This skill captures the practical bring-up sequence that moved Relax on MI210 from failing during environment and startup work into a real end-to-end execution path. It is specifically about ROCm compatibility across Relax, SGLang, Megatron, and Ray Serve, and it records the concrete settings that advanced the run boundary on `gfx90a`.
 
+Current AMD Qwen3-4B e2e validation uses the TP2 GPU optimizer path, not CPU
+optimizer offload: four visible GPUs, two actor GPUs, two rollout GPUs,
+`--tensor-model-parallel-size 2`, `--sequence-parallel`, `CKPT_FORMAT=torch_dist`,
+and `NO_SAVE_OPTIM=0`.
+
 ## When to Apply
 
 Use this knowledge when:
@@ -38,10 +43,10 @@ Do NOT use when:
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| Hardware | 2x MI210 (`gfx90a`) | ROCm bring-up target |
-| Cleared failure boundaries | Proxy stall, PPO HIP compile helper crash, Adam-state OOM, TE-version crash, several rollout/control-plane Megatron import leaks | All were reproduced and either removed or narrowed in the MI210 pass |
-| Latest validated state | Explicit `LOAD_DIR` resume from a live `torch_dist` checkpoint completed optimizer restore, post-resume actor training step 2/3, and a new iteration-2 `torch_dist` save with optimizer state enabled | Ray job `raysubmit_tD6jkVCbk6t7cZ21`; W&B `5fw7cmi1`; save checkpoint `Qwen3-4B_mcore_2gpu-resume-train-override-20260530_135915` |
-| Latest checkpoint boundary | Megatron `torch_dist` save and explicit load now work on ROCm with optimizer state | Save requires the Relax ROCm checkpoint hook; load also requires the trusted `common.pt` loader plus the ROCm HDO Adam-state initializer and inner-param load patch |
+| Hardware | MI210 (`gfx90a`), current validation uses 4 GPUs | Earlier 2-GPU work is historical context |
+| Cleared failure boundaries | Proxy stall, PPO HIP compile helper crash, Adam-state OOM, TE-version crash, SGLang HIP JIT failures, torch_dist save/resume failures, several rollout/control-plane Megatron import leaks | All were reproduced and either removed or narrowed in the MI210 pass |
+| Current validated state | TP2 GPU optimizer path resumed from iteration 99, started at actor step 100, saved iterations 119 and 139, and continued through completed step 154 | W&B `6c3wrymd`; checkpoint dir `Qwen3-4B_mcore_4gpu-tp2-normpatch-overnight-20260530_233548` |
+| Latest checkpoint boundary | Megatron `torch_dist` save and explicit load work on ROCm with optimizer state on the TP2 GPU optimizer path | Save requires the Relax ROCm checkpoint hook; load requires explicit `LOAD_DIR` and trusted `common.pt` loader |
 | Foreground validation exit | `124` | External 300-second checkpoint-enabled smoke timeout before actor checkpoint save; cleanup was required before tmux |
 | Required Megatron checkout | `/vast/users/qirong.ho/erland/Python_project/ROCm-Megatron-LM` | Do not inherit a stale non-ROCm `Megatron-LM` in `PYTHONPATH` |
 | W&B mode | `online` | Logged under `relax-amd` |
@@ -56,18 +61,34 @@ Start by treating ROCm bring-up as a stack-integration problem, not a single pac
 Use these key launcher settings:
 
 ```bash
+HIP_VISIBLE_DEVICES=0,1,2,3
+RAY_NUM_GPUS=4
+NUM_GPUS_PER_NODE=4
+ACTOR_RESOURCE_GPUS=2
+ROLLOUT_RESOURCE_GPUS=2
+TENSOR_MODEL_PARALLEL_SIZE=2
+GPU_LABEL=4gpu-tp2
+SAVE_INTERVAL=20
+CKPT_FORMAT=torch_dist
+NO_SAVE_OPTIM=0
+SCHEDULER_RESUME_POLICY=strict
+```
+
+Keep these Megatron/SGLang flags on the AMD path:
+
+```bash
+--sequence-parallel
 --qkv-format bshd
 --no-masked-softmax-fusion
 --no-rope-fusion
 --sglang-attention-backend triton
 --sglang-sampling-backend pytorch
 --sglang-disable-custom-all-reduce
+--sglang-disable-cuda-graph
 --sglang-disable-overlap-schedule
---optimizer-cpu-offload
---optimizer-offload-fraction 1.0
---overlap-cpu-optimizer-d2h-h2d
---use-precision-aware-optimizer
 ```
+
+Do not add CPU optimizer offload flags for the current Qwen3-4B objective.
 
 ### Step 2: Validate the stack in the same environment that will run the job
 
@@ -91,9 +112,20 @@ MEGATRON_DIR=/vast/users/qirong.ho/erland/Python_project/ROCm-Megatron-LM
 
 On managed clusters, do not assume localhost-only proxy bypass is enough. Add `MASTER_ADDR`, the resolved `MASTER_ADDR`, the hostname, the resolved hostname IP, plus the localhost entries to both `no_proxy` and `NO_PROXY` for the Ray runtime env and any child-process env propagation. If SGLang says it is ready but rollout health checks hang, validate this first.
 
-### Step 4: Use CPU optimizer offload on the single-GPU actor rank
+### Step 4: Use TP2 GPU optimizer state, not CPU optimizer offload
 
-The bf16 model weights fit on one MI210 actor rank, but Adam state allocation did not. On this 2-GPU split layout, treat optimizer-state placement as part of bring-up. CPU offload was required to remove the first-update HIP OOM.
+The bf16 model weights fit on one MI210 actor rank, but Adam state allocation did not. CPU optimizer offload was tried historically, but it repeatedly introduced ROCm HDO crashes and is no longer acceptable for the current AMD Qwen3-4B objective.
+
+The current fit path is to give the actor two GPUs and use tensor parallelism:
+
+```bash
+ACTOR_RESOURCE_GPUS=2
+TENSOR_MODEL_PARALLEL_SIZE=2
+ENABLE_SEQUENCE_PARALLEL=1
+```
+
+Relax should fail loudly if a ROCm Megatron actor requests
+`optimizer_cpu_offload=True` on this path.
 
 ### Step 5: Keep TE absence an expected ROCm configuration
 
@@ -136,11 +168,14 @@ On this stack, several failures that looked like ROCm runtime issues were actual
 
 If a plain interpreter import of a control-plane module already imports `megatron` or `sglang`, fix that import surface first. The MI210 path advanced materially only after converting DCS exports to lazy lookups, moving Megatron imports out of `advantages.py`, and installing transformers-mode isolation before rollout-side function loading.
 
-### Step 9: Verify that downstream Megatron code actually respects the ROCm safety knobs
+### Step 9: Treat CPU-offload debugging as historical context for this run
 
-It is not enough to set `pin_cpu_grads=False` or `pin_cpu_params=False` in Relax. The local Megatron implementation must consume those knobs correctly. On this stack, `HybridDeviceOptimizer` still forced `.pin_memory()` for offloaded parameter copies even after the Relax-side actor path disabled pinned CPU params. Fixing that local Megatron bug was necessary to make the ROCm optimizer safety settings real.
+It is not enough to set `pin_cpu_grads=False` or `pin_cpu_params=False` in Relax. The local Megatron implementation must consume those knobs correctly. On this stack, `HybridDeviceOptimizer` still forced `.pin_memory()` for offloaded parameter copies even after the Relax-side actor path disabled pinned CPU params. Fixing that local Megatron bug was necessary for the old CPU-offload path, but that path is now superseded for the current AMD Qwen3-4B run.
 
-### Step 10: Keep the ROCm CPU-offload fallback conservative until long runs prove otherwise
+Do not re-enable CPU optimizer offload just because those historical patches
+exist. Use them only when intentionally debugging a legacy HDO path.
+
+### Step 10: Keep the ROCm CPU-offload fallback conservative when testing legacy HDO
 
 The MI210 path narrowed the optimizer death to grouped CPU sub-optimizer steps.
 If the actor log dies after:
@@ -156,7 +191,8 @@ params_per_optimizer=1
 ```
 
 before trying new higher-level changes. Grouped CPU sub-optimizers are an
-optimization, not the stability baseline.
+optimization, not the stability baseline. This is legacy guidance; the current
+e2e path should reject CPU optimizer offload entirely.
 
 ### Step 11: Treat repeated completed actor steps as the new foreground gate
 
@@ -221,6 +257,12 @@ steps 0/2 and 1/2, saved `iter_0000000` and `iter_0000001` with `.metadata`,
 two `.distcp` files, `common.pt`, and `metadata.json` per iteration, wrote
 `latest_checkpointed_iteration.txt`, logged `All training steps finished`, and
 Ray reported job `raysubmit_FeKYagrKwzrfrcPU` as succeeded.
+
+The current four-GPU TP2 run extends that proof. It saved checkpoints at
+iterations 19, 39, 59, 79, 99, 119, and 139 with optimizer state enabled, then
+resumed from iteration 99 and continued through completed actor step 154 before
+manual stop. The remaining absolute e2e proof is the final 200-step completion
+and final checkpoint/resume audit.
 
 For fresh-launch resume tests, `SAVE_DIR` is not enough. `SAVE_DIR` maps to
 Megatron `--save`; use `LOAD_DIR=/path/to/checkpoint` to pass `--load`.
@@ -313,8 +355,8 @@ runtime boundaries before assuming the older MI210 recipe still holds. The
 | Qwen weight conversion during sync | Relax expected older layernorm names | Accept current Megatron layernorm aliases in the converter |
 | Packed-sequence attention startup | Plain `DotProductAttention` on ROCm does not support the packed path | Force `bshd` in the AMD launcher |
 | Rollout init hung after SGLang was healthy | Node-local HTTP traffic was routed through the cluster proxy | Include resolved local addresses in `no_proxy` and `NO_PROXY` |
-| First actor update OOMed in Adam state allocation | The single-GPU actor rank could not also hold the optimizer moments on device | Use Megatron CPU optimizer offload on MI210 |
-| CPU offload path crashed before training | Megatron compared a missing TE version as if it were a real version object | Make TE absence return `False` in capability checks |
+| First actor update OOMed in Adam state allocation | The single-GPU actor rank could not also hold the optimizer moments on device | Use the TP2 GPU optimizer path with two actor GPUs and sequence parallel; do not switch to CPU optimizer offload |
+| CPU offload path crashed before training | Megatron compared a missing TE version as if it were a real version object | Treat this as historical context; current AMD Qwen3 launches should reject CPU optimizer offload |
 | Control-plane services emitted Megatron warnings before rollout startup | Package init and registry imports were pulling Megatron in at file scope | Treat package `__init__` and registry imports as bring-up boundaries, not harmless convenience imports |
 | Rollout-side startup still looked contaminated after controller cleanup | Isolation was only installed in `SGLangEngine`, but rollout functions and helpers loaded earlier | Install transformers-mode isolation in `Rollout` and `RolloutManager` before loading rollout functions |
 | Step-0 training wedged at `optimizer.step()` even after Relax disabled pinned CPU params | The local Megatron `HybridDeviceOptimizer` ignored `pin_cpu_params=False` and still forced pinned host parameter copies | Verify downstream optimizer code honors the ROCm safety knobs; patch local Megatron when it does not |
@@ -351,14 +393,15 @@ launcher_flags:
   sglang_sampling_backend: pytorch
   sglang_disable_custom_all_reduce: true
   sglang_disable_overlap_schedule: true
-  save_interval: 100
+  actor_resource_gpus: 2
+  rollout_resource_gpus: 2
+  tensor_model_parallel_size: 2
+  sequence_parallel: true
+  save_interval: 20
   ckpt_format: torch_dist
   no_save_optim: false
   load_dir_for_resume: optional
-  optimizer_cpu_offload: true
-  optimizer_offload_fraction: 1.0
-  overlap_cpu_optimizer_d2h_h2d: true
-  use_precision_aware_optimizer: true
+  optimizer_cpu_offload: false
 runtime_env:
   extend_no_proxy_with:
     - 127.0.0.1
@@ -399,7 +442,15 @@ resume_health_checks:
   hdo_load_state_on_inner_params: true
   scheduler_resume_policy: strict_by_default
 latest_validation:
-  date: 2026-05-30
+  date: 2026-05-31
+  current_topology: "4x MI210, actor=2 GPUs, rollout=2 GPUs, TP=2"
+  current_save_dir: Qwen3-4B_mcore_4gpu-tp2-normpatch-overnight-20260530_233548
+  current_resume_loaded_iteration: 99
+  current_resume_starting_step: 100
+  current_latest_checkpoint_seen: 139
+  current_latest_completed_step_seen: 154
+  current_completion_run: raysubmit_npbaWGLVyyJMxhD8
+  historical_smoke_date: 2026-05-30
   smoke_log: validation_logs/live_torch_dist_lazyfix_tmux_20260530_112514.log
   smoke_tmux_session: tmux-13
   smoke_ray_job: raysubmit_FeKYagrKwzrfrcPU
@@ -433,5 +484,5 @@ latest_validation:
 ## References
 
 - Related reports: `references/experiment-log.md`
-- Related skills: `megatron-bridge-rocm-overrides`, `rocm-inductor-triton-cluster-dims`, `ray-rollout-import-isolation`
+- Related skills: `rocm-megatron-tp2-checkpoint-resume`, `megatron-bridge-rocm-overrides`, `rocm-inductor-triton-cluster-dims`, `ray-rollout-import-isolation`
 - Troubleshooting: `references/troubleshooting.md`

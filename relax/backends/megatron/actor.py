@@ -57,7 +57,7 @@ from .data import (
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
-from .optimizer_utils import should_disable_pinned_host_weight_backups
+from .weight_backup_utils import should_disable_pinned_host_weight_backups
 from .weight_update.common import named_params_and_buffers
 from .weight_update.update_weight_from_distributed import UpdateWeightFromDistributed
 from .weight_update.update_weight_from_tensor import UpdateWeightFromTensor

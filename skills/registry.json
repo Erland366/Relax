@@ -2,7 +2,7 @@
   "domain": "research",
   "version": "1.0.0",
   "created": "2026-04-15",
-  "updated": "2026-04-24",
+  "updated": "2026-05-31",
   "skills": {
     "domain-advisor": {
       "type": "core",
@@ -35,6 +35,14 @@
     "ray-stale-live-state-triage": {
       "type": "result",
       "description": "Distinguish a genuinely running Relax job from a stale Ray live state after the actor has died"
+    },
+    "rocm-megatron-tp2-checkpoint-resume": {
+      "type": "result",
+      "description": "Validate the no-CPU-offload TP2 GPU optimizer path with W&B metrics and torch_dist checkpoint save/resume"
+    },
+    "qwen3-mock-0-5b-rocm-e2e": {
+      "type": "result",
+      "description": "Validate the 0.5B Qwen3 mock ROCm e2e regression path with real rollout, W&B metrics, and optimizer-inclusive torch_dist checkpoints"
     }
   },
   "paths": {

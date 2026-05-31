@@ -8,7 +8,12 @@ from unittest.mock import Mock, patch
 # MetricsBuffer is defined inside metrics.py, we need to import it correctly
 from relax.utils.metrics.client import MetricsClient
 from relax.utils.metrics.metrics_service_adapter import MetricsServiceAdapter
-from relax.utils.metrics.service import MetricsBuffer, finish_metrics_service_wandb, init_metrics_service_wandb
+from relax.utils.metrics.service import (
+    MetricsBuffer,
+    finish_metrics_service_wandb,
+    init_metrics_service_wandb,
+    log_metrics_to_wandb,
+)
 from relax.utils.misc import create_namespace
 
 
@@ -211,7 +216,30 @@ class TestMetricsServiceAdapter(unittest.TestCase):
             },
             immediate=True,
         )
-        self.mock_client.report_step.assert_not_called()
+        self.mock_client.report_step.assert_called_once_with(42)
+
+    @patch("relax.utils.metrics.metrics_service_adapter.get_serve_url")
+    @patch("relax.utils.metrics.metrics_service_adapter.get_metrics_client")
+    def test_namespaced_step_report_failure_returns_false(self, mock_get_client, mock_get_serve_url):
+        """Test namespaced step logging fails loud when reporting fails."""
+        mock_get_serve_url.return_value = "http://test:8000/metrics"
+        mock_get_client.return_value = self.mock_client
+        self.mock_client.report_step.return_value = {"status": "error", "message": "report failed"}
+
+        adapter = MetricsServiceAdapter(self.args)
+
+        result = adapter.log({"rollout/step": 1, "rollout/reward": 0.25}, step_key="rollout/step")
+
+        self.assertFalse(result)
+        self.mock_client.log_metrics_batch.assert_called_once_with(
+            1,
+            {
+                "rollout/step": 1,
+                "rollout/reward": 0.25,
+            },
+            immediate=True,
+        )
+        self.mock_client.report_step.assert_called_once_with(1)
 
     @patch("relax.utils.metrics.metrics_service_adapter.get_serve_url")
     @patch("relax.utils.metrics.metrics_service_adapter.get_metrics_client")
@@ -284,6 +312,21 @@ class TestMetricsServiceWandb(unittest.TestCase):
         finish_metrics_service_wandb()
 
         mock_finish.assert_not_called()
+
+    @patch("relax.utils.metrics.service.wandb.log")
+    def test_namespaced_step_metrics_use_custom_wandb_axis(self, mock_log):
+        """Metrics with their own step metric should not overwrite global W&B
+        step."""
+        log_metrics_to_wandb({"rollout/step": 3, "rollout/reward": 0.5}, step=3)
+
+        mock_log.assert_called_once_with({"rollout/step": 3, "rollout/reward": 0.5})
+
+    @patch("relax.utils.metrics.service.wandb.log")
+    def test_legacy_metrics_use_explicit_wandb_step(self, mock_log):
+        """Legacy metrics without a namespaced step keep the explicit step."""
+        log_metrics_to_wandb({"loss": 0.5}, step=3)
+
+        mock_log.assert_called_once_with({"loss": 0.5}, step=3)
 
 
 class TestTrackingUtilsIntegration(unittest.TestCase):
