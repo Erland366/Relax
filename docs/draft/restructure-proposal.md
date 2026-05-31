@@ -574,7 +574,7 @@ class Actor(Base):
 
 1. 删除 `slime_plugins/`
 2. 删除死代码文件（§4.1 + §4.2）
-3. `pre-commit run --all-files` 验证
+3. `make format` + `make lint` 验证
 
 ### Phase 2: relax/ 内部重组（~1 天）
 
@@ -586,7 +586,7 @@ class Actor(Base):
 4. `relax/impl/` → `relax/components/`
 5. `relax/checkpoint_engine/` → `relax/distributed/checkpoint_service/`
 6. 全量搜索替换内部导入路径
-7. `pre-commit run --all-files` + `pytest tests/`
+7. `make format` + `make lint` + `pytest tests/`
 
 ### Phase 3: slime/ → relax/ 迁移（~3 天）
 
@@ -601,7 +601,7 @@ class Actor(Base):
 7. 全量搜索替换 `from slime.` → `from relax.`
 8. 更新所有 `.sh` 脚本中的动态加载路径
 9. 更新 `setup.py` / `pyproject.toml` 包声明
-10. `pre-commit run --all-files` + `pytest tests/`
+10. `make format` + `make lint` + `pytest tests/`
 
 ### Phase 4: 文档与配置更新（~1 天）
 

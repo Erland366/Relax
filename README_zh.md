@@ -269,7 +269,7 @@ Relax 在 `skills/` 目录下内置了一套 [Claude Code](https://claude.ai/cod
 | `/debug-hang`        | 自动排查 Ray 分布式训练 hang 问题，收集调用栈与 Actor 状态     |
 | `/dev`               | 开发调试 Relax 代码；向远程 Ray 集群提交并监控训练任务         |
 | `/doc-writer`        | 编写和维护中英双语 VitePress 文档                              |
-| `/git-commit`        | 生成 Conventional Commits 格式提交，自动运行 pre-commit 钩子   |
+| `/git-commit`        | 生成 Conventional Commits 格式提交，并给出显式验证指引         |
 | `/model-integration` | 新模型架构接入训练管线的分步指南                               |
 | `/perf-doctor`       | 审查训练启动脚本中的性能与显存配置问题                         |
 | `/ssh-ray-cluster`   | SSH 连接远程 Ray 集群 Head 节点，检查状态、日志和调试任务      |

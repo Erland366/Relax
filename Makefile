@@ -22,9 +22,9 @@ lint:
 	flake8 relax/
 	mypy relax/
 
-format: # develop ## Code format using pre-commit tools
-	@which pre-commit 2>&1 > /dev/null || python -m pip install pre-commit==3.8.0
-	@pre-commit run --all-files --show-diff-on-failure
+format: # develop ## Code format using Ruff
+	ruff check --fix relax tests scripts
+	ruff format relax tests scripts
 
 clean:
 	rm -rf build/

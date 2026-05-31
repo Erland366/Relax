@@ -21,11 +21,12 @@ Creates git commits following Conventional Commits format with rich markdown bod
 # 1. Stage changes
 git add <files>
 
-# 2. Run pre-commit checks (MUST do before committing)
-pre-commit run --all-files --show-diff-on-failure
-# If it fails or auto-fixes files: re-stage with git add, then re-run until clean
+# 2. Run focused validation before committing
+make format
+make lint
+pytest tests/path/to/relevant_test.py
 
-# 3. Re-stage (pre-commit may have modified files)
+# 3. Re-stage any files changed by formatters
 git add <files>
 
 # 4. Create commit with detailed markdown body
@@ -126,7 +127,7 @@ rm /tmp/commitmsg.txt
 
 ## Important rules
 
-- **ALWAYS** run `pre-commit run --all-files --show-diff-on-failure` before `git commit`, then `git add` again to stage any auto-fixed changes
+- **ALWAYS** run focused validation before `git commit`; prefer `make format`, `make lint`, and relevant `pytest` targets
 - **ALWAYS** include scope in parentheses (kebab-case)
 - **ALWAYS** use present tense imperative verb for the subject
 - **ALWAYS** include a markdown body with heading(s) for non-trivial commits

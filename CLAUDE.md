@@ -11,11 +11,10 @@ Relax is a high-performance RL post-training engine for multi-modal and agentic 
 ```bash
 pip install -e .                      # Install package in dev mode
 pip install -r requirements.txt       # Install dependencies
-make format                           # Run pre-commit (ruff, isort, mdformat, docformatter)
+make format                           # Run Ruff fix + format on relax/, tests/, scripts/
 make lint                             # Run flake8 + mypy on relax/
 make test                             # Run pytest tests/
 pytest tests/test_foo.py::test_bar    # Run a single test
-pre-commit run --all-files            # Lint + format (must run before commits)
 make docs-dev                         # Start VitePress docs dev server
 ```
 
@@ -53,7 +52,8 @@ Entry point: `python relax/entrypoints/train.py [args]` with CLI args defined in
 
 ## Hard Rules
 
-- Run `pre-commit run --all-files` before committing
+- Run focused lint/format/test commands before committing; this repository no
+  longer uses pre-commit hooks
 - Minimum change principle: only touch files/lines directly involved
 - No formatting-only or unrelated code changes
 - No hardcoded secrets, paths, or endpoints

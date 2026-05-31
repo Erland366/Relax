@@ -80,8 +80,9 @@ git checkout -b docs/your-doc-change
 ### 3. Validate
 
 ```bash
-# Run pre-commit checks (lint + format)
-pre-commit run --all-files
+# Run formatting/lint checks
+make format
+make lint
 
 # Run tests
 pytest tests/
@@ -134,7 +135,7 @@ feat(rollout): add streaming data consumption for async mode
 ### Before Submitting
 
 - [ ] Code compiles and runs without errors
-- [ ] `pre-commit run --all-files` passes
+- [ ] Formatting and lint checks pass (`make format`, `make lint`)
 - [ ] Tests pass (`pytest tests/`)
 - [ ] Documentation updated (if applicable)
 - [ ] Commit messages follow Conventional Commits

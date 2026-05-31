@@ -46,7 +46,7 @@ configs/env.yaml         运行时环境配置
 
 - Ruff 格式化，行宽 119，`isort` 管理导入（配置见 `pyproject.toml`）
 - `relax/` 下所有 `.py` 须含版权头：`# Copyright (c) 2026 Relax Authors. All Rights Reserved.`
-- pre-commit 对 `transfer_queue/` 排除大部分检查
+- 本仓库不再使用 pre-commit；格式化优先使用 `make format` 或直接运行 Ruff
 - 日志统一用 `relax.utils.logging_utils.get_logger(__name__)`，禁止 `print` / `logging.getLogger`
 - 显式类型注解；禁止通配导入（`from x import *`）；重型可选依赖放函数内导入
 - 热路径禁止 GPU-CPU 同步（`.item()`、`.tolist()`、`print(tensor)`）
@@ -68,12 +68,12 @@ configs/env.yaml         运行时环境配置
 CRITICAL: 以下规则不可违反。
 
 - 禁止通配导入、硬编码密钥/路径/端点
-- 禁止跳过 pre-commit hooks
+- 不要重新引入 pre-commit hooks；使用显式 lint/format/test 命令
 - 禁止猜测集群配置或重建 CUDA/驱动栈
 - 调试时直接修改 `scripts/training/` 下的训练脚本来调整参数，再通过 `scripts/entrypoint/ray-job.sh` 提交
 - 禁止做与目标无关的代码改动，如 code format 等
 - 集成测试需要多节点 GPU 硬件——必须显式说明跳过原因
-- 修改前先读相关文件；提交前跑 `pre-commit run --all-files`
+- 修改前先读相关文件；提交前跑与改动相关的显式 lint/format/test 命令
 - 遵循最小变更原则：只碰需求直接涉及的文件和行
 
 ## Ask First
@@ -91,7 +91,7 @@ CRITICAL: 以下规则不可违反。
 
 ```bash
 pip install -r requirements.txt
-pre-commit run --all-files           # lint + format（等同 make format）
+make format                          # Ruff fix + format
 pytest tests/                        # 测试
 ```
 

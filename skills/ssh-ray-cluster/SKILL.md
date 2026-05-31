@@ -66,7 +66,7 @@ Examples that REQUIRE the `cd` prefix:
 - `python scripts/tools/run_on_each_ray_node.py ...`
 - `bash scripts/tools/kill_for_ray.sh`
 - `tail -n 100 log/<run-name>-*.log`
-- `pre-commit run --all-files`
+- `make format`, `make lint`, or focused `pytest ...`
 - `pytest tests/test_foo.py`
 
 Examples that do NOT need the `cd` (they take absolute paths or are

@@ -269,7 +269,7 @@ Relax ships a set of [Claude Code](https://claude.ai/code) slash-command skills 
 | `/debug-hang`        | Automatically diagnose Ray distributed training hangs — collects call stacks and actor states   |
 | `/dev`               | Develop and debug Relax code; submit and monitor jobs on a remote Ray cluster                   |
 | `/doc-writer`        | Write and maintain bilingual (English + Chinese) VitePress documentation                        |
-| `/git-commit`        | Create Conventional Commits with rich markdown body and auto-run pre-commit hooks               |
+| `/git-commit`        | Create Conventional Commits with rich markdown body and explicit validation guidance            |
 | `/model-integration` | Step-by-step guide for integrating new model architectures into the training pipeline           |
 | `/perf-doctor`       | Audit training launch scripts for performance and GPU memory misconfiguration                   |
 | `/ssh-ray-cluster`   | SSH into a remote Ray cluster head node to inspect status, logs, and debug jobs                 |
