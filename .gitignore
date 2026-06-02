@@ -46,6 +46,8 @@ output
 outputs
 tensorboard_log
 
+compiled_resources/
+
 .history
 *.log
 *.out
