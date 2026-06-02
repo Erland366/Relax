@@ -465,8 +465,11 @@ async def transfer_batch_to_data_system(
 def process_args(args: Namespace, role: str) -> None:
     """Process args for reference actor and actor fwd."""
     # Adjust max tokens per GPU for reference actor and actor fwd
-    for key in args.ref_actor_config:
-        setattr(args, key, args.ref_actor_config[key])
+    ref_actor_config = args.ref_actor_config or {}
+    if not isinstance(ref_actor_config, dict):
+        raise TypeError(f"ref_actor_config must be a dict when provided, got {type(ref_actor_config).__name__}")
+    for key, value in ref_actor_config.items():
+        setattr(args, key, value)
     args.only_load_weight = True
     if role == "reference":
         args.load = args.ref_load

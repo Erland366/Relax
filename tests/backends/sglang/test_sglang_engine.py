@@ -146,6 +146,21 @@ else:
     assert result.stdout.strip().endswith("blocked")
 
 
+def test_checkpoint_client_imports_under_megatron_blocker():
+    script = """
+from relax.backends.sglang.sglang_engine import _blocked_megatron_imports
+
+with _blocked_megatron_imports(True):
+    from relax.distributed.checkpoint_service.client.engine import create_client
+    from relax.distributed.checkpoint_service.backends.device_direct import DeviceDirectBackend
+
+    print(create_client.__name__, DeviceDirectBackend.__name__)
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+
+    assert "create_client DeviceDirectBackend" in result.stdout
+
+
 def _install_fake_sglang_memory_pool(monkeypatch):
     sglang_module = types.ModuleType("sglang")
     sglang_module.__path__ = []

@@ -481,6 +481,26 @@ ray job submit -- python3 relax/entrypoints/train.py \
 - **ActorFwd**: 1 replica × 1 GPU (single-GPU forward)
 - **Advantages**: 1 replica × 0 GPU (CPU-only computation)
 
+### 4-GPU Bounded-Staleness Variant
+
+On a 4-GPU single-node run, pure `--fully-async` can run with bounded staleness
+when one GPU is reserved for `actor_fwd`:
+
+```bash
+--resource '{"actor": [1, 2], "rollout": [1, 1], "actor_fwd": [1, 1], "advantages": [1, 0]}' \
+--fully-async \
+--max-staleness 1 \
+--rollout-batch-size 2 \
+--n-samples-per-prompt 8 \
+--global-batch-size 8 \
+--num-steps-per-rollout 2
+```
+
+The AMD launcher `scripts/training/multimodal/amd_qwen3_0_6b_4gpu_e2e.sh`
+defaults to this shape. Because this 4-GPU graph has no `reference` service, do
+not pass `--use-kl-loss` unless you also provide extra GPUs for a `reference`
+entry in `--resource`.
+
 ______________________________________________________________________
 
 ## Fault Tolerance

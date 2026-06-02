@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional, Sequence
 
 import httpx
 
-from relax.distributed.checkpoint_service.backends import CommBackend, DeviceDirectBackend
+from relax.distributed.checkpoint_service.backends.base import CommBackend
 from relax.distributed.checkpoint_service.config import BackendType, DCSConfig, RoleInfo
 from relax.distributed.checkpoint_service.metrics import MetricsCollector
 from relax.utils.logging_utils import get_logger
@@ -241,6 +241,8 @@ class CheckpointEngineClient:
         if self.backend_type == BackendType.TCP:
             raise TypeError(f"Not support {BackendType.TCP} now!")
         else:
+            from relax.distributed.checkpoint_service.backends.device_direct import DeviceDirectBackend
+
             self._backend = DeviceDirectBackend(
                 args=self.args,
                 backend_type=self.backend_type,

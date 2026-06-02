@@ -109,7 +109,8 @@ class Actor(Base):
             if self._done_event is not None:
                 await self._done_event.wait()
             return
-        self.data_system_client.reset_consumption(partition_id=f"train_{self.step}", task_name="train_actor")
+        train_task_name = "actor_train" if self.config.fully_async and not self.config.hybrid else "train"
+        self.data_system_client.reset_consumption(partition_id=f"train_{self.step}", task_name=train_task_name)
         # Create an asyncio.Event bound to the current event loop so the
         # background thread can signal completion without blocking the loop.
         loop = asyncio.get_running_loop()

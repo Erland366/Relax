@@ -48,7 +48,7 @@ class GenRMManager:
         self._engine_addr_and_ports = {}  # rank -> {host, port, ...}
         self.num_new_engines = init_genrm_engines(args, pg, self.all_genrm_engines, self._engine_addr_and_ports)
         self.nodes_per_engine = max(1, args.genrm_num_gpus_per_engine // args.num_gpus_per_node)
-        self.genrm_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
+        self.genrm_engine_lock = Lock.options(num_cpus=0, num_gpus=0).remote()
 
     @property
     def genrm_engines(self):

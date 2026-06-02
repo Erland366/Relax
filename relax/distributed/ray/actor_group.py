@@ -87,7 +87,7 @@ class RayTrainGroup:
             runtime_env={"env_vars": env_vars},
             enable_task_events=False,
         )(actor_impl)
-        lock = Lock.options(num_cpus=1, num_gpus=0).remote()
+        lock = Lock.options(num_cpus=0, num_gpus=0).remote()
 
         # Create worker actors
         self._actor_handlers = []

@@ -800,7 +800,7 @@ class RolloutManager(ReloadableMixin):
         else:
             init_http_client(args)
             self.servers = start_rollout_servers(args, pg)
-        self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
+        self.rollout_engine_lock = Lock.options(num_cpus=0, num_gpus=0).remote()
         self.rollout_id = -1
         self._metric_checker = MetricChecker.maybe_create(args)
         self._tokenizer = None  # Lazy-initialized tokenizer for debug data saving
@@ -826,7 +826,7 @@ class RolloutManager(ReloadableMixin):
         # sync (update_weights_fully_async) and sglang remote instance weight sync
         # (_sync_weights_from_seed_engine) never run concurrently.
         # Both paths use the seed engine's NCCL stack and cannot overlap.
-        self._weight_sync_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
+        self._weight_sync_lock = Lock.options(num_cpus=0, num_gpus=0).remote()
 
         # GC config: max terminal requests to keep per dict
         self._max_terminal_requests = 100

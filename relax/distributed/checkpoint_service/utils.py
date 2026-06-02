@@ -3,13 +3,18 @@
 import re
 
 import torch
-from megatron.core import mpu
 
 from relax.utils.logging_utils import get_logger
 from relax.utils.misc import get_hf_config
 
 
 logger = get_logger(__name__)
+
+
+def _get_mpu():
+    from megatron.core import mpu
+
+    return mpu
 
 
 def load_weight(args, model, weights: list[tuple[str, torch.Tensor]]) -> None:
@@ -20,6 +25,7 @@ def load_weight(args, model, weights: list[tuple[str, torch.Tensor]]) -> None:
     """
     params_dict = dict(model[0].named_parameters())
     if args.num_experts:
+        mpu = _get_mpu()
         num_local_experts = args.num_experts // args.expert_model_parallel_size
         local_experts_range = list(
             range(
@@ -67,6 +73,8 @@ def chunk_param(
     Returns:
         The shard tensor for the current tensor-parallel rank.
     """
+    mpu = _get_mpu()
+
     # 1. expert_bias is not sharded
     if "expert_bias" in name:
         return full_param

@@ -481,6 +481,25 @@ ray job submit -- python3 relax/entrypoints/train.py \
 - **ActorFwd**：1 副本 × 1 GPU（单 GPU 前向）
 - **Advantages**：1 副本 × 0 GPU（仅 CPU 计算）
 
+### 4 GPU 有界 Staleness 变体
+
+在单节点 4 GPU 场景下，纯 `--fully-async` 可以把 1 张 GPU 留给
+`actor_fwd`，从而支持有界 staleness：
+
+```bash
+--resource '{"actor": [1, 2], "rollout": [1, 1], "actor_fwd": [1, 1], "advantages": [1, 0]}' \
+--fully-async \
+--max-staleness 1 \
+--rollout-batch-size 2 \
+--n-samples-per-prompt 8 \
+--global-batch-size 8 \
+--num-steps-per-rollout 2
+```
+
+AMD 启动脚本 `scripts/training/multimodal/amd_qwen3_0_6b_4gpu_e2e.sh`
+默认使用这个形状。因为这个 4 GPU 资源图里没有 `reference` 服务，除非你同时
+在 `--resource` 里给 `reference` 分配额外 GPU，否则不要传 `--use-kl-loss`。
+
 ______________________________________________________________________
 
 ## 容错机制

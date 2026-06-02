@@ -146,6 +146,16 @@ ______________________________________________________________________
 | `--num-iters-per-train-update`  | Number of sub-batches per global batch (larger → smaller peak memory, more TQ polls) |
 | `--max-staleness`               | Off-policy budget (0 = strict on-policy, >0 allows staleness)                        |
 
+### Batch-Size Invariant
+
+When `--balance-data` is enabled, TransferQueue uses `SeqlenBalancedSampler` and keeps each GRPO prompt group intact while splitting a train step across DP ranks. Therefore each train step must contain at least one full prompt group per training DP rank:
+
+```text
+global_batch_size / n_samples_per_prompt >= train_dp_size
+```
+
+For the 4-GPU Qwen3-0.6B hybrid launcher, training uses DP2 and the default `n_samples_per_prompt=8`, so the valid default is `rollout_batch_size=2`, `num_steps_per_rollout=1`, and `global_batch_size=16`. A `num_steps_per_rollout=2` setup would create `global_batch_size=8`, only one prompt group per train step, which cannot be balanced across two DP ranks without splitting the GRPO group.
+
 ### Optional but Common
 
 | Flag                          | Notes                                                                                                    |
@@ -217,6 +227,12 @@ This warning fires in `relax/backends/megatron/actor.py` when the actor's Transf
 - Staleness budget exhausted: rollout cannot produce new data because it is waiting for fresh weights.
 
 Check rollout-side logs and partition status before assuming a code bug.
+
+### ROCm `AssertionError: (torch.Size([]), 0, 1024)` while saving checkpoints
+
+This failure comes from Megatron's distributed-optimizer `dp_reshardable` checkpoint path. On ROCm with the Torch Adam fallback, each optimizer parameter can carry a scalar `step` tensor. Megatron stores that step separately in optimizer `param_groups`, but the `dp_reshardable` bucket-state path can still include the scalar in the per-parameter bucket data and then assert because every bucket tensor is expected to be a one-dimensional shard.
+
+Relax patches this at ROCm checkpoint-writer initialization time by removing only scalar `step` tensors from the distributed optimizer bucket state. Model parameters, fp32 master parameters, `exp_avg`, and `exp_avg_sq` remain in the checkpoint; optimizer step is still saved through `param_groups`, so resume keeps optimizer progress.
 
 ### `--balance-data is not supported in pure fully-async mode`
 

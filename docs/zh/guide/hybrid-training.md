@@ -148,6 +148,16 @@ ______________________________________________________________________
 | `--num-iters-per-train-update`  | 每个全局 batch 切分的子批次数量（越大 → 峰值显存越小，TransferQueue 轮询次数越多）              |
 | `--max-staleness`               | Off-policy 容忍度（0 = 严格 on-policy，>0 允许一定程度滞后）                                    |
 
+### Batch Size 约束
+
+启用 `--balance-data` 时，TransferQueue 使用 `SeqlenBalancedSampler`，并在按 DP rank 切分训练 step 时保持每个 GRPO prompt group 完整。因此，每个训练 step 至少要包含每个训练 DP rank 一个完整 prompt group：
+
+```text
+global_batch_size / n_samples_per_prompt >= train_dp_size
+```
+
+对于 4 GPU Qwen3-0.6B Hybrid 启动脚本，训练侧使用 DP2，默认 `n_samples_per_prompt=8`，因此合法默认值是 `rollout_batch_size=2`、`num_steps_per_rollout=1`、`global_batch_size=16`。如果设成 `num_steps_per_rollout=2`，会得到 `global_batch_size=8`，每个训练 step 只有一个 prompt group，无法在两个 DP rank 之间保持 GRPO group 完整地做负载均衡。
+
 ### 常用可选参数
 
 | 参数                          | 说明                                                                                                    |
@@ -219,6 +229,12 @@ ______________________________________________________________________
 - Staleness 预算耗尽：rollout 必须等待新权重，因此无法继续产出数据。
 
 在认定为代码 bug 前，请先排查 rollout 侧日志及 partition 状态。
+
+### ROCm 保存 checkpoint 时出现 `AssertionError: (torch.Size([]), 0, 1024)`
+
+这个错误来自 Megatron distributed optimizer 的 `dp_reshardable` checkpoint 路径。ROCm 上使用 Torch Adam fallback 时，每个 optimizer 参数可能带有一个标量 `step` tensor。Megatron 已经把这个 step 单独保存在 optimizer `param_groups` 中，但 `dp_reshardable` bucket-state 路径仍可能把这个标量放进逐参数 bucket 数据里，随后因为 bucket 中的所有 tensor 都必须是一维 shard 而触发断言。
+
+Relax 在 ROCm checkpoint writer 初始化时修补这个问题：只从 distributed optimizer bucket state 中移除标量 `step` tensor。模型参数、fp32 master 参数、`exp_avg`、`exp_avg_sq` 仍然保存到 checkpoint；optimizer step 仍通过 `param_groups` 保存，因此 resume 时 optimizer 进度不会丢失。
 
 ### `--balance-data is not supported in pure fully-async mode`
 

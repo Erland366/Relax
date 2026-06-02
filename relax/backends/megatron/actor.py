@@ -1305,20 +1305,19 @@ class MegatronTrainRayActor(TrainRayActor):
         dist.barrier(group=get_gloo_group())
         print_memory("before update_weights")
 
-        weight_sync_lock = getattr(self, "_weight_sync_lock", None)
-        if weight_sync_lock is not None and dist.get_rank() == 0:
-            acquired = False
-            while not acquired:
-                acquired = ray.get(weight_sync_lock.acquire.remote())
-                if not acquired:
-                    time.sleep(1)
-
+        weight_sync_lock_acquired = False
         try:
             if not rollout_only:
                 run(self.checkpoint_engine_client.init_process_groups_for_actor_fwd_ref(rollout_id))
+            weight_sync_lock = getattr(self, "_weight_sync_lock", None)
+            if not actor_fwd_only and weight_sync_lock is not None and dist.get_rank() == 0:
+                while not weight_sync_lock_acquired:
+                    weight_sync_lock_acquired = ray.get(weight_sync_lock.acquire.remote())
+                    if not weight_sync_lock_acquired:
+                        time.sleep(1)
             run(self.checkpoint_engine_client.update_weights_for_rollout(rollout_only, actor_fwd_only))
         finally:
-            if weight_sync_lock is not None and dist.get_rank() == 0:
+            if weight_sync_lock_acquired:
                 ray.get(weight_sync_lock.release.remote())
 
     @timer

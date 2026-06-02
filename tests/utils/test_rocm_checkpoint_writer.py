@@ -6,6 +6,8 @@ import sys
 import types
 from dataclasses import dataclass
 
+import torch
+
 
 def _install_fake_megatron_checkpoint_modules(monkeypatch):
     class FakeFileSystemWriterAsync:
@@ -21,6 +23,30 @@ def _install_fake_megatron_checkpoint_modules(monkeypatch):
     dist_checkpointing.__path__ = []
     strategies = types.ModuleType("megatron.core.dist_checkpointing.strategies")
     strategies.__path__ = []
+    optimizer_pkg = types.ModuleType("megatron.core.optimizer")
+    optimizer_pkg.__path__ = []
+    distrib_optimizer = types.ModuleType("megatron.core.optimizer.distrib_optimizer")
+
+    class FakeDistributedOptimizer:
+        def get_parameter_state_dp_reshardable(self):
+            return {
+                "per_bucket_numel": [4],
+                "per_bucket_numel_unpadded": [4],
+                0: {
+                    "torch.bfloat16": [
+                        [
+                            {
+                                "step": torch.tensor(1.0),
+                                "exp_avg": torch.zeros(4),
+                                "gbuf_local_start": 0,
+                                "gbuf_local_end": 4,
+                            }
+                        ]
+                    ]
+                },
+            }
+
+    distrib_optimizer.DistributedOptimizer = FakeDistributedOptimizer
     filesystem_async = types.ModuleType("megatron.core.dist_checkpointing.strategies.filesystem_async")
     filesystem_async.FileSystemWriterAsync = FakeFileSystemWriterAsync
     filesystem_async._get_write_results_queue = lambda: "original-queue"
@@ -93,6 +119,8 @@ def _install_fake_megatron_checkpoint_modules(monkeypatch):
         "megatron": megatron,
         "megatron.core": core,
         "megatron.core.utils": utils,
+        "megatron.core.optimizer": optimizer_pkg,
+        "megatron.core.optimizer.distrib_optimizer": distrib_optimizer,
         "megatron.core.dist_checkpointing": dist_checkpointing,
         "megatron.core.dist_checkpointing.strategies": strategies,
         "megatron.core.dist_checkpointing.strategies.common": common,
@@ -135,6 +163,31 @@ def test_patch_rocm_checkpoint_writer_preserves_original_queue_off_hip(monkeypat
     writer.patch_rocm_checkpoint_writer()
 
     assert filesystem_async._get_write_results_queue() == "original-queue"
+
+
+def test_patch_rocm_checkpoint_writer_drops_distopt_scalar_step_on_hip(monkeypatch):
+    writer, _, _ = _install_fake_megatron_checkpoint_modules(monkeypatch)
+    distrib_optimizer = sys.modules["megatron.core.optimizer.distrib_optimizer"]
+    monkeypatch.setattr(writer.torch.version, "hip", "6.3.0")
+
+    writer.patch_rocm_checkpoint_writer()
+    state = distrib_optimizer.DistributedOptimizer().get_parameter_state_dp_reshardable()
+
+    bucket_tensors = state[0]["torch.bfloat16"][0][0]
+    assert "step" not in bucket_tensors
+    assert bucket_tensors["exp_avg"].shape == (4,)
+
+
+def test_patch_rocm_checkpoint_writer_preserves_distopt_scalar_step_off_hip(monkeypatch):
+    writer, _, _ = _install_fake_megatron_checkpoint_modules(monkeypatch)
+    distrib_optimizer = sys.modules["megatron.core.optimizer.distrib_optimizer"]
+    monkeypatch.setattr(writer.torch.version, "hip", None)
+
+    writer.patch_rocm_checkpoint_writer()
+    state = distrib_optimizer.DistributedOptimizer().get_parameter_state_dp_reshardable()
+
+    bucket_tensors = state[0]["torch.bfloat16"][0][0]
+    assert bucket_tensors["step"].shape == ()
 
 
 def test_patch_rocm_checkpoint_writer_loads_common_state_with_weights_only_false(monkeypatch, tmp_path):

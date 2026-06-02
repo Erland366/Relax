@@ -21,6 +21,7 @@ _rocm_results_queue: queue.Queue[Any] | None = None
 _logged_checkpointable_converter = False
 _logged_planner_flattening_patch = False
 _logged_common_load_patch = False
+_logged_distributed_optimizer_step_patch = False
 
 
 def configure_rocm_torch_dist_checkpoint_args(args: Any) -> bool:
@@ -344,6 +345,52 @@ def _patch_rocm_common_load_strategy(common_module: Any) -> None:
         logger.info("HIP/ROCm detected: loading Megatron common.pt with weights_only=False")
 
 
+def _drop_scalar_steps_from_dp_reshardable_state(state: Any) -> Any:
+    """Remove scalar Adam step tensors from DistOpt bucket state on HIP."""
+    if not torch.version.hip:
+        return state
+
+    removed = 0
+    for state_key, dtype_state in state.items():
+        if not isinstance(state_key, int) or not isinstance(dtype_state, dict):
+            continue
+        for buckets_state in dtype_state.values():
+            for bucket_state in buckets_state:
+                for tensors in bucket_state:
+                    step = tensors.get("step")
+                    if isinstance(step, torch.Tensor) and step.ndim == 0:
+                        del tensors["step"]
+                        removed += 1
+
+    global _logged_distributed_optimizer_step_patch
+    if removed and not _logged_distributed_optimizer_step_patch:
+        _logged_distributed_optimizer_step_patch = True
+        logger.info(
+            "HIP/ROCm detected: removed scalar optimizer step tensors from "
+            "DistributedOptimizer dp_reshardable bucket state; step is saved in param_groups"
+        )
+    return state
+
+
+def _patch_rocm_distributed_optimizer_step_state(distrib_optimizer_module: Any) -> None:
+    optimizer_cls = getattr(distrib_optimizer_module, "DistributedOptimizer", None)
+    if optimizer_cls is None:
+        return
+
+    original_get_state = getattr(
+        optimizer_cls,
+        "_relax_original_get_parameter_state_dp_reshardable",
+        optimizer_cls.get_parameter_state_dp_reshardable,
+    )
+    optimizer_cls._relax_original_get_parameter_state_dp_reshardable = original_get_state
+
+    def patched_get_parameter_state_dp_reshardable(self: Any) -> Any:
+        state = original_get_state(self)
+        return _drop_scalar_steps_from_dp_reshardable_state(state)
+
+    optimizer_cls.get_parameter_state_dp_reshardable = patched_get_parameter_state_dp_reshardable
+
+
 class ROCmFileSystemWriterAsync(FileSystemWriterAsync):
     """FileSystemWriterAsync wrapper for ROCm compatibility.
 
@@ -503,6 +550,7 @@ class ROCmFileSystemWriterAsync(FileSystemWriterAsync):
 
 def patch_rocm_checkpoint_writer() -> None:
     """Install the ROCm-safe checkpoint writer in all Megatron save aliases."""
+    import megatron.core.optimizer.distrib_optimizer as distrib_optimizer_module
     import megatron.core.dist_checkpointing.strategies.filesystem_async as filesystem_async_module
     import megatron.core.dist_checkpointing.strategies.common as common_strategy_module
     import megatron.core.dist_checkpointing.strategies.torch as torch_strategy_module
@@ -519,6 +567,7 @@ def patch_rocm_checkpoint_writer() -> None:
     _patch_rocm_mcore_planner_init(torch_strategy_module, "MCoreSavePlanner")
     _patch_rocm_mcore_planner_init(torch_strategy_module, "MCoreLoadPlanner")
     _patch_rocm_common_load_strategy(common_strategy_module)
+    _patch_rocm_distributed_optimizer_step_state(distrib_optimizer_module)
 
     original_converter = getattr(
         torch_strategy_module,

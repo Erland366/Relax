@@ -758,6 +758,8 @@ async def generate_rollout_async(
                     if sample.response and "start_rollout_id" not in sample.metadata:
                         sample.metadata["start_rollout_id"] = rollout_id
                 aborted_samples.append(group)
+                state.remaining_batch_size -= 1
+                continue
             elif len(data) < target_data_size:
                 batch_to_transfer.append(group)
                 total_transfer_samples += 1

@@ -27,15 +27,11 @@ import ray
 import requests
 import torch
 import torch.distributed as dist
-from megatron.core import mpu
 from tqdm import tqdm
 from urllib3.exceptions import NewConnectionError
 
-from relax.backends.megatron.weight_conversion import convert_to_hf
-from relax.backends.megatron.weight_update.common import all_gather_param, named_params_and_buffers
 from relax.distributed.checkpoint_service.backends.base import CommBackend, TensorFusion
 from relax.distributed.checkpoint_service.config import BackendType, RoleInfo
-from relax.distributed.checkpoint_service.utils import load_weight
 from relax.utils import device as device_utils
 from relax.utils.distributed_utils import get_gloo_group, init_process_group
 from relax.utils.logging_utils import get_logger
@@ -44,6 +40,30 @@ from relax.utils.logging_utils import get_logger
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = get_logger(__name__)
+
+
+def _get_mpu():
+    from megatron.core import mpu
+
+    return mpu
+
+
+def _get_weight_update_common():
+    from relax.backends.megatron.weight_update.common import all_gather_param, named_params_and_buffers
+
+    return all_gather_param, named_params_and_buffers
+
+
+def _convert_to_hf(*args, **kwargs):
+    from relax.backends.megatron.weight_conversion import convert_to_hf
+
+    return convert_to_hf(*args, **kwargs)
+
+
+def _load_weight(*args, **kwargs):
+    from relax.distributed.checkpoint_service.utils import load_weight
+
+    return load_weight(*args, **kwargs)
 
 
 class DeviceDirectBackend(CommBackend):
@@ -115,7 +135,11 @@ class DeviceDirectBackend(CommBackend):
         device_utils.set_device(self.device)
 
         # Bridge-based HF weight converter (lazy-initialized on first use)
-        self._use_bridge = getattr(args, "megatron_to_hf_mode", None) == "bridge"
+        self._use_bridge = (
+            getattr(args, "megatron_to_hf_mode", None) == "bridge"
+            and role_info is not None
+            and role_info.role_name == "actor"
+        )
         if self._use_bridge:
             from relax.backends.megatron.weight_update.bridge_converter import BridgeConverter
 
@@ -284,6 +308,7 @@ class DeviceDirectBackend(CommBackend):
 
         if self.role_info is None:
             raise RuntimeError("Role info not set. Cannot initialize process group.")
+        mpu = _get_mpu()
         self._is_pp_src_rank = (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
         )
@@ -387,6 +412,8 @@ class DeviceDirectBackend(CommBackend):
         if self.role_info is None:
             raise RuntimeError("Role info not set. Cannot initialize process group.")
 
+        mpu = _get_mpu()
+
         # Determine if this rank is the PP source rank (for weight gathering)
         self._is_pp_src_rank = (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
@@ -481,6 +508,7 @@ class DeviceDirectBackend(CommBackend):
         origin_named_tensors = []
         # non expert params
         pbar = tqdm(desc=f"[{self._group_name}] Update weights") if self._is_pp_src_rank else None
+        _, named_params_and_buffers = _get_weight_update_common()
 
         for name, param in named_params_and_buffers(self.args, self.model):
             if ".experts." in name:
@@ -568,6 +596,7 @@ class DeviceDirectBackend(CommBackend):
 
         Returns updated buffer size on the source rank, otherwise None.
         """
+        all_gather_param, _ = _get_weight_update_common()
         param = all_gather_param(self.args, name, param)
         if not self._is_pp_src_rank:
             return
@@ -587,7 +616,7 @@ class DeviceDirectBackend(CommBackend):
             if self._use_bridge:
                 converted_named_tensors += self._bridge_converter.convert(name, param)
             else:
-                converted_named_tensors += convert_to_hf(
+                converted_named_tensors += _convert_to_hf(
                     self.args, self.model_name, name, param, self.quantization_config
                 )
         buffer_size += param_size
@@ -607,6 +636,8 @@ class DeviceDirectBackend(CommBackend):
 
         HF conversion is deferred until bucket flush.
         """
+        mpu = _get_mpu()
+        all_gather_param, _ = _get_weight_update_common()
         param = all_gather_param(self.args, name, param)
 
         param_size = param.numel() * param.element_size()
@@ -634,6 +665,7 @@ class DeviceDirectBackend(CommBackend):
 
         Clears the input buffer when complete.
         """
+        mpu = _get_mpu()
         names = [name for name, _ in named_tensors]
         all_names = [None] * mpu.get_expert_model_parallel_world_size()
 
@@ -669,7 +701,7 @@ class DeviceDirectBackend(CommBackend):
                 if self._use_bridge:
                     converted_hf_tensors += self._bridge_converter.convert(name, param)
                 else:
-                    converted_hf_tensors += convert_to_hf(
+                    converted_hf_tensors += _convert_to_hf(
                         self.args, self.model_name, name, param, self.quantization_config
                     )
             self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar)
@@ -721,6 +753,7 @@ class DeviceDirectBackend(CommBackend):
         receiving nodes can allocate buffers, then weights are broadcast using
         the process group set up for actor_fwd reception.
         """
+        mpu = _get_mpu()
         # Prepare metadata for weight transfer
         pp_rank = mpu.get_pipeline_model_parallel_rank()
         group_name = f"update_actor_pp_{pp_rank}"
@@ -802,7 +835,7 @@ class DeviceDirectBackend(CommBackend):
                 for handle in handles:
                     handle.wait()
 
-                load_weight(self.args, self.model, weights)
+                _load_weight(self.args, self.model, weights)
 
 
 @ray.remote
