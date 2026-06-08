@@ -35,6 +35,7 @@ env/
 venv/
 ENV/
 .vscode
+.deps/
 
 
 # custom .gitignore [add by cases]

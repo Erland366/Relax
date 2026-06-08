@@ -20,12 +20,7 @@ import transfer_queue as tq
 import yaml
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from relax.backends.sglang.sglang_engine import (
-    _MEGATRON_ISOLATION_ENV_VAR,
-    SGLangEngine,
-    _filtered_pythonpath_without_megatron,
-    _install_process_megatron_isolation,
-)
+from relax.backends.sglang.sglang_engine import SGLangEngine
 from relax.engine.rollout.base_types import call_rollout_fn
 from relax.utils import device as device_utils
 from relax.utils import tracking_utils
@@ -67,11 +62,6 @@ logger = get_logger(__name__)
 GPU_MEMORY_TYPE_KV_CACHE = "kv_cache"
 GPU_MEMORY_TYPE_WEIGHTS = "weights"
 GPU_MEMORY_TYPE_CUDA_GRAPH = "cuda_graph"
-
-
-def _isolate_rollout_process_from_megatron(args, *, source: str) -> bool:
-    enabled = getattr(args, "sglang_model_impl", "").lower() == "transformers"
-    return _install_process_megatron_isolation(enabled, source=source, block_imports=True)
 
 
 @dataclasses.dataclass
@@ -454,12 +444,7 @@ class EngineGroup:
 
         pythonpath = os.environ.get("PYTHONPATH")
         if pythonpath:
-            if self.args.sglang_model_impl.lower() == "transformers":
-                env_vars["PYTHONPATH"] = _filtered_pythonpath_without_megatron(pythonpath)
-            else:
-                env_vars["PYTHONPATH"] = pythonpath
-
-        env_vars[_MEGATRON_ISOLATION_ENV_VAR] = "1" if self.args.sglang_model_impl.lower() == "transformers" else "0"
+            env_vars["PYTHONPATH"] = pythonpath
 
         return env_vars
 
@@ -773,7 +758,6 @@ class RolloutManager(ReloadableMixin):
     def __init__(self, args, pg, data_source=None):
         self.pg = pg
         self.args = args
-        _isolate_rollout_process_from_megatron(self.args, source="RolloutManager process")
 
         init_tracking(args, primary=False)
 

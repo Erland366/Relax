@@ -111,6 +111,17 @@ load_dotenv() {
     fi
 }
 
+configure_rocm_runtime() {
+    ROCM_RUNTIME_ENV_SH="${ROCM_RUNTIME_ENV_SH:-${ROOT_DIR}/scripts/setup/rocm_runtime_env.sh}"
+    if [ ! -f "${ROCM_RUNTIME_ENV_SH}" ]; then
+        echo "ROCM_RUNTIME_ENV_SH=${ROCM_RUNTIME_ENV_SH} does not exist" >&2
+        exit 2
+    fi
+
+    # shellcheck source=/dev/null
+    source "${ROCM_RUNTIME_ENV_SH}"
+}
+
 configure_gpu_resources() {
     if [ -n "${RELAX_HIP_VISIBLE_DEVICES_OVERRIDE:-}" ]; then
         export HIP_VISIBLE_DEVICES="${RELAX_HIP_VISIBLE_DEVICES_OVERRIDE}"
@@ -246,6 +257,7 @@ configure_runtime_environment() {
     export RAY_task_events_report_interval_ms="${RAY_task_events_report_interval_ms:-0}"
     export RAY_grpc_client_keepalive_time_ms="${RAY_grpc_client_keepalive_time_ms:-600000}"
     export RAY_grpc_client_keepalive_timeout_ms="${RAY_grpc_client_keepalive_timeout_ms:-300000}"
+    export NVTE_FUSED_ATTN_CK="${NVTE_FUSED_ATTN_CK:-0}"
     unset ROCR_VISIBLE_DEVICES
 
     export PYTHONPATH="/vast/users/qirong.ho/erland/Python_project/sglang/python:${MEGATRON_DIR}:${ROOT_DIR}"
@@ -564,6 +576,12 @@ keys = [
     "CUDA_DEVICE_MAX_CONNECTIONS",
     "MASTER_ADDR",
     "HIP_VISIBLE_DEVICES",
+    "ROCM_PATH",
+    "ROCM_HOME",
+    "HIP_PATH",
+    "ROCM_HSA_RUNTIME_LIB",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
     "GLOO_SOCKET_IFNAME",
     "TP_SOCKET_IFNAME",
     "NCCL_SOCKET_IFNAME",
@@ -573,6 +591,7 @@ keys = [
     "RAY_task_events_report_interval_ms",
     "RAY_grpc_client_keepalive_time_ms",
     "RAY_grpc_client_keepalive_timeout_ms",
+    "NVTE_FUSED_ATTN_CK",
     "WANDB_API_KEY",
     "WANDB_ENTITY",
     "WANDB_PROJECT",
@@ -852,6 +871,7 @@ submit_training_job() {
 main() {
     activate_environment
     load_dotenv
+    configure_rocm_runtime
 
     configure_gpu_resources
     configure_execution_mode

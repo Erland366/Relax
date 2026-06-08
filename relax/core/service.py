@@ -35,9 +35,6 @@ def build_service_runtime_env(role: str, config: Namespace, runtime_env: Optiona
     if "env_vars" not in service_runtime_env or not isinstance(service_runtime_env["env_vars"], dict):
         service_runtime_env["env_vars"] = {}
 
-    if role == "rollout" and getattr(config, "sglang_model_impl", "").lower() == "transformers":
-        service_runtime_env["env_vars"]["RELAX_SGLANG_BLOCK_MEGATRON_IMPORTS"] = "1"
-
     return service_runtime_env
 
 

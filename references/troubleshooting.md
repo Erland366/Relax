@@ -20,6 +20,7 @@ This file documents error patterns encountered and their solutions.
 | `scaled_masked_softmax_cuda` import on ROCm | Training crashes inside Megatron fused softmax even after passing `--no-masked-softmax-fusion` | The launcher flag alone did not reach every Megatron-Bridge override path, and upstream fused softmax code still assumes the NVIDIA extension import exists | Propagate `masked_softmax_fusion` through the provider path and ensure fused softmax falls back cleanly when CUDA extensions are unavailable |
 | TorchInductor ROCm `KernelMetadata.cluster_dims` failure | First actor training step crashes after rollout generation and reward execution | TorchInductor/Triton on this ROCm stack generates a kernel metadata object without `cluster_dims`, but the launcher code path expects it | Treat this as a compiler/runtime compatibility issue: reduce or disable the affected compiled path, or move to a PyTorch/Triton build where ROCm launcher metadata matches TorchInductor expectations |
 | ROCm Megatron `jit_fuser` uses compiler decorators on HIP | The no-CPU-offload run either fails in `megatron/core/fusions/fused_cross_entropy.py` with `torch._inductor.exc.InductorError: AttributeError: 'KernelMetadata' object has no attribute 'cluster_dims'`, or fails during import when TorchScript compiles `L2Norm` and cannot resolve `self.eps` | `ROCm-Megatron-LM/megatron/core/jit.py` promotes `jit_fuser` from `torch.jit.script` to `torch.compile` on PyTorch >= 2.2; avoiding `torch.compile` still leaves TorchScript method limitations on HIP | Patch the local ROCm Megatron checkout so `jit_fuser` is an eager no-op when `torch.version.hip` is set, then rerun the foreground validation past import and the old step-0 boundary |
+| ROCm TransformerEngine fails after importing torch | `import torch; import transformer_engine.pytorch` fails with `/opt/rocm-7.0.0/lib/libamdhip64.so.7: undefined symbol: hsa_amd_memory_get_preferred_copy_engine, version ROCR_1` | PyTorch loads its bundled `libhsa-runtime64.so` first, then ROCm 7 `libamdhip64.so.7` binds against the already-loaded incompatible HSA runtime | Source `scripts/setup/rocm_runtime_env.sh` after conda activation so ROCm's HSA runtime is preloaded before Python starts; launchers must pass `LD_PRELOAD` into Ray runtime env |
 | ROCm CPU-offload safe path is undone by fp32 main-param wrapping | Historical CPU-offload attempts reached `optimizer.step()` but wedged on CPU AdamW, dtype, or clip-grad boundaries | Megatron's mixed-precision optimizer wrapper can rebuild HDO over fp32 main params, then later routes bf16 live params through optimizer helper code that assumes CUDA float grads | Treat this as superseded for the current AMD Qwen3 path. Do not maintain the CPU-offload workaround; keep the fail-fast guard and use the TP2 GPU optimizer path |
 | Internal proxy intercepts local SGLang health checks | Rollout initialization hangs even though SGLang reports the server is ready | Internal HTTP requests to the node-local SGLang server go through the corporate proxy because the node hostname/IP is missing from `no_proxy` | Add `MASTER_ADDR`, the resolved local hostname/IP, and localhost entries to both `no_proxy` and `NO_PROXY` for the launcher runtime env and child processes |
 | Adam state OOM on MI210 actor rank | First actor update dies on `torch.optim.adam._init_group` with HIP OOM while allocating `exp_avg`/`exp_avg_sq` | A single MI210 actor rank can hold the 4B bf16 model, but lazy Adam state allocation still exceeds device memory during the first optimizer step | Do not switch to CPU optimizer offload. Use the GPU optimizer path with enough actor GPUs, currently TP2 plus sequence parallel on two actor GPUs |
@@ -58,6 +59,103 @@ This file documents error patterns encountered and their solutions.
 | W&B primary run is system-only after an actor dies at step 0 | Logs show `POST /metrics/log_metrics_batch 200` and rollout metrics, but W&B still has only system charts; later the actor reports `ActorDiedError` or Ray `SYSTEM_ERROR` before any `Reported ... metrics for step 0` line | MetricsService accepted the metrics but buffered them until `flush_metrics()` at the end of the actor train step; the actor crash prevented `/metrics/report_step` from running | For namespaced step metrics ending in `/step`, report immediately after `log_metrics_batch` so W&B receives rollout/train metrics even if a later actor failure prevents the normal end-of-step flush. When payloads already contain `train/step` or `rollout/step`, log to W&B without forcing the global `step=` argument so same-step batches are not dropped |
 | Four-GPU AMD launcher still starts a two-GPU or single-rank actor topology | Ray starts with fewer GPUs than expected, rollout placement waits for resources, or a 4-GPU command still logs `RESOURCE_JSON={"actor": [1, 1], "rollout": [1, 1]}` | The older `amd_qwen3_4b_2gpu_e2e.sh` launcher hardcoded Ray as two GPUs, `--num-gpus-per-node 2`, and one rollout GPU; the current Qwen3 path also needs two actor GPUs for TP2 GPU optimizer state | Use the environment-driven launcher topology: set `HIP_VISIBLE_DEVICES=0,1,2,3 RAY_NUM_GPUS=4 NUM_GPUS_PER_NODE=4 ACTOR_RESOURCE_GPUS=2 ROLLOUT_RESOURCE_GPUS=2 TENSOR_MODEL_PARALLEL_SIZE=2 GPU_LABEL=4gpu-tp2`. This keeps CPU optimizer offload disabled while fitting GPU optimizer state |
 | Step-0 `dapo` reward stalls inside the Ray reward-worker pool | The run reaches `Actor training step 0/200` and rollout generation, but the Megatron actor only logs `start to get rollout_id: 0 data from transfer queue for train with mcore.` and then dies much later with `ActorDiedError`, while `RolloutManager` only logs `RewardExecutor: created 16 RewardWorker actors` before a long silent gap | `dapo` is a small local string/regex reward, but it was still being dispatched through the generic `RewardWorker` actor pool. On the MI210 step-0 path, that turned a cheap per-sample reward into extra Ray actor RPCs and left rollout blocked before it could transfer `train_0` to the actor | Keep `dapo` on a local in-process path using `asyncio.to_thread` and reserve the Ray reward-worker pool for the heavier/thread-unsafe reward types. Revalidate from a clean Ray cluster so the 5-minute timeout window no longer wedges at `RewardExecutor: created ... RewardWorker actors` |
+
+## ROCm TransformerEngine fails after importing torch
+
+**Added:** 2026-06-08
+**Domain:** research
+
+### Symptom
+
+A fresh ROCm conda environment builds TransformerEngine and Apex successfully,
+and `import transformer_engine.pytorch` can work by itself, but the normal
+training import order fails:
+
+```python
+import torch
+import transformer_engine.pytorch
+```
+
+The failure is:
+
+```text
+OSError: /opt/rocm-7.0.0/lib/libamdhip64.so.7: undefined symbol: hsa_amd_memory_get_preferred_copy_engine, version ROCR_1
+```
+
+### Cause
+
+PyTorch's ROCm wheel carries its own HSA runtime under
+`site-packages/torch/lib/libhsa-runtime64.so`. When `torch` imports first, that
+bundled HSA library can be loaded into the Python process before
+TransformerEngine loads ROCm 7's `/opt/rocm-7.0.0/lib/libamdhip64.so.7`.
+`libamdhip64.so.7` then binds against the already-loaded incompatible HSA
+runtime and fails on the missing ROCR symbol.
+
+This can be confirmed with:
+
+```bash
+LD_DEBUG=libs python - <<'PY' 2>&1 | rg 'libhsa-runtime64|libamdhip64'
+import torch
+import transformer_engine.pytorch
+PY
+```
+
+The broken trace shows `torch/lib/libhsa-runtime64.so` loading before the ROCm
+7 HIP library.
+
+### Solution
+
+Preload ROCm's matching HSA runtime before Python starts:
+
+```bash
+export ROCM_PATH=/opt/rocm-7.0.0
+export ROCM_HOME=/opt/rocm-7.0.0
+export HIP_PATH=/opt/rocm-7.0.0
+export LD_LIBRARY_PATH=/opt/rocm-7.0.0/lib64:/opt/rocm-7.0.0/lib:${LD_LIBRARY_PATH:-}
+export LD_PRELOAD=/opt/rocm-7.0.0/lib/libhsa-runtime64.so.1
+export NVTE_FUSED_ATTN_CK=0
+unset VIRTUAL_ENV
+unset VIRTUAL_ENV_PROMPT
+```
+
+For this Relax fork, source the versioned runtime contract after conda
+activation and `.env` loading:
+
+```bash
+source scripts/setup/rocm_runtime_env.sh
+```
+
+After the runtime script is sourced, the import gate should pass:
+
+```bash
+source /vast/users/qirong.ho/miniforge3/etc/profile.d/conda.sh
+conda activate relaxrl_rocm_after_fix
+source scripts/setup/rocm_runtime_env.sh
+python - <<'PY'
+import torch
+import transformer_engine.pytorch as te
+from apex.optimizers import FusedAdam
+from apex.normalization import FusedLayerNorm
+print(torch.__version__, torch.version.hip, te.__name__)
+print(FusedAdam.__name__, FusedLayerNorm.__name__)
+PY
+```
+
+### Prevention
+
+- Validate the training import order, not only `import transformer_engine.pytorch`.
+- Keep ROCm runtime variables in `scripts/setup/rocm_runtime_env.sh` and make
+  launchers pass `LD_LIBRARY_PATH`, `LD_PRELOAD`, `ROCM_PATH`, `ROCM_HOME`, and
+  `HIP_PATH` into Ray runtime env.
+- Clear stale `VIRTUAL_ENV` markers after conda activation; otherwise logs can
+  imply the old `.venv` is still active.
+- Re-run the no-rebuild installer validation after changing ROCm, PyTorch,
+  TransformerEngine, Apex, or conda env names.
+
+### Related
+
+- Skill: `rocm-megatron-conda-runtime`
+- Experiment log: `references/experiment-log.md`
 
 ## Qwen3 mock overnight judged healthy before first checkpoint
 

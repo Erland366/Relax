@@ -10,13 +10,14 @@ class _FakeMegatronEnum(Enum):
     auto = "auto"
 
 
-def test_build_service_runtime_env_enables_megatron_isolation_only_for_rollout_transformers():
+def test_build_service_runtime_env_does_not_enable_megatron_isolation_for_rollout_transformers():
     config = Namespace(sglang_model_impl="transformers")
     runtime_env = {"env_vars": {"PYTHONPATH": "/tmp/one"}}
 
     result = build_service_runtime_env("rollout", config, runtime_env)
 
-    assert result["env_vars"]["RELAX_SGLANG_BLOCK_MEGATRON_IMPORTS"] == "1"
+    assert "RELAX_SGLANG_BLOCK_MEGATRON_IMPORTS" not in result["env_vars"]
+    assert result["env_vars"] == {"PYTHONPATH": "/tmp/one"}
     assert runtime_env["env_vars"] == {"PYTHONPATH": "/tmp/one"}
 
 

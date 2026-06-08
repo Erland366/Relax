@@ -61,74 +61,10 @@ class TestEagerDataset:
 class TestDataSourceIntegration:
     """Integration tests for data_source.py with StreamingDataset."""
 
-    def test_worker_import_isolation_runs_in_ray_default_worker(self, monkeypatch):
-        from relax.engine.rollout import data_source as data_source_module
-
-        calls = []
-
-        def fake_install(enabled, *, source, block_imports):
-            calls.append((enabled, source, block_imports))
-            return enabled
-
-        monkeypatch.setattr(data_source_module, "_install_process_megatron_isolation", fake_install)
-        monkeypatch.setattr(data_source_module.sys, "argv", ["/tmp/default_worker.py"])
-
-        changed = data_source_module._maybe_isolate_rollout_data_source_worker_at_import()
-
-        assert changed is True
-        assert calls == [(True, "Rollout data source worker import", False)]
-
-    def test_worker_import_isolation_skips_non_worker_process(self, monkeypatch):
-        from relax.engine.rollout import data_source as data_source_module
-
-        calls = []
-
-        def fake_install(enabled, *, source, block_imports):
-            calls.append((enabled, source, block_imports))
-            return enabled
-
-        monkeypatch.setattr(data_source_module, "_install_process_megatron_isolation", fake_install)
-        monkeypatch.setattr(data_source_module.sys, "argv", ["/tmp/train.py"])
-
-        changed = data_source_module._maybe_isolate_rollout_data_source_worker_at_import()
-
-        assert changed is False
-        assert calls == []
-
-    def test_data_source_process_isolation_uses_pruning_only(self, monkeypatch):
-        from relax.engine.rollout import data_source as data_source_module
-
-        calls = []
-
-        def fake_install(enabled, *, source, block_imports):
-            calls.append((enabled, source, block_imports))
-            return enabled
-
-        monkeypatch.setattr(data_source_module, "_install_process_megatron_isolation", fake_install)
-
-        args = MagicMock()
-        args.sglang_model_impl = "transformers"
-
-        changed = data_source_module._isolate_rollout_data_source_from_megatron(args)
-
-        assert changed is True
-        assert calls == [(True, "Rollout data source process", False)]
-
-    def test_data_source_blocks_megatron_only_during_setup(self, monkeypatch):
+    def test_data_source_setup_loads_inputs_directly(self, monkeypatch):
         from relax.engine.rollout import data_source as data_source_module
 
         events = []
-
-        class FakeBlocker:
-            def __enter__(self):
-                events.append("enter")
-
-            def __exit__(self, exc_type, exc, tb):
-                events.append("exit")
-
-        def fake_blocker(args):
-            events.append("blocker")
-            return FakeBlocker()
 
         def fake_load_tokenizer(*args, **kwargs):
             events.append("tokenizer")
@@ -142,8 +78,6 @@ class TestDataSourceIntegration:
             events.append("dataset")
             return MagicMock()
 
-        monkeypatch.setattr(data_source_module, "_block_megatron_during_data_source_setup", fake_blocker)
-        monkeypatch.setattr(data_source_module, "_isolate_rollout_data_source_from_megatron", lambda args: True)
         monkeypatch.setattr(data_source_module, "load_tokenizer", fake_load_tokenizer)
         monkeypatch.setattr(data_source_module, "load_processor", fake_load_processor)
         monkeypatch.setattr(data_source_module, "_create_dataset", fake_create_dataset)
@@ -157,7 +91,7 @@ class TestDataSourceIntegration:
 
         data_source_module.RolloutDataSource(args)
 
-        assert events == ["blocker", "enter", "tokenizer", "processor", "dataset", "exit"]
+        assert events == ["tokenizer", "processor", "dataset"]
 
     def test_build_data_source_config_keeps_only_rollout_fields(self):
         from argparse import Namespace
@@ -210,14 +144,10 @@ class TestDataSourceIntegration:
         assert not hasattr(config, "tq_config")
         assert not hasattr(config, "megatron_enum")
 
-    def test_rollout_data_source_isolates_before_tokenizer_load(self, monkeypatch):
+    def test_rollout_data_source_loads_tokenizer_before_dataset(self, monkeypatch):
         from relax.engine.rollout import data_source as data_source_module
 
         call_order = []
-
-        def fake_isolate(args):
-            call_order.append("isolate")
-            return True
 
         def fake_load_tokenizer(*args, **kwargs):
             call_order.append("tokenizer")
@@ -231,7 +161,6 @@ class TestDataSourceIntegration:
             call_order.append("dataset")
             return MagicMock()
 
-        monkeypatch.setattr(data_source_module, "_isolate_rollout_data_source_from_megatron", fake_isolate)
         monkeypatch.setattr(data_source_module, "load_tokenizer", fake_load_tokenizer)
         monkeypatch.setattr(data_source_module, "load_processor", fake_load_processor)
         monkeypatch.setattr(data_source_module, "_create_dataset", fake_create_dataset)
@@ -245,7 +174,7 @@ class TestDataSourceIntegration:
 
         data_source_module.RolloutDataSource(args)
 
-        assert call_order == ["isolate", "tokenizer", "processor", "dataset"]
+        assert call_order == ["tokenizer", "processor", "dataset"]
 
     @pytest.fixture
     def jsonl_file(self):

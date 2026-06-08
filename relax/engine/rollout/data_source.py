@@ -1,14 +1,11 @@
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 
 import abc
-import os
-import sys
 from argparse import Namespace
 from pathlib import Path
 
 import torch
 
-from relax.backends.sglang.sglang_engine import _blocked_megatron_imports, _install_process_megatron_isolation
 from relax.utils.data.data import Dataset
 from relax.utils.data.processing_utils import load_processor, load_tokenizer
 from relax.utils.logging_utils import get_logger
@@ -54,38 +51,9 @@ _DATA_SOURCE_CONFIG_FIELDS = (
 )
 
 
-def _is_running_in_ray_default_worker() -> bool:
-    if not sys.argv:
-        return False
-    return os.path.basename(sys.argv[0]) == "default_worker.py"
-
-
-def _maybe_isolate_rollout_data_source_worker_at_import() -> bool:
-    if not _is_running_in_ray_default_worker():
-        return False
-    return _install_process_megatron_isolation(
-        True,
-        source="Rollout data source worker import",
-        block_imports=False,
-    )
-
-
-def _isolate_rollout_data_source_from_megatron(args) -> bool:
-    enabled = getattr(args, "sglang_model_impl", "").lower() == "transformers"
-    return _install_process_megatron_isolation(enabled, source="Rollout data source process", block_imports=False)
-
-
-def _block_megatron_during_data_source_setup(args):
-    enabled = getattr(args, "sglang_model_impl", "").lower() == "transformers"
-    return _blocked_megatron_imports(enabled)
-
-
 def build_data_source_config(args) -> Namespace:
     values = {field: getattr(args, field) for field in _DATA_SOURCE_CONFIG_FIELDS if hasattr(args, field)}
     return Namespace(**values)
-
-
-_maybe_isolate_rollout_data_source_worker_at_import()
 
 
 def _shallow_copy_sample(src: Sample) -> Sample:
@@ -213,7 +181,6 @@ class DataSource(abc.ABC):
 class RolloutDataSource(DataSource):
     def __init__(self, args):
         self.args = args
-        _isolate_rollout_data_source_from_megatron(args)
 
         self.epoch_id = 0
         self.sample_group_index = 0
@@ -227,24 +194,23 @@ class RolloutDataSource(DataSource):
         self.dataset = None
 
         if args.rollout_global_dataset:
-            with _block_megatron_during_data_source_setup(args):
-                tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
-                processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
+            tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+            processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
-                # TODO move (during the refactor)
-                if (d := args.dump_details) is not None:
-                    tokenizer.save_pretrained(Path(d) / "tokenizer")
-                    if processor:
-                        processor.save_pretrained(Path(d) / "processor")
+            # TODO move (during the refactor)
+            if (d := args.dump_details) is not None:
+                tokenizer.save_pretrained(Path(d) / "tokenizer")
+                if processor:
+                    processor.save_pretrained(Path(d) / "processor")
 
-                # Initialize multimodal config from args
-                multimodal_config = MultimodalConfig.from_args(args)
+            # Initialize multimodal config from args
+            multimodal_config = MultimodalConfig.from_args(args)
 
-                # Use factory function to create dataset
-                self.dataset = _create_dataset(args, tokenizer, processor, multimodal_config)
+            # Use factory function to create dataset
+            self.dataset = _create_dataset(args, tokenizer, processor, multimodal_config)
 
-                if self.args.rollout_shuffle:
-                    self.dataset.shuffle(self.epoch_id)
+            if self.args.rollout_shuffle:
+                self.dataset.shuffle(self.epoch_id)
 
     def lengths(self):
         return len(self.dataset)

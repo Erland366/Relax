@@ -12,6 +12,86 @@ Each entry should include:
 
 ---
 
+## 2026-06-08 - Retrospective on fresh ROCm Megatron conda install validation
+
+**Type:** Retrospective
+**General description:** A fresh, non-cloned ROCm conda environment can now
+install and import the Relax after-fix checkout with ROCm TransformerEngine and
+ROCm Apex, but the conda env must pin ROCm's HSA runtime so normal
+torch-before-TransformerEngine imports do not load PyTorch's bundled HSA first.
+
+### What we tried
+
+- Reused the existing Relax source worktrees instead of cloning the repo again:
+  `Relax-rocm-megatron_before_fix` for the installer/script changes and
+  `Relax-rocm-megatron_after_fix` as the clean install target.
+- Created a fresh conda env named `relaxrl_rocm_after_fix`; this was not cloned
+  from the existing `relaxrl_rocm` environment.
+- Installed ROCm PyTorch with `torch==2.9.1+rocm6.3` and detected
+  `hip=6.3.42134-a9a80e791`.
+- Reused dependency source checkouts under
+  `.deps/rocm-megatron`, with ROCm TransformerEngine `v2.10_rocm` and ROCm
+  Apex `release/1.9.0`.
+- Built TransformerEngine for `NVTE_ROCM_ARCH=gfx90a` with
+  `NVTE_FUSED_ATTN_CK=0`, leaving the AOTriton fused-attention path enabled.
+- Built Apex with `APEX_PREBUILD_OPS=amp_c,fused_adam,fused_layer_norm` so
+  Megatron can import `FusedAdam` and `FusedLayerNorm`.
+- Ran the installer through the required two-phase pattern: foreground
+  validation first, then a monitored tmux production build in `tmux-34`.
+
+### Key findings
+
+- TransformerEngine and Apex both built successfully in the fresh env.
+- The successful import surface is:
+  `torch`, editable `relax`, `transformer_engine.pytorch`, `apex`,
+  `apex.optimizers.FusedAdam`, and `apex.normalization.FusedLayerNorm`.
+- A successful build is not sufficient. A normal user shell initially failed
+  when importing `torch` before `transformer_engine.pytorch`.
+- `LD_DEBUG=libs` showed the real ordering bug: `import torch` loaded PyTorch's
+  bundled `libhsa-runtime64.so`, then TransformerEngine loaded
+  `/opt/rocm-7.0.0/lib/libamdhip64.so.7`, which failed against the
+  already-loaded HSA runtime with missing symbol
+  `hsa_amd_memory_get_preferred_copy_engine`.
+- Preloading `/opt/rocm-7.0.0/lib/libhsa-runtime64.so.1` fixed the normal
+  torch-before-TransformerEngine import order.
+- The ROCm runtime contract now lives in
+  `scripts/setup/rocm_runtime_env.sh`. The installer and AMD launcher source it
+  explicitly so `ROCM_PATH`, `ROCM_HOME`, `HIP_PATH`, `LD_LIBRARY_PATH`,
+  `LD_PRELOAD`, `NVTE_FUSED_ATTN_CK`, and stale `VIRTUAL_ENV` cleanup are
+  versioned in the repo instead of hidden in conda activation.
+
+### What failed
+
+- The first production build attempt hit a stale TransformerEngine CMake cache
+  because the repo path moved into the worktree layout. The installer now moves
+  stale `NVTE_CMAKE_BUILD_DIR` directories aside when `CMakeCache.txt` points
+  at a different source path.
+- The installer's original validation imported TransformerEngine without first
+  importing torch, so it missed the runtime ordering failure that normal
+  training imports can trigger.
+- The shell inherited an old `VIRTUAL_ENV` path from the removed `.venv`,
+  which could make diagnostics look like a virtualenv was active even after
+  conda activation.
+
+### Open questions
+
+- Run a short Relax training smoke from `relaxrl_rocm_after_fix` once the user
+  wants to validate the new env beyond import/build checks.
+
+### Reusable lessons captured
+
+- Updated `scripts/setup/install_rocm_megatron_deps.sh` so a fresh conda env can
+  build ROCm TransformerEngine/Apex while sourcing the explicit repo runtime
+  contract.
+- Updated `scripts/setup/README.md` to document the HSA preload and conda hook
+  decision. The installer does not write conda activation hooks.
+- Strengthened installer validation so it imports torch before
+  TransformerEngine and catches the same ordering used by training.
+- Added `references/troubleshooting.md` coverage for the
+  `libamdhip64.so.7` missing ROCR symbol failure.
+- Added `.codex/skills/rocm-megatron-conda-runtime/SKILL.md` and registered it
+  as the reusable result skill for ROCm conda runtime validation.
+
 ## 2026-05-31 - Retrospective on Qwen3-0.5B four-GPU ROCm overnight regression
 
 **Type:** Retrospective
