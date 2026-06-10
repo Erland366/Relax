@@ -12,6 +12,82 @@ Each entry should include:
 
 ---
 
+## 2026-06-10 - Retrospective on Qwen3-0.6B fully_async ROCm e2e
+
+**Type:** Retrospective
+**General description:** A four-GPU Qwen3-0.6B fully_async run succeeded on
+clean `after_fix`, proving actor/rollout/actor_fwd coordination, async DCS
+weight updates, offline W&B metrics, and optimizer-inclusive `torch_dist`
+checkpointing.
+
+### What we tried
+
+- Used the existing AMD launcher surface instead of adding code: the run
+  executed `scripts/training/multimodal/amd_qwen3_4b_2gpu_e2e.sh` through
+  process substitution with Qwen3-0.6B environment overrides.
+- Kept the validated ROCm environment: `relaxrl_rocm_after_fix`.
+- Kept W&B offline by setting `WANDB_MODE=offline` and replacing launcher
+  `--wandb-mode online` with `--wandb-mode offline`.
+- Prepended the built SGLang kernel artifact before `sglang/python`:
+  `/vast/users/qirong.ho/erland/Python_project/sglang/sgl-kernel/build/lib.linux-x86_64-cpython-312`.
+- Ran a foreground 300-second gate first, then restarted the same command in
+  tmux because fully_async startup took longer than the foreground window.
+- Used the bounded-staleness fully_async resource graph:
+  `{"actor": [1, 2], "rollout": [1, 1], "actor_fwd": [1, 1], "advantages": [1, 0]}`.
+
+### Key findings
+
+- The foreground Ray job `raysubmit_SZFD4qZvxFU8q2v2` exited with `124`, but
+  it had already passed Ray startup, Serve deployment, DCS, metrics, resource
+  placement, SGLang router launch, actor_fwd readiness, and Megatron model
+  build. For this path, the foreground timeout is a pass-to-tmux signal, not an
+  e2e success or failure by itself.
+- The successful tmux run was `tmux-3`, Ray job
+  `raysubmit_cvLQL4xbyhdB9L4d`, with log
+  `log/amd-qwen3-0.6b-fully-async-4gpu-fully-async-20260610_115729.log`.
+- The final run completed both rollout/training steps, computed actor_fwd log
+  probabilities for steps `0/2` and `1/2`, completed four optimizer steps
+  across two rollouts and two train steps per rollout, and reported
+  `All training steps finished`.
+- The run saved iterations `0` and `1` under
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-0.6B_mcore_4gpu-fully-async-20260610_115729`.
+  `latest_checkpointed_iteration.txt` contains `1`.
+- Each saved iteration contains `.metadata`, `common.pt`, `metadata.json`, and
+  four `.distcp` shards. Dataset states exist for iterations `0` and `1`.
+- Optimizer state was saved. The log says `Storing distributed optimizer
+  sharded state of type dp_reshardable`; unpickling `.metadata` with the ROCm
+  Megatron path found optimizer and `exp_avg` entries in both
+  `state_dict_metadata` and `storage_data`.
+
+### What failed
+
+- Treating the five-minute foreground gate as the full e2e proof would be
+  wrong. It timed out before training completion even though startup was
+  healthy.
+- A simple string search of `.metadata` missed optimizer evidence because the
+  metadata needs Megatron classes on `PYTHONPATH` to inspect reliably.
+- Removing actor_fwd would invalidate this bounded-staleness recipe:
+  `MAX_STALENESS=1` depends on actor_fwd. Pure fully_async without actor_fwd
+  must use true-on-policy settings and `MAX_STALENESS=0`.
+- The default launcher still needs command-time W&B offline replacement and
+  the built `sgl_kernel` path injection for this ROCm environment.
+
+### Open questions
+
+- This validates the short two-rollout fully_async path. A longer durability
+  run can reuse the same shape after this smoke, but should wait for additional
+  checkpoint boundaries before being called long-run stable.
+- A resume-from-fully_async-checkpoint smoke was not run in this pass.
+
+### Reusable lessons captured
+
+- Added `skills/qwen3-0-6b-rocm-fully-async-e2e/SKILL.md`.
+- Updated `skills/registry.json` so future skill discovery sees the new
+  fully_async path.
+- Updated `skills/rocm-relax-bringup/SKILL.md` and
+  `references/troubleshooting.md` with the fully_async timeout and
+  actor_fwd/topology lessons.
+
 ## 2026-06-10 - Retrospective on Qwen3-0.6B after_fix ROCm e2e
 
 **Type:** Retrospective

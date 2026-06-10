@@ -59,6 +59,82 @@ This file documents error patterns encountered and their solutions.
 | Four-GPU AMD launcher still starts a two-GPU or single-rank actor topology | Ray starts with fewer GPUs than expected, rollout placement waits for resources, or a 4-GPU command still logs `RESOURCE_JSON={"actor": [1, 1], "rollout": [1, 1]}` | The older `amd_qwen3_4b_2gpu_e2e.sh` launcher hardcoded Ray as two GPUs, `--num-gpus-per-node 2`, and one rollout GPU; the current Qwen3 path also needs two actor GPUs for TP2 GPU optimizer state | Use the environment-driven launcher topology: set `HIP_VISIBLE_DEVICES=0,1,2,3 RAY_NUM_GPUS=4 NUM_GPUS_PER_NODE=4 ACTOR_RESOURCE_GPUS=2 ROLLOUT_RESOURCE_GPUS=2 TENSOR_MODEL_PARALLEL_SIZE=2 GPU_LABEL=4gpu-tp2`. This keeps CPU optimizer offload disabled while fitting GPU optimizer state |
 | Step-0 `dapo` reward stalls inside the Ray reward-worker pool | The run reaches `Actor training step 0/200` and rollout generation, but the Megatron actor only logs `start to get rollout_id: 0 data from transfer queue for train with mcore.` and then dies much later with `ActorDiedError`, while `RolloutManager` only logs `RewardExecutor: created 16 RewardWorker actors` before a long silent gap | `dapo` is a small local string/regex reward, but it was still being dispatched through the generic `RewardWorker` actor pool. On the MI210 step-0 path, that turned a cheap per-sample reward into extra Ray actor RPCs and left rollout blocked before it could transfer `train_0` to the actor | Keep `dapo` on a local in-process path using `asyncio.to_thread` and reserve the Ray reward-worker pool for the heavier/thread-unsafe reward types. Revalidate from a clean Ray cluster so the 5-minute timeout window no longer wedges at `RewardExecutor: created ... RewardWorker actors` |
 | `sgl_kernel` missing in Qwen3-0.6B after_fix e2e | SGLang exists locally, but Ray workers or local import checks fail with `No module named 'sgl_kernel'` | The runtime sees `sglang/python` but not the built `sgl-kernel` artifact, and the source tree alone is not the importable runtime package | Prepend `/vast/users/qirong.ho/erland/Python_project/sglang/sgl-kernel/build/lib.linux-x86_64-cpython-312` before `/vast/users/qirong.ho/erland/Python_project/sglang/python` in `PYTHONPATH`; do not install CUDA-only packages on ROCm |
+| Qwen3-0.6B fully_async foreground gate times out | The 300-second validation exits `124` after healthy startup but before training completion | Fully_async startup must initialize actor, rollout, actor_fwd, SGLang, DCS, and checkpoint surfaces, which can exceed five minutes | Treat `124` as a pass-to-tmux signal only after startup markers are healthy; full success requires actor_fwd logprobs, optimizer steps, checkpoint save, `All training steps finished`, and Ray job success |
+
+## Qwen3-0.6B fully_async foreground gate times out
+
+**Added:** 2026-06-10
+**Domain:** research
+
+### Symptom
+
+The Qwen3-0.6B fully_async foreground validation runs for the full 300-second
+gate and exits with status `124`, even though no fatal traceback appears. At
+the timeout boundary, logs may already show healthy startup such as:
+
+```text
+Using parallel creation mode (fully_async=True)
+Service actor_fwd has been created successfully
+[engine-init-barrier:default] waiting for 1 engines
+> number of parameters ... 596049920
+```
+
+### Cause
+
+The fully_async path starts more surfaces than the sync smoke:
+
+- actor on two GPUs;
+- rollout on one GPU;
+- actor_fwd on one GPU;
+- DCS coordinator and async weight-update process groups;
+- SGLang router and engine;
+- optimizer-inclusive `torch_dist` checkpoint hooks.
+
+On MI210, that startup can consume the entire foreground gate before the run
+reaches the final training/checkpoint markers.
+
+### Solution
+
+Use the foreground gate as a startup-health check, then restart the same command
+in tmux when the startup markers are healthy:
+
+```bash
+RELAX_EXECUTION_MODE=fully_async
+ACTOR_RESOURCE_GPUS=2
+ROLLOUT_RESOURCE_GPUS=1
+ACTOR_FWD_RESOURCE_GPUS=1
+MAX_STALENESS=1
+NUM_ROLLOUT=2
+NUM_STEPS_PER_ROLLOUT=2
+SAVE_INTERVAL=1
+CKPT_FORMAT=torch_dist
+NO_SAVE_OPTIM=0
+WANDB_MODE=offline
+```
+
+Do not report success from the foreground timeout alone. The validated tmux run
+was `tmux-3`, Ray job `raysubmit_cvLQL4xbyhdB9L4d`, and log
+`log/amd-qwen3-0.6b-fully-async-4gpu-fully-async-20260610_115729.log`.
+
+### Prevention
+
+Fully_async e2e is healthy only after all of these markers appear:
+
+- `Weights updated for rollout role.`
+- `actor_fwd model computed log prob for step 0/2`
+- `actor_fwd model computed log prob for step 1/2`
+- `train_one_step ... finished optimizer.step`
+- `successfully saved checkpoint from iteration       1`
+- `All training steps finished`
+- `Job 'raysubmit_cvLQL4xbyhdB9L4d' succeeded`
+
+For checkpoint audit, inspect Megatron `.metadata` with the ROCm Megatron path
+available. Simple string searches can miss optimizer evidence.
+
+### Related
+
+- Skill: `qwen3-0-6b-rocm-fully-async-e2e`
+- Skill: `qwen3-0-6b-rocm-sgl-kernel-e2e`
 
 ## `sgl_kernel` missing in Qwen3-0.6B after_fix e2e
 

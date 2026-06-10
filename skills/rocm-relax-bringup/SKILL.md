@@ -48,6 +48,7 @@ Do NOT use when:
 | Current validated state | TP2 GPU optimizer path resumed from iteration 99, started at actor step 100, saved iterations 119 and 139, and continued through completed step 154 | W&B `6c3wrymd`; checkpoint dir `Qwen3-4B_mcore_4gpu-tp2-normpatch-overnight-20260530_233548` |
 | Latest checkpoint boundary | Megatron `torch_dist` save and explicit load work on ROCm with optimizer state on the TP2 GPU optimizer path | Save requires the Relax ROCm checkpoint hook; load requires explicit `LOAD_DIR` and trusted `common.pt` loader |
 | Qwen3-0.6B after_fix smoke | Ray job `raysubmit_vQKenPVHTm4HiKL9` succeeded with W&B offline | Clean command-only run used `relaxrl_rocm_after_fix` and prepended SGLang's built `sgl_kernel` artifact to `PYTHONPATH` |
+| Qwen3-0.6B fully_async smoke | Ray job `raysubmit_cvLQL4xbyhdB9L4d` succeeded with W&B offline | Four-GPU bounded-staleness run used actor, rollout, actor_fwd, async DCS weight update, and torch_dist optimizer checkpoints |
 | Foreground validation exit | `124` | External 300-second checkpoint-enabled smoke timeout before actor checkpoint save; cleanup was required before tmux |
 | Required Megatron checkout | `/vast/users/qirong.ho/erland/Python_project/ROCm-Megatron-LM` | Do not inherit a stale non-ROCm `Megatron-LM` in `PYTHONPATH` |
 | W&B mode | `online` | Logged under `relax-amd` |
@@ -396,6 +397,7 @@ runtime boundaries before assuming the older MI210 recipe still holds. The
 | Explicit `torch_dist` resume died after `checkpoint version 3.0` | Generic optimizer state load targeted HDO public GPU params instead of inner CPU-offload params | Patch `FP32Optimizer.load_state_dict` on the ROCm HDO path to load state onto inner params and resync sub-optimizers |
 | Extending a resumed smoke changed the scheduler horizon | `NUM_ROLLOUT=3` produced `class input value 48` while the checkpoint stored `32` | Keep strict mode by default, but use `SCHEDULER_RESUME_POLICY=override` for deliberate continuation with a new horizon |
 | `sgl_kernel` was installed locally but missing in Ray workers | The runtime `PYTHONPATH` included SGLang's source checkout but not `sgl-kernel/build/lib.linux-x86_64-cpython-312` | Prepend the built SGLang kernel artifact before `sglang/python`; do not install CUDA-only packages in the ROCm environment |
+| Fully_async foreground gate timed out before e2e completion | Actor, rollout, actor_fwd, SGLang, and checkpoint startup can exceed five minutes on MI210 | Treat exit `124` as a pass-to-tmux signal only after startup markers are healthy; e2e success requires actor_fwd logprobs, optimizer steps, checkpoint save, and Ray job success |
 
 ## Configuration
 
@@ -502,5 +504,5 @@ latest_validation:
 ## References
 
 - Related reports: `references/experiment-log.md`
-- Related skills: `qwen3-0-6b-rocm-sgl-kernel-e2e`, `rocm-megatron-tp2-checkpoint-resume`, `megatron-bridge-rocm-overrides`, `rocm-inductor-triton-cluster-dims`, `ray-rollout-import-isolation`
+- Related skills: `qwen3-0-6b-rocm-fully-async-e2e`, `qwen3-0-6b-rocm-sgl-kernel-e2e`, `rocm-megatron-tp2-checkpoint-resume`, `megatron-bridge-rocm-overrides`, `rocm-inductor-triton-cluster-dims`, `ray-rollout-import-isolation`
 - Troubleshooting: `references/troubleshooting.md`

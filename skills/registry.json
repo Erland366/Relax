@@ -47,6 +47,10 @@
     "qwen3-0-6b-rocm-sgl-kernel-e2e": {
       "type": "result",
       "description": "Validate the clean after_fix Qwen3-0.6B ROCm e2e path with the built local sgl_kernel artifact and offline W&B"
+    },
+    "qwen3-0-6b-rocm-fully-async-e2e": {
+      "type": "result",
+      "description": "Validate the Qwen3-0.6B ROCm fully_async e2e path with actor_fwd, offline W&B, SGLang sgl_kernel, and optimizer-inclusive torch_dist checkpoints"
     }
   },
   "paths": {
