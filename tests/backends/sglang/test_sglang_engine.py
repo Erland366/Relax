@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 
+import builtins
 import importlib
 import os
 import subprocess
@@ -12,6 +13,7 @@ from relax.backends.sglang.sglang_engine import (
     _blocked_megatron_imports,
     _disable_sglang_jit_store_cache_on_hip,
     _filtered_pythonpath_without_megatron,
+    _get_server_args_cls,
     _patched_run_scheduler_process,
     _remove_megatron_from_current_process,
     _temporary_pythonpath_without_megatron,
@@ -159,6 +161,41 @@ with _blocked_megatron_imports(True):
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
 
     assert "create_client DeviceDirectBackend" in result.stdout
+
+
+def test_get_server_args_installs_sgl_kernel_stub_before_import(monkeypatch):
+    import relax.backends.sglang.sglang_engine as sglang_engine
+
+    calls = []
+
+    def fake_install_sgl_kernel_stub():
+        calls.append("install")
+
+    class FakeServerArgs:
+        pass
+
+    sglang_module = types.ModuleType("sglang")
+    sglang_module.__path__ = []
+    srt_module = types.ModuleType("sglang.srt")
+    srt_module.__path__ = []
+    server_args_module = types.ModuleType("sglang.srt.server_args")
+    server_args_module.ServerArgs = FakeServerArgs
+    monkeypatch.setitem(sys.modules, "sglang", sglang_module)
+    monkeypatch.setitem(sys.modules, "sglang.srt", srt_module)
+    monkeypatch.setitem(sys.modules, "sglang.srt.server_args", server_args_module)
+    monkeypatch.setattr(sglang_engine, "_install_optional_sgl_kernel_stub_on_hip", fake_install_sgl_kernel_stub)
+
+    original_import = builtins.__import__
+
+    def tracking_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "sglang.srt.server_args":
+            calls.append("import")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", tracking_import)
+
+    assert _get_server_args_cls() is FakeServerArgs
+    assert calls == ["install", "import"]
 
 
 def _install_fake_sglang_memory_pool(monkeypatch):

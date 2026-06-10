@@ -22,6 +22,7 @@ _logged_checkpointable_converter = False
 _logged_planner_flattening_patch = False
 _logged_common_load_patch = False
 _logged_distributed_optimizer_step_patch = False
+_logged_rng_state_skip = False
 
 
 def configure_rocm_torch_dist_checkpoint_args(args: Any) -> bool:
@@ -391,6 +392,42 @@ def _patch_rocm_distributed_optimizer_step_state(distrib_optimizer_module: Any) 
     optimizer_cls.get_parameter_state_dp_reshardable = patched_get_parameter_state_dp_reshardable
 
 
+def patch_rocm_checkpoint_rng_state() -> None:
+    """Avoid HIP RNG-state collection when checkpoint RNG saving is disabled."""
+    if not torch.version.hip:
+        return
+
+    import megatron.training.checkpointing as checkpointing_module
+    from megatron.training.global_vars import get_args
+
+    if getattr(checkpointing_module.get_rng_state, "_relax_rocm_no_save_rng_patch", False):
+        return
+
+    original_get_rng_state = checkpointing_module.get_rng_state
+
+    def _relax_rocm_get_rng_state(ckpt_format: str) -> Any | None:
+        if os.environ.get("RELAX_ROCM_ALLOW_CHECKPOINT_RNG_STATE", "0") == "1":
+            return original_get_rng_state(ckpt_format)
+
+        args = get_args()
+        if getattr(args, "no_save_rng", False):
+            global _logged_rng_state_skip
+            if not _logged_rng_state_skip:
+                _logged_rng_state_skip = True
+                logger.info("HIP/ROCm detected: skipping checkpoint RNG-state collection because --no-save-rng is set")
+            return None
+
+        raise RuntimeError(
+            "ROCm checkpoint RNG-state collection is disabled because torch.cuda.get_rng_state() can "
+            "raise CUDA driver error 700 after training. Pass --no-save-rng for this ROCm path, "
+            "or set RELAX_ROCM_ALLOW_CHECKPOINT_RNG_STATE=1 to use Megatron's original behavior."
+        )
+
+    _relax_rocm_get_rng_state._relax_rocm_no_save_rng_patch = True
+    _relax_rocm_get_rng_state._relax_rocm_original_get_rng_state = original_get_rng_state
+    checkpointing_module.get_rng_state = _relax_rocm_get_rng_state
+
+
 class ROCmFileSystemWriterAsync(FileSystemWriterAsync):
     """FileSystemWriterAsync wrapper for ROCm compatibility.
 
@@ -568,6 +605,7 @@ def patch_rocm_checkpoint_writer() -> None:
     _patch_rocm_mcore_planner_init(torch_strategy_module, "MCoreLoadPlanner")
     _patch_rocm_common_load_strategy(common_strategy_module)
     _patch_rocm_distributed_optimizer_step_state(distrib_optimizer_module)
+    patch_rocm_checkpoint_rng_state()
 
     original_converter = getattr(
         torch_strategy_module,

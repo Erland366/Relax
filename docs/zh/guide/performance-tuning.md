@@ -14,6 +14,56 @@ Relax 训练吞吐量最大化实践指南。本文提到的所有参数均可�
 | Training Profiling | Actor 训练 / log-probs 计算的算子分析 | `traces/<tb_experiment_name>/train_trace/` | TensorBoard or `https://ui.perfetto.dev/` |
 | Memory Profiling | GPU 显存分配历史，OOM 诊断 | `traces/<tb_experiment_name>/memory_snapshot/` | [PyTorch Memory Viz](https://pytorch.org/memory_viz) |
 
+### ROCm Qwen3-0.6B fully_async Profiling
+
+已验证的 4-GPU ROCm Qwen3-0.6B fully_async 路径应使用专用 wrapper，不要手动拼接 profiler 参数：
+
+```bash
+bash scripts/training/multimodal/amd_qwen3_0_6b_4gpu_fully_async_profile.sh
+```
+
+wrapper 会创建一个带时间戳的 artifact 根目录：
+
+```text
+profiling_results/qwen3-0.6b-fully-async-YYYYMMDD_HHMMSS/
+├── run.log
+├── launch.env
+├── timeline/
+├── traces/<experiment>/train_trace/
+├── sglang_trace/
+└── profile_report.md
+```
+
+默认运行使用 W&B offline 模式、`CONDA_ENV_NAME=relaxrl_rocm_after_fix`、本地构建的 `sgl_kernel` 路径 `/vast/users/qirong.ho/erland/Python_project/sglang/sgl-kernel/build/lib.linux-x86_64-cpython-312`，以及已知可用的 fully_async 资源划分：
+
+```text
+actor=2, rollout=1, actor_fwd=1, max_staleness=1
+```
+
+wrapper 还默认设置 `NUM_ROLLOUT=3` 和 `NO_SAVE_RNG=1`。三轮 rollout 足够覆盖启动阶段和 step 1/2 的稳态 profiling，同时避开这个小规模运行在第四轮 rollout backlog 累积时可能超过 TransferQueue 固定总容量的问题；`NO_SAVE_RNG=1` 用于避开本 fork 中已禁用的 ROCm checkpoint RNG-state 路径。
+
+wrapper 默认执行两轮 profiling：
+
+| 轮次 | 默认 profiler 设置 | 目的 |
+|---|---|---|
+| Timeline-only | `RELAX_TIMELINE_DUMP_DIR=$PROFILE_ROOT/timeline`，不开 PyTorch profiler，不开 SGLang profiler | 用较低开销定位 rollout、actor、actor_fwd、weight update 和 metrics reporting 之间的异步空隙 |
+| Focused Torch/SGLang | `RELAX_USE_PYTORCH_PROFILER=1`，`RELAX_PROFILE_TARGETS="train_overall train_actor train_log_probs"`，`RELAX_PROFILE_STEP_START=1`，`RELAX_PROFILE_STEP_END=2`，`RELAX_SGLANG_PROFILE=1`，`RELAX_SGLANG_PROFILE_STEP_START=1`，`RELAX_SGLANG_PROFILE_STEP_END=2`，`RELAX_SGLANG_PROFILE_NUM_STEPS=3` | 跳过启动阶段后，检查稳态 actor/log-prob 和 rollout kernel |
+
+使用 `RELAX_PROFILE_PASS=timeline` 或 `RELAX_PROFILE_PASS=focused` 可以只跑其中一轮。wrapper 也接受 AMD 基础 launcher 暴露的同一组 `RELAX_*` 环境变量透传，包括 `RELAX_TIMELINE_DUMP_DIR`、`RELAX_TB_EXPERIMENT_NAME`、`RELAX_USE_PYTORCH_PROFILER`、`RELAX_PROFILE_TARGETS`、`RELAX_PROFILE_STEP_START`、`RELAX_PROFILE_STEP_END` 以及 `RELAX_SGLANG_PROFILE_*` 变量。
+
+运行结束后重点查看：
+
+- `timeline/timeline_step_*.json`：用 `chrome://tracing` 或 Perfetto 查看端到端异步空隙。
+- `traces/<experiment>/train_trace/`：用 TensorBoard profiler 或 Chrome trace viewer 查看 actor 训练和 log-prob 算子。
+- `sglang_trace/`：用 TensorBoard profiler 或 Chrome trace viewer 查看 rollout prefill/decode kernel。
+- `profile_report.md`：查看自动生成的 artifact 索引、timeline 事件耗时聚合、可见事件间空隙和下一步检查建议。
+
+这个 v1 workflow 不运行 `rocprof`；低层 ROCm profiling 应作为后续步骤，等 trace 报告先定位出值得隔离的进程和阶段后再执行。
+
+::: warning
+ROCm memory snapshot 当前受限于 Relax 现有实现中使用的 CUDA-specific PyTorch memory API。ROCm 上优先依赖 timeline、training profiler 和 SGLang profiler 作为第一轮可靠分析来源。
+:::
+
 ### Trace 文件命名规则
 
 - **训练 trace** 文件名包含 `rank{global}_dp{dp}_tp{tp}_pp{pp}` 标识，例如 `train_overall_rank0_dp0_tp0_pp0.1713780123.pt.trace.json.gz`

@@ -51,6 +51,7 @@ Do NOT use when:
 | Required Megatron checkout | `/vast/users/qirong.ho/erland/Python_project/ROCm-Megatron-LM` | Do not inherit a stale non-ROCm `Megatron-LM` in `PYTHONPATH` |
 | W&B mode | `online` | Logged under `relax-amd` |
 | Long-run misleading state | Ray and rollout can stay alive after the actor is gone | Judge health by actor liveness and partition drain, not by Ray `RUNNING` alone |
+| Qwen3-0.6B quick smoke | Ray job `raysubmit_vQKenPVHTm4HiKL9` | With local built `sgl_kernel`, W&B offline, TE/Apex uninstalled, and checkpoints at iterations 0 and 1 |
 
 ## Recommended Practice
 
@@ -167,6 +168,40 @@ On this stack, several failures that looked like ROCm runtime issues were actual
 5. `SGLangEngine` worker startup
 
 If a plain interpreter import of a control-plane module already imports `megatron` or `sglang`, fix that import surface first. The MI210 path advanced materially only after converting DCS exports to lazy lookups, moving Megatron imports out of `advantages.py`, and installing transformers-mode isolation before rollout-side function loading.
+
+### Step 8.1: Verify SGLang's built kernel artifact, not only the source tree
+
+SGLang may require the top-level `sgl_kernel` import even when Relax is using
+the transformers model path and ROCm-safe SGLang flags. Do not assume that the
+presence of `sglang/sgl-kernel/python/sgl_kernel` is enough. The pure source
+path can fail to load `common_ops`; the successful 2026-06-10 Qwen3-0.6B run
+used the built library path:
+
+```bash
+/vast/users/qirong.ho/erland/Python_project/sglang/sgl-kernel/build/lib.linux-x86_64-cpython-312
+```
+
+Validate in the target environment:
+
+```bash
+source /vast/users/qirong.ho/miniforge3/etc/profile.d/conda.sh
+conda activate relaxrl_rocm_after_fix
+
+PYTHONPATH=/vast/users/qirong.ho/erland/Python_project/sglang/sgl-kernel/build/lib.linux-x86_64-cpython-312 \
+python - <<'PY'
+import sgl_kernel
+
+print(sgl_kernel.__file__)
+print(hasattr(sgl_kernel, "moe_align_block_size"))
+PY
+```
+
+When launching through the AMD e2e script, make sure the Ray runtime env sees
+that built path before `/vast/users/qirong.ho/erland/Python_project/sglang/python`.
+The validated no-code-change smoke used shell-time substitution to prepend it
+and to force `--wandb-mode offline`.
+
+For the full result recipe, use `skills/qwen3-0-6b-rocm-sgl-kernel-e2e/SKILL.md`.
 
 ### Step 9: Treat CPU-offload debugging as historical context for this run
 

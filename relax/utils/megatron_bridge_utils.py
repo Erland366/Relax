@@ -1,6 +1,10 @@
+# Copyright (c) 2026 Relax Authors. All Rights Reserved.
+
+import enum
 import sys
 import types
 from contextlib import contextmanager
+from importlib import import_module
 from importlib.machinery import ModuleSpec
 from importlib.util import find_spec
 
@@ -219,24 +223,204 @@ def install_rocm_bridge_modelopt_shims() -> None:
 
     modelopt_module = types.ModuleType("modelopt")
     modelopt_module.__spec__ = ModuleSpec("modelopt", loader=None)
+    modelopt_module.__path__ = []
     torch_module = types.ModuleType("modelopt.torch")
     torch_module.__spec__ = ModuleSpec("modelopt.torch", loader=None)
+    torch_module.__path__ = []
+    quantization_module = types.ModuleType("modelopt.torch.quantization")
+    quantization_module.__spec__ = ModuleSpec("modelopt.torch.quantization", loader=None)
+    quantization_module.__path__ = []
+    quantization_utils_module = types.ModuleType("modelopt.torch.quantization.utils")
+    quantization_utils_module.__spec__ = ModuleSpec("modelopt.torch.quantization.utils", loader=None)
     distill_module = types.ModuleType("modelopt.torch.distill")
     distill_module.__spec__ = ModuleSpec("modelopt.torch.distill", loader=None)
+    distill_module.__path__ = []
     plugins_module = types.ModuleType("modelopt.torch.distill.plugins")
     plugins_module.__spec__ = ModuleSpec("modelopt.torch.distill.plugins", loader=None)
+    plugins_module.__path__ = []
     megatron_plugin_module = types.ModuleType("modelopt.torch.distill.plugins.megatron")
     megatron_plugin_module.__spec__ = ModuleSpec("modelopt.torch.distill.plugins.megatron", loader=None)
 
+    quantization_utils_module.is_quantized = lambda *_args, **_kwargs: False
     distill_module.convert = _modelopt_unavailable
     megatron_plugin_module.setup_distillation_config = _modelopt_unavailable
     megatron_plugin_module.adjust_distillation_model_for_mcore = _modelopt_unavailable
 
     sys.modules["modelopt"] = modelopt_module
     sys.modules["modelopt.torch"] = torch_module
+    sys.modules["modelopt.torch.quantization"] = quantization_module
+    sys.modules["modelopt.torch.quantization.utils"] = quantization_utils_module
     sys.modules["modelopt.torch.distill"] = distill_module
     sys.modules["modelopt.torch.distill.plugins"] = plugins_module
     sys.modules["modelopt.torch.distill.plugins.megatron"] = megatron_plugin_module
+
+
+def install_rocm_bridge_mamba_shims() -> None:
+    """Patch optional Mamba symbols that Megatron-Bridge imports eagerly.
+
+    The dense Qwen3 path does not use Mamba, but Megatron-Bridge imports the
+    Mamba provider while building its model registry. The ROCm Megatron checkout
+    used by this fork predates `mamba_inference_stack_spec`, so expose the name
+    as an unavailable callable instead of letting the unrelated Qwen import fail.
+    """
+
+    if not torch.version.hip:
+        return
+
+    mamba_layer_specs = import_module("megatron.core.models.mamba.mamba_layer_specs")
+    mamba_hybrid_layer_allocation = import_module("megatron.core.ssm.mamba_hybrid_layer_allocation")
+    if not hasattr(mamba_layer_specs, "mamba_inference_stack_spec"):
+
+        def _rocm_mamba_inference_stack_spec_unavailable(*_args, **_kwargs):
+            raise RuntimeError(
+                "Megatron-Bridge Mamba inference stack specs are unavailable with this ROCm Megatron checkout."
+            )
+
+        mamba_layer_specs.mamba_inference_stack_spec = _rocm_mamba_inference_stack_spec_unavailable
+
+    symbols = getattr(mamba_hybrid_layer_allocation, "Symbols")
+    if not hasattr(symbols, "MTP_SEPARATOR"):
+        symbols.MTP_SEPARATOR = "/"
+    if not hasattr(mamba_hybrid_layer_allocation, "parse_hybrid_pattern"):
+
+        def _rocm_parse_hybrid_pattern_unavailable(*_args, **_kwargs):
+            raise RuntimeError(
+                "Megatron-Bridge Mamba hybrid pattern parsing is unavailable with this ROCm Megatron checkout."
+            )
+
+        mamba_hybrid_layer_allocation.parse_hybrid_pattern = _rocm_parse_hybrid_pattern_unavailable
+
+
+def install_rocm_bridge_experimental_attention_shims() -> None:
+    """Patch optional experimental-attention imports for unused Bridge models."""
+
+    if not torch.version.hip:
+        return
+
+    module_name = "megatron.core.models.gpt.experimental_attention_variant_module_specs"
+    if _module_exists(module_name):
+        return
+
+    def _experimental_attention_variant_unavailable(*_args, **_kwargs):
+        raise RuntimeError(
+            "Megatron-Bridge experimental attention variants are unavailable with this ROCm Megatron checkout."
+        )
+
+    module = types.ModuleType(module_name)
+    module.__spec__ = ModuleSpec(module_name, loader=None)
+    module.get_transformer_block_with_experimental_attention_variant_spec = _experimental_attention_variant_unavailable
+    sys.modules[module_name] = module
+
+
+def install_rocm_bridge_cuda_graph_shims() -> None:
+    """Patch CUDA graph enum names imported by optional Bridge models."""
+
+    if not torch.version.hip:
+        return
+
+    transformer_enums = import_module("megatron.core.transformer.enums")
+    if hasattr(transformer_enums, "CudaGraphScope"):
+        return
+
+    class CudaGraphScope(enum.Enum):
+        full = "full"
+        attn = "attn"
+        full_iteration = "full_iteration"
+        full_iteration_inference = "full_iteration_inference"
+        mamba = "mamba"
+        moe_router = "moe_router"
+        moe_preprocess = "moe_preprocess"
+
+    transformer_enums.CudaGraphScope = CudaGraphScope
+
+
+def install_rocm_bridge_qwen_vl_local_layer_spec_patch() -> None:
+    """Force Qwen-VL Bridge providers onto local Megatron layer specs on ROCm.
+
+    Megatron-Bridge's Qwen3-VL providers hard-code
+    ``get_gpt_layer_with_transformer_engine_spec`` inside ``provide()``, so the
+    generic ``provider.transformer_layer_spec = local_layer_spec`` override is
+    bypassed. On MI210 this reaches TE RMSNorm and can die with a HIP illegal
+    memory access during the first actor forward pass. Keep Bridge importable,
+    but build Qwen3-VL language layers with Megatron's local spec on ROCm.
+    """
+
+    if not torch.version.hip:
+        return
+
+    qwen3_vl_provider = import_module("megatron.bridge.models.qwen_vl.qwen3_vl_provider")
+    layer_specs = import_module("megatron.core.models.gpt.gpt_layer_specs")
+    qwen3_vl_model = import_module("megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model")
+
+    qwen3_vl_cls = qwen3_vl_provider.Qwen3VLModelProvider
+    qwen3_vl_moe_cls = qwen3_vl_provider.Qwen3VLMoEModelProvider
+    if getattr(qwen3_vl_cls.provide, "_relax_rocm_qwen_vl_local_layer_spec_patch", False) and getattr(
+        qwen3_vl_moe_cls.provide, "_relax_rocm_qwen_vl_local_layer_spec_patch", False
+    ):
+        return
+
+    def _local_language_layer_spec(provider, num_experts, moe_grouped_gemm):
+        return layer_specs.get_gpt_layer_local_spec(
+            num_experts=num_experts,
+            moe_grouped_gemm=moe_grouped_gemm,
+            qk_layernorm=provider.qk_layernorm,
+            normalization=provider.normalization,
+        )
+
+    def _apply_freeze_options(provider, model) -> None:
+        if provider.freeze_language_model or provider.freeze_vision_model or provider.freeze_vision_projection:
+            model.freeze(
+                freeze_language_model=provider.freeze_language_model,
+                freeze_vision_model=provider.freeze_vision_model,
+                freeze_vision_projection=provider.freeze_vision_projection,
+            )
+
+    def _relax_qwen3_vl_provide(self, pre_process=None, post_process=None, vp_stage=None):
+        del vp_stage
+        model = qwen3_vl_model.Qwen3VLModel(
+            language_transformer_config=self,
+            language_transformer_layer_spec=_local_language_layer_spec(
+                self,
+                num_experts=None,
+                moe_grouped_gemm=False,
+            ),
+            vision_transformer_config=self.vision_config,
+            pre_process=pre_process,
+            post_process=post_process,
+            pg_collection=self._pg_collection,
+            add_encoder=self.add_encoder,
+            add_decoder=self.add_decoder,
+        )
+        _apply_freeze_options(self, model)
+        return model
+
+    def _relax_qwen3_vl_moe_provide(self, pre_process=None, post_process=None, vp_stage=None):
+        del vp_stage
+        model = qwen3_vl_model.Qwen3VLModel(
+            language_transformer_config=self,
+            language_transformer_layer_spec=_local_language_layer_spec(
+                self,
+                num_experts=self.num_moe_experts,
+                moe_grouped_gemm=True,
+            ),
+            vision_transformer_config=self.vision_config,
+            pre_process=pre_process,
+            post_process=post_process,
+            pg_collection=self._pg_collection,
+            add_encoder=self.add_encoder,
+            add_decoder=self.add_decoder,
+        )
+        _apply_freeze_options(self, model)
+        return model
+
+    _relax_qwen3_vl_provide._relax_rocm_qwen_vl_local_layer_spec_patch = True
+    _relax_qwen3_vl_moe_provide._relax_rocm_qwen_vl_local_layer_spec_patch = True
+    if not hasattr(qwen3_vl_cls, "_relax_rocm_original_provide"):
+        qwen3_vl_cls._relax_rocm_original_provide = qwen3_vl_cls.provide
+    if not hasattr(qwen3_vl_moe_cls, "_relax_rocm_original_provide"):
+        qwen3_vl_moe_cls._relax_rocm_original_provide = qwen3_vl_moe_cls.provide
+    qwen3_vl_cls.provide = _relax_qwen3_vl_provide
+    qwen3_vl_moe_cls.provide = _relax_qwen3_vl_moe_provide
 
 
 def install_rocm_bridge_qwen3_local_mapping_patch() -> None:
@@ -252,6 +436,11 @@ def install_rocm_bridge_qwen3_local_mapping_patch() -> None:
 
     if not torch.version.hip:
         return
+
+    install_rocm_bridge_mamba_shims()
+    install_rocm_bridge_experimental_attention_shims()
+    install_rocm_bridge_cuda_graph_shims()
+    install_rocm_bridge_qwen_vl_local_layer_spec_patch()
 
     from megatron.bridge.models.conversion.mapping_registry import MegatronMappingRegistry
     from megatron.bridge.models.conversion.param_mapping import AutoMapping
@@ -277,4 +466,5 @@ def install_rocm_bridge_qwen3_local_mapping_patch() -> None:
         return MegatronMappingRegistry(*registry.get_all_mappings(), *extra_mappings)
 
     _mapping_registry_with_local_aliases._relax_rocm_patched = True
+    _mapping_registry_with_local_aliases._relax_rocm_original_mapping_registry = original_mapping_registry
     Qwen3Bridge.mapping_registry = _mapping_registry_with_local_aliases

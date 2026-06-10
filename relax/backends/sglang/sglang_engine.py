@@ -35,6 +35,7 @@ _MEGATRON_ISOLATION_ENV_VAR = "RELAX_SGLANG_BLOCK_MEGATRON_IMPORTS"
 _PROCESS_MEGATRON_IMPORT_BLOCKER = None
 _PROCESS_MEGATRON_PATH_PRUNED = False
 _PROCESS_MEGATRON_IMPORTS_BLOCKED = False
+_PROCESS_SGL_KERNEL_STUB_INSTALLED = False
 _MEGATRON_BLOCKED_PREFIXES = ("megatron.core",)
 
 
@@ -43,6 +44,8 @@ if TYPE_CHECKING:
 
 
 def _get_server_args_cls():
+    _install_optional_sgl_kernel_stub_on_hip()
+
     from sglang.srt.server_args import ServerArgs
 
     return ServerArgs
@@ -194,6 +197,88 @@ def _is_megatron_editable_path_entry(path_entry: object) -> bool:
 
 def _is_blocked_megatron_module(fullname: str) -> bool:
     return any(fullname == prefix or fullname.startswith(f"{prefix}.") for prefix in _MEGATRON_BLOCKED_PREFIXES)
+
+
+def _prepend_rocm_sgl_kernel_stub_path() -> bool:
+    stub_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "rocm_stubs"))
+    if not os.path.isdir(stub_root):
+        raise FileNotFoundError(f"ROCm sgl_kernel stub path does not exist: {stub_root}")
+
+    changed = False
+    if stub_root not in sys.path:
+        sys.path.insert(0, stub_root)
+        changed = True
+
+    pythonpath_entries = [entry for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep) if entry]
+    if stub_root not in pythonpath_entries:
+        os.environ["PYTHONPATH"] = os.pathsep.join([stub_root, *pythonpath_entries])
+        changed = True
+
+    return changed
+
+
+def _install_sgl_kernel_stub_on_hip(import_error: BaseException) -> bool:
+    global _PROCESS_SGL_KERNEL_STUB_INSTALLED
+
+    changed = _prepend_rocm_sgl_kernel_stub_path()
+    if _PROCESS_SGL_KERNEL_STUB_INSTALLED:
+        return changed
+
+    unavailable_message = (
+        "sgl_kernel is unavailable on this ROCm runtime. This Relax path only stubs it to let "
+        "SGLang import optional CUDA-only LoRA/MoE modules for dense transformers serving. "
+        f"Original import error: {import_error}"
+    )
+
+    class _UnavailableSglKernelSymbol:
+        def __getattr__(self, name):
+            return self
+
+        def __call__(self, *args, **kwargs):
+            raise RuntimeError(unavailable_message)
+
+        def __bool__(self):
+            return False
+
+        def __repr__(self):
+            return "<unavailable ROCm sgl_kernel symbol>"
+
+    class _SglKernelStubLoader(importlib.abc.Loader):
+        def create_module(self, spec):
+            return None
+
+        def exec_module(self, module):
+            module.__path__ = []
+            module.__getattr__ = lambda name: _UnavailableSglKernelSymbol()
+
+    class _SglKernelStubFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "sgl_kernel" or fullname.startswith("sgl_kernel."):
+                return importlib.machinery.ModuleSpec(fullname, _SglKernelStubLoader(), is_package=True)
+            return None
+
+    for name in list(sys.modules):
+        if name == "sgl_kernel" or name.startswith("sgl_kernel."):
+            sys.modules.pop(name, None)
+
+    sys.meta_path.insert(0, _SglKernelStubFinder())
+    _PROCESS_SGL_KERNEL_STUB_INSTALLED = True
+    logger.warning("Installed ROCm sgl_kernel import stub for optional SGLang CUDA-only modules")
+    return True
+
+
+def _install_optional_sgl_kernel_stub_on_hip() -> bool:
+    import torch
+
+    if torch.version.hip is None:
+        return False
+
+    try:
+        import sgl_kernel  # noqa: F401
+
+        return False
+    except (ImportError, OSError) as exc:
+        return _install_sgl_kernel_stub_on_hip(exc)
 
 
 class _MegatronImportBlocker(importlib.abc.MetaPathFinder):
@@ -353,7 +438,7 @@ def _disable_sglang_jit_store_cache_on_hip() -> bool:
     if torch.version.hip is None:
         return False
 
-    changed = False
+    changed = _install_optional_sgl_kernel_stub_on_hip()
 
     from sglang.srt.mem_cache import memory_pool
 

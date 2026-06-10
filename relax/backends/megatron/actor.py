@@ -68,6 +68,12 @@ logging.getLogger("megatron").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
+def should_update_rollout_weights(update_weights_interval: int, rollout_id: int) -> bool:
+    if update_weights_interval < 1:
+        raise ValueError(f"update_weights_interval must be >= 1, got {update_weights_interval}")
+    return (rollout_id + 1) % update_weights_interval == 0
+
+
 class MegatronTrainRayActor(TrainRayActor):
     def init(
         self,
@@ -343,7 +349,16 @@ class MegatronTrainRayActor(TrainRayActor):
     def _switch_model(self, target_tag: str) -> None:
         if target_tag not in self.weights_backuper.backup_tags:
             raise ValueError(f"Cannot switch to unknown model tag: {target_tag}")
+        if self._active_model_tag == target_tag:
+            return
         self.weights_backuper.restore(target_tag)
+        if (
+            device_utils.get_accelerator_type() == device_utils.AcceleratorType.ROCM
+            and hasattr(self, "optimizer")
+            and hasattr(self.optimizer, "reload_model_params")
+        ):
+            logger.info("HIP/ROCm detected: reloading optimizer main params after switching to %s", target_tag)
+            self.optimizer.reload_model_params()
         self._active_model_tag = target_tag
 
     def fill_routing_replay(self, data_iterator, num_microbatches, rollout_data):
@@ -660,7 +675,14 @@ class MegatronTrainRayActor(TrainRayActor):
             self.save_model(rollout_id, force_sync=is_train_done)
         if self.args.offload_train:
             self.sleep()
-        self.update_weights()
+        if should_update_rollout_weights(self.args.update_weights_interval, rollout_id):
+            self.update_weights()
+        else:
+            logger.info(
+                "Skipping rollout weight update at rollout_id=%s because update_weights_interval=%s",
+                rollout_id,
+                self.args.update_weights_interval,
+            )
         tracking_utils.flush_metrics(self.args, compute_rollout_step(self.args, rollout_id))
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
@@ -1158,6 +1180,9 @@ class MegatronTrainRayActor(TrainRayActor):
         ):
             print_memory("before update_weights")
             self.weight_updater.update_weights()
+            if device_utils.get_accelerator_type() == device_utils.AcceleratorType.ROCM:
+                logger.info("HIP/ROCm detected: synchronizing after rollout weight update")
+                device_utils.synchronize()
             print_memory("after update_weights", clear_before_print=True)
 
             if self.args.ci_test and len(rollout_engines) > 0:

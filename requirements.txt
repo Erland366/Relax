@@ -22,6 +22,10 @@ ring_flash_attn
 sglang-router>=0.2.3
 tensorboard
 wandb
+TransferQueue==0.1.7
+compressed-tensors==0.15.0.1
+xgrammar==0.1.32
+torch-memory-saver @ git+https://github.com/fzyzcjy/torch_memory_saver.git@64a92e1d7fb822ea4af5579c8cebb162692c531c
 debugpy==1.8.0
 math_verify==0.8.0
 librosa
@@ -29,6 +33,11 @@ imageio[ffmpeg]
 colorlog
 loguru
 av==17.0.0
+torchvision==0.24.1
+openai==2.6.1
+openai-harmony==0.0.4
+partial_json_parser
+sentencepiece
 transformers==5.3.0
 huggingface_hub==1.7.2
 blessed==1.38.0
@@ -36,5 +45,6 @@ gpustat
 dool
 pystack
 py-spy
+pybase64
 ipdb
 mathruler==0.1.0

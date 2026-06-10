@@ -95,6 +95,35 @@ class UpdateWeightFromDistributed:
         )
         self._model_update_groups = None
 
+    def _should_teardown_model_update_group_after_update(self) -> bool:
+        return (
+            device_utils.get_accelerator_type() == device_utils.AcceleratorType.ROCM
+            and getattr(self, "_is_pp_src_rank", False)
+            and self._model_update_groups is not None
+        )
+
+    def _ensure_model_update_group_connected(self) -> None:
+        if not getattr(self, "_is_pp_src_rank", False) or self._model_update_groups is not None:
+            return
+
+        logger.info("Recreating distributed rollout weight update group %s", self._group_name)
+        self._model_update_groups = connect_rollout_engines_from_distributed(
+            self.args,
+            self._group_name,
+            self.rollout_engines,
+            engine_gpu_counts=self._engine_gpu_counts,
+        )
+
+    def _teardown_model_update_group_after_update(self) -> None:
+        if not self._should_teardown_model_update_group_after_update():
+            return
+
+        logger.info(
+            "HIP/ROCm detected: destroying distributed rollout weight update group %s after weight update",
+            self._group_name,
+        )
+        self.disconnect_rollout_engines()
+
     @torch.no_grad()
     def update_weights(self) -> None:
         """Pause → flush → non-expert (TP) → expert (EP) → continue.
@@ -114,6 +143,9 @@ class UpdateWeightFromDistributed:
                     post_process_quantization=False,
                     rollout_engines=self.rollout_engines,
                 )
+        dist.barrier(group=get_gloo_group())
+
+        self._ensure_model_update_group_connected()
         dist.barrier(group=get_gloo_group())
 
         buffer_size = 0
@@ -154,6 +186,12 @@ class UpdateWeightFromDistributed:
                     post_process_quantization=True,
                     rollout_engines=self.rollout_engines,
                 )
+        dist.barrier(group=get_gloo_group())
+
+        self._teardown_model_update_group_after_update()
+        dist.barrier(group=get_gloo_group())
+
+        if dist.get_rank() == 0:
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
@@ -355,24 +393,46 @@ def update_weights_from_distributed(
     converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
 ) -> list[ObjectRef]:
     """Send metadata (Ray), broadcast tensors (NCCL rank 0 → engines)."""
+    broadcast_named_tensors = prepare_broadcast_named_tensors(converted_named_tensors)
     refs = [
         engine.update_weights_from_distributed.remote(
-            names=[name for name, _ in converted_named_tensors],
-            dtypes=[param.dtype for _, param in converted_named_tensors],
-            shapes=[param.shape for _, param in converted_named_tensors],
+            names=[name for name, _ in broadcast_named_tensors],
+            dtypes=[param.dtype for _, param in broadcast_named_tensors],
+            shapes=[param.shape for _, param in broadcast_named_tensors],
             group_name=group_name,
             weight_version=str(weight_version),
         )
         for engine in rollout_engines
     ]
 
+    broadcast_tensors_to_rollout(group, broadcast_named_tensors)
+
+    return refs
+
+
+def broadcast_tensors_to_rollout(
+    group: dist.ProcessGroup,
+    broadcast_named_tensors: Sequence[tuple[str, torch.Tensor]],
+) -> None:
+    if device_utils.get_accelerator_type() == device_utils.AcceleratorType.ROCM:
+        for _, param in broadcast_named_tensors:
+            dist.broadcast(param.data, 0, group=group, async_op=False)
+        return
+
     handles = []
-    for _, param in converted_named_tensors:
+    for _, param in broadcast_named_tensors:
         handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
     for handle in handles:
         handle.wait()
 
-    return refs
+
+def prepare_broadcast_named_tensors(
+    converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
+) -> Sequence[tuple[str, torch.Tensor]]:
+    if device_utils.get_accelerator_type() != device_utils.AcceleratorType.ROCM:
+        return converted_named_tensors
+
+    return [(name, param.detach().clone(memory_format=torch.contiguous_format)) for name, param in converted_named_tensors]
 
 
 def post_process_weights(

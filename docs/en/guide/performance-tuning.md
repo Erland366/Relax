@@ -14,6 +14,56 @@ Before tuning, identify the bottleneck. Relax provides three complementary profi
 | Training Profiling | Operator analysis for Actor training / log-probs computation | `traces/<tb_experiment_name>/train_trace/` | TensorBoard or `https://ui.perfetto.dev/` |
 | Memory Profiling | GPU memory allocation history, OOM diagnosis | `traces/<tb_experiment_name>/memory_snapshot/` | [PyTorch Memory Viz](https://pytorch.org/memory_viz) |
 
+### ROCm Qwen3-0.6B fully_async Profiling
+
+For the validated 4-GPU ROCm Qwen3-0.6B fully_async path, use the dedicated wrapper instead of hand-assembling profiler flags:
+
+```bash
+bash scripts/training/multimodal/amd_qwen3_0_6b_4gpu_fully_async_profile.sh
+```
+
+The wrapper creates one timestamped artifact root:
+
+```text
+profiling_results/qwen3-0.6b-fully-async-YYYYMMDD_HHMMSS/
+├── run.log
+├── launch.env
+├── timeline/
+├── traces/<experiment>/train_trace/
+├── sglang_trace/
+└── profile_report.md
+```
+
+The default run uses W&B offline mode, `CONDA_ENV_NAME=relaxrl_rocm_after_fix`, the local built `sgl_kernel` path at `/vast/users/qirong.ho/erland/Python_project/sglang/sgl-kernel/build/lib.linux-x86_64-cpython-312`, and the known working fully_async resource split:
+
+```text
+actor=2, rollout=1, actor_fwd=1, max_staleness=1
+```
+
+The wrapper also defaults to `NUM_ROLLOUT=3` and `NO_SAVE_RNG=1`. Three rollouts are enough for startup plus steady-state step 1/2 profiling while avoiding the fourth-rollout backlog pattern that can exceed TransferQueue's fixed total storage capacity for this small run. `NO_SAVE_RNG=1` avoids the ROCm checkpoint RNG-state path that is disabled in this fork.
+
+The wrapper runs two passes by default:
+
+| Pass | Default profiler settings | Purpose |
+|---|---|---|
+| Timeline-only | `RELAX_TIMELINE_DUMP_DIR=$PROFILE_ROOT/timeline`, no PyTorch profiler, no SGLang profiler | Find rollout, actor, actor_fwd, weight-update, and metrics-reporting gaps with low overhead |
+| Focused Torch/SGLang | `RELAX_USE_PYTORCH_PROFILER=1`, `RELAX_PROFILE_TARGETS="train_overall train_actor train_log_probs"`, `RELAX_PROFILE_STEP_START=1`, `RELAX_PROFILE_STEP_END=2`, `RELAX_SGLANG_PROFILE=1`, `RELAX_SGLANG_PROFILE_STEP_START=1`, `RELAX_SGLANG_PROFILE_STEP_END=2`, `RELAX_SGLANG_PROFILE_NUM_STEPS=3` | Inspect steady-state actor/log-prob and rollout kernels after startup |
+
+Use `RELAX_PROFILE_PASS=timeline` or `RELAX_PROFILE_PASS=focused` to run only one pass. The wrapper also accepts the same `RELAX_*` environment pass-throughs used by the base AMD launcher, including `RELAX_TIMELINE_DUMP_DIR`, `RELAX_TB_EXPERIMENT_NAME`, `RELAX_USE_PYTORCH_PROFILER`, `RELAX_PROFILE_TARGETS`, `RELAX_PROFILE_STEP_START`, `RELAX_PROFILE_STEP_END`, and the `RELAX_SGLANG_PROFILE_*` variables.
+
+After the run, inspect:
+
+- `timeline/timeline_step_*.json` in `chrome://tracing` or Perfetto for end-to-end async gaps.
+- `traces/<experiment>/train_trace/` in TensorBoard profiler or a Chrome trace viewer for actor training and log-prob operators.
+- `sglang_trace/` in TensorBoard profiler or a Chrome trace viewer for rollout prefill/decode kernels.
+- `profile_report.md` for the generated artifact index, grouped timeline event durations, visible inter-event gaps, and next checks.
+
+This v1 workflow does not run `rocprof`; keep low-level ROCm profiling as a follow-up after the trace report identifies the process and stage worth isolating.
+
+::: warning
+ROCm memory snapshot coverage is limited by the existing CUDA-specific PyTorch memory APIs used by Relax. Timeline, training profiler, and SGLang profiler artifacts are the reliable first-pass sources on ROCm.
+:::
+
 ### Trace File Naming
 
 - **Training traces** include `rank{global}_dp{dp}_tp{tp}_pp{pp}` in filenames, e.g. `train_overall_rank0_dp0_tp0_pp0.1713780123.pt.trace.json.gz`

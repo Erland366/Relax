@@ -30,6 +30,8 @@ from relax.utils.misc import load_function
 
 logger = get_logger(__name__)
 _TORCH_NORM_SEQUENCE_PARALLEL_PATCHED = False
+_ROCM_TRANSFORMER_BLOCK_FINAL_NORM_PATCHED = False
+_ROCM_ZERO_DROPOUT_RNG_FORK_PATCHED = False
 
 
 def patch_torch_norm_sequence_parallel_for_rocm() -> None:
@@ -98,6 +100,78 @@ def patch_torch_norm_sequence_parallel_for_rocm() -> None:
     wrapped_torch_norm._relax_rocm_sequence_parallel_patched = True
     _TORCH_NORM_SEQUENCE_PARALLEL_PATCHED = True
     logger.info("Patched Megatron WrappedTorchNorm for ROCm sequence-parallel torch norms")
+
+
+def patch_rocm_transformer_block_final_norm() -> None:
+    """Use Megatron's torch norm for TransformerBlock final RMSNorm on ROCm.
+
+    ROCm Megatron's local GPT layer spec correctly selects ``WrappedTorchNorm``
+    for RMSNorm layers, but ``TransformerBlock`` chooses its final layernorm
+    implementation from a module-level ``LayerNormImpl`` at import time. When
+    TransformerEngine imports successfully on ROCm, that global becomes
+    ``TENorm`` even for local layer specs. Force it back to the torch norm path
+    so the actor avoids TE RMSNorm kernels.
+    """
+
+    global _ROCM_TRANSFORMER_BLOCK_FINAL_NORM_PATCHED
+    if _ROCM_TRANSFORMER_BLOCK_FINAL_NORM_PATCHED or torch.version.hip is None:
+        return
+    if os.environ.get("RELAX_ROCM_TORCH_FINAL_NORM_PATCH", "1") != "1":
+        return
+
+    from megatron.core.transformer import transformer_block
+    from megatron.core.transformer.torch_norm import WrappedTorchNorm
+
+    if transformer_block.LayerNormImpl is not WrappedTorchNorm:
+        transformer_block._relax_rocm_original_layer_norm_impl = transformer_block.LayerNormImpl
+        transformer_block.LayerNormImpl = WrappedTorchNorm
+        logger.info("Patched Megatron TransformerBlock final norm to torch norm on ROCm")
+    _ROCM_TRANSFORMER_BLOCK_FINAL_NORM_PATCHED = True
+
+
+def patch_rocm_zero_dropout_rng_tracker(args: argparse.Namespace) -> None:
+    """Skip Megatron CUDA RNG fork contexts for the ROCm zero-dropout TP1 path.
+
+    ROCm-Megatron wraps unfused attention dropout in
+    ``get_cuda_rng_tracker().fork()`` when sequence parallelism is disabled.
+    The tiny MI210 smoke run uses TP=1, sequence parallelism off, and both
+    dropout probabilities set to 0.0, so that fork only preserves RNG around an
+    identity dropout call. On this ROCm stack, reading the generator state from
+    that fork can raise ``CUDA driver error: 700``. Avoid the fork only for the
+    deterministic zero-dropout TP1 path; nonzero-dropout and TP>1 runs keep
+    Megatron's normal RNG behavior.
+    """
+
+    global _ROCM_ZERO_DROPOUT_RNG_FORK_PATCHED
+    if _ROCM_ZERO_DROPOUT_RNG_FORK_PATCHED or torch.version.hip is None:
+        return
+    if os.environ.get("RELAX_ROCM_ZERO_DROPOUT_RNG_FORK_PATCH", "1") != "1":
+        return
+    if getattr(args, "tensor_model_parallel_size", 1) != 1:
+        return
+    if float(getattr(args, "attention_dropout", 0.0) or 0.0) != 0.0:
+        return
+    if float(getattr(args, "hidden_dropout", 0.0) or 0.0) != 0.0:
+        return
+
+    from megatron.core.tensor_parallel import random as tp_random
+
+    tracker_cls = tp_random.CudaRNGStatesTracker
+    if getattr(tracker_cls.fork, "_relax_rocm_zero_dropout_patch", False):
+        _ROCM_ZERO_DROPOUT_RNG_FORK_PATCHED = True
+        return
+
+    original_fork = tracker_cls.fork
+
+    def _relax_zero_dropout_fork(self, name=None):
+        del self, name
+        return nullcontext()
+
+    _relax_zero_dropout_fork._relax_rocm_zero_dropout_patch = True
+    _relax_zero_dropout_fork._relax_rocm_original_fork = original_fork
+    tracker_cls.fork = _relax_zero_dropout_fork
+    _ROCM_ZERO_DROPOUT_RNG_FORK_PATCHED = True
+    logger.info("Patched Megatron CUDA RNG tracker fork for ROCm zero-dropout TP1 path")
 
 
 def _make_json_safe(value: Any, seen: set[int] | None = None) -> Any:
@@ -335,6 +409,7 @@ def get_model_provider_func(
             "attention_softmax_in_fp32",
             "masked_softmax_fusion",
             "bias_dropout_fusion",
+            "gradient_accumulation_fusion",
             "apply_rope_fusion",
             "recompute_granularity",
             "recompute_method",

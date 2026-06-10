@@ -26,6 +26,13 @@ def _install_fake_megatron_checkpoint_modules(monkeypatch):
     optimizer_pkg = types.ModuleType("megatron.core.optimizer")
     optimizer_pkg.__path__ = []
     distrib_optimizer = types.ModuleType("megatron.core.optimizer.distrib_optimizer")
+    training = types.ModuleType("megatron.training")
+    training.__path__ = []
+    checkpointing = types.ModuleType("megatron.training.checkpointing")
+    checkpointing.get_rng_state = lambda ckpt_format: ("original-rng-state", ckpt_format)
+    global_vars = types.ModuleType("megatron.training.global_vars")
+    global_vars._args = types.SimpleNamespace(no_save_rng=False)
+    global_vars.get_args = lambda: global_vars._args
 
     class FakeDistributedOptimizer:
         def get_parameter_state_dp_reshardable(self):
@@ -128,6 +135,9 @@ def _install_fake_megatron_checkpoint_modules(monkeypatch):
         "megatron.core.dist_checkpointing.strategies.checkpointable": checkpointable,
         "megatron.core.dist_checkpointing.strategies.resharding": resharding,
         "megatron.core.dist_checkpointing.strategies.torch": torch_strategy,
+        "megatron.training": training,
+        "megatron.training.checkpointing": checkpointing,
+        "megatron.training.global_vars": global_vars,
     }
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
@@ -163,6 +173,44 @@ def test_patch_rocm_checkpoint_writer_preserves_original_queue_off_hip(monkeypat
     writer.patch_rocm_checkpoint_writer()
 
     assert filesystem_async._get_write_results_queue() == "original-queue"
+
+
+def test_patch_rocm_checkpoint_writer_skips_rng_state_when_no_save_rng_on_hip(monkeypatch):
+    writer, _, _ = _install_fake_megatron_checkpoint_modules(monkeypatch)
+    checkpointing = sys.modules["megatron.training.checkpointing"]
+    global_vars = sys.modules["megatron.training.global_vars"]
+    global_vars._args.no_save_rng = True
+    monkeypatch.setattr(writer.torch.version, "hip", "6.3.0")
+
+    writer.patch_rocm_checkpoint_writer()
+
+    assert checkpointing.get_rng_state("torch_dist") is None
+
+
+def test_patch_rocm_checkpoint_writer_rejects_rng_state_without_no_save_rng_on_hip(monkeypatch):
+    writer, _, _ = _install_fake_megatron_checkpoint_modules(monkeypatch)
+    checkpointing = sys.modules["megatron.training.checkpointing"]
+    monkeypatch.setattr(writer.torch.version, "hip", "6.3.0")
+
+    writer.patch_rocm_checkpoint_writer()
+
+    try:
+        checkpointing.get_rng_state("torch_dist")
+    except RuntimeError as exc:
+        assert "Pass --no-save-rng" in str(exc)
+    else:
+        raise AssertionError("Expected ROCm checkpoint RNG collection to fail without --no-save-rng")
+
+
+def test_patch_rocm_checkpoint_writer_allows_rng_state_escape_hatch(monkeypatch):
+    writer, _, _ = _install_fake_megatron_checkpoint_modules(monkeypatch)
+    checkpointing = sys.modules["megatron.training.checkpointing"]
+    monkeypatch.setattr(writer.torch.version, "hip", "6.3.0")
+    monkeypatch.setenv("RELAX_ROCM_ALLOW_CHECKPOINT_RNG_STATE", "1")
+
+    writer.patch_rocm_checkpoint_writer()
+
+    assert checkpointing.get_rng_state("torch_dist") == ("original-rng-state", "torch_dist")
 
 
 def test_patch_rocm_checkpoint_writer_drops_distopt_scalar_step_on_hip(monkeypatch):

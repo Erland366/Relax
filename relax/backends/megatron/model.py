@@ -34,11 +34,15 @@ from .data import DataIterator, get_batch
 from .loss import loss_function
 from .model_provider import (
     get_model_provider_func,
+    patch_rocm_transformer_block_final_norm,
+    patch_rocm_zero_dropout_rng_tracker,
     patch_torch_norm_sequence_parallel_for_rocm,
     wrap_model_provider_with_freeze,
 )
 from .optimizer_utils import (
     normalize_single_rank_optimizer_args,
+    patch_rocm_optimizer_cuda_graph_health_check,
+    patch_rocm_torch_optimizer_for_megatron,
     reject_rocm_actor_cpu_offload_optimizer,
 )
 
@@ -137,7 +141,11 @@ def setup_model_and_optimizer(
     assert args.load is not None or args.pretrained_checkpoint is not None
     normalize_single_rank_optimizer_args(args, role)
     reject_rocm_actor_cpu_offload_optimizer(args, role)
+    patch_rocm_torch_optimizer_for_megatron(args, role)
+    patch_rocm_optimizer_cuda_graph_health_check(args, role)
     patch_torch_norm_sequence_parallel_for_rocm()
+    patch_rocm_transformer_block_final_norm()
+    patch_rocm_zero_dropout_rng_tracker(args)
 
     model = get_model(
         wrap_model_provider_with_freeze(get_model_provider_func(args, role), args),

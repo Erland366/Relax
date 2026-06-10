@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 ROOT_DIR="${RELAX_ROOT_DIR:-$(cd -- "${SCRIPT_DIR}/../../.." &>/dev/null && pwd)}"
 ASSET_DIR="/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets"
 MEGATRON_DIR="${MEGATRON_DIR:-/vast/users/qirong.ho/erland/Python_project/ROCm-Megatron-LM}"
+MEGATRON_BRIDGE_DIR="${MEGATRON_BRIDGE_DIR:-/vast/users/qirong.ho/erland/Python_project/Megatron-Bridge}"
 LOG_DIR="${LOG_DIR:-${ROOT_DIR}/log}"
 mkdir -p "${LOG_DIR}"
 
@@ -158,6 +159,7 @@ configure_sglang_parallelism() {
     SGLANG_DATA_PARALLEL_SIZE="${SGLANG_DATA_PARALLEL_SIZE:-1}"
     SGLANG_EXPERT_PARALLEL_SIZE="${SGLANG_EXPERT_PARALLEL_SIZE:-1}"
     SGLANG_ENABLE_DP_ATTENTION="${SGLANG_ENABLE_DP_ATTENTION:-0}"
+    SGLANG_ATTENTION_BACKEND="${SGLANG_ATTENTION_BACKEND:-torch_native}"
 
     require_positive_integer ROLLOUT_NUM_GPUS_PER_ENGINE
     require_positive_integer SGLANG_PIPELINE_PARALLEL_SIZE
@@ -189,12 +191,14 @@ configure_megatron_parallelism() {
     CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-1}"
     EXPERT_MODEL_PARALLEL_SIZE="${EXPERT_MODEL_PARALLEL_SIZE:-1}"
     EXPERT_TENSOR_PARALLEL_SIZE="${EXPERT_TENSOR_PARALLEL_SIZE:-1}"
+    ENABLE_RECOMPUTE="${ENABLE_RECOMPUTE:-1}"
 
     require_positive_integer TENSOR_MODEL_PARALLEL_SIZE
     require_positive_integer PIPELINE_MODEL_PARALLEL_SIZE
     require_positive_integer CONTEXT_PARALLEL_SIZE
     require_positive_integer EXPERT_MODEL_PARALLEL_SIZE
     require_positive_integer EXPERT_TENSOR_PARALLEL_SIZE
+    require_boolean_flag ENABLE_RECOMPUTE
 
     MODEL_PARALLEL_SIZE=$((TENSOR_MODEL_PARALLEL_SIZE * PIPELINE_MODEL_PARALLEL_SIZE * CONTEXT_PARALLEL_SIZE))
 
@@ -248,8 +252,28 @@ configure_runtime_environment() {
     export RAY_grpc_client_keepalive_timeout_ms="${RAY_grpc_client_keepalive_timeout_ms:-300000}"
     unset ROCR_VISIBLE_DEVICES
 
-    export PYTHONPATH="/vast/users/qirong.ho/erland/Python_project/sglang/python:${MEGATRON_DIR}:${ROOT_DIR}"
+    if [ ! -d "${MEGATRON_BRIDGE_DIR}/src/megatron/bridge" ]; then
+        echo "MEGATRON_BRIDGE_DIR does not contain src/megatron/bridge: ${MEGATRON_BRIDGE_DIR}" >&2
+        exit 2
+    fi
+
+    SGLANG_PYTHON_DIR="${SGLANG_PYTHON_DIR:-/vast/users/qirong.ho/erland/Python_project/sglang/python}"
+    if [ -n "${RELAX_SGL_KERNEL_BUILD_DIR:-}" ] && [ ! -d "${RELAX_SGL_KERNEL_BUILD_DIR}" ]; then
+        echo "RELAX_SGL_KERNEL_BUILD_DIR does not exist: ${RELAX_SGL_KERNEL_BUILD_DIR}" >&2
+        exit 2
+    fi
+    if [ ! -d "${SGLANG_PYTHON_DIR}" ]; then
+        echo "SGLANG_PYTHON_DIR does not exist: ${SGLANG_PYTHON_DIR}" >&2
+        exit 2
+    fi
+
+    if [ -n "${RELAX_SGL_KERNEL_BUILD_DIR:-}" ]; then
+        export PYTHONPATH="${RELAX_SGL_KERNEL_BUILD_DIR}:${SGLANG_PYTHON_DIR}:${MEGATRON_BRIDGE_DIR}/src:${MEGATRON_DIR}:${ROOT_DIR}"
+    else
+        export PYTHONPATH="${SGLANG_PYTHON_DIR}:${MEGATRON_BRIDGE_DIR}/src:${MEGATRON_DIR}:${ROOT_DIR}"
+    fi
     export MEGATRON="${MEGATRON_DIR}"
+    export MEGATRON_BRIDGE_DIR
     export RELAX="${ROOT_DIR}"
     export MODEL_CONFIG_DIR="${ROOT_DIR}/scripts/models"
     export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
@@ -269,6 +293,10 @@ configure_run_defaults() {
     SAVE_INTERVAL="${SAVE_INTERVAL:-100}"
     CKPT_FORMAT="${CKPT_FORMAT:-torch_dist}"
     NO_SAVE_OPTIM="${NO_SAVE_OPTIM:-0}"
+    NO_SAVE_RNG="${NO_SAVE_RNG:-0}"
+    NO_LOAD_RNG="${NO_LOAD_RNG:-0}"
+    NUM_DATA_STORAGE_UNITS="${NUM_DATA_STORAGE_UNITS:-1}"
+    require_positive_integer NUM_DATA_STORAGE_UNITS
     SCHEDULER_RESUME_POLICY="${SCHEDULER_RESUME_POLICY:-strict}"
     case "${RELAX_EXECUTION_MODE}" in
         fully_async)
@@ -388,7 +416,8 @@ configure_run_defaults() {
 
     PROMPT_SET="${ASSET_DIR}/dapo-math-17k/dapo-math-17k.jsonl"
     HF_CHECKPOINT="${HF_CHECKPOINT:-${ASSET_DIR}/${MODEL_ASSET_NAME}}"
-    RUN_LOG="${LOG_DIR}/amd-${MODEL_LOG_NAME}-${GPU_LABEL}-${NOW}.log"
+    RUN_LOG="${RUN_LOG:-${LOG_DIR}/amd-${MODEL_LOG_NAME}-${GPU_LABEL}-${NOW}.log}"
+    mkdir -p "$(dirname "${RUN_LOG}")"
     RAY_DASHBOARD_URL="http://${MASTER_ADDR}:8265"
 }
 
@@ -521,6 +550,27 @@ start_ray_head() {
     wait_for_ray_dashboard
 }
 
+configure_rocm_library_preload() {
+    ROCM_HSA_RUNTIME_PRELOAD="${ROCM_HSA_RUNTIME_PRELOAD:-/opt/rocm-7.0.0/lib/libhsa-runtime64.so.1}"
+    if [ ! -f "${ROCM_HSA_RUNTIME_PRELOAD}" ]; then
+        echo "ROCM_HSA_RUNTIME_PRELOAD does not exist: ${ROCM_HSA_RUNTIME_PRELOAD}" >&2
+        exit 2
+    fi
+
+    case ":${LD_PRELOAD:-}:" in
+        *":${ROCM_HSA_RUNTIME_PRELOAD}:"*)
+            ;;
+        *)
+            if [ -n "${LD_PRELOAD:-}" ]; then
+                export LD_PRELOAD="${ROCM_HSA_RUNTIME_PRELOAD}:${LD_PRELOAD}"
+            else
+                export LD_PRELOAD="${ROCM_HSA_RUNTIME_PRELOAD}"
+            fi
+            ;;
+    esac
+    export ROCM_HSA_RUNTIME_PRELOAD
+}
+
 build_runtime_env_json() {
     python - <<'PY'
 import json
@@ -564,6 +614,10 @@ keys = [
     "CUDA_DEVICE_MAX_CONNECTIONS",
     "MASTER_ADDR",
     "HIP_VISIBLE_DEVICES",
+    "RELAX_SGL_KERNEL_BUILD_DIR",
+    "MEGATRON_BRIDGE_DIR",
+    "LD_PRELOAD",
+    "ROCM_HSA_RUNTIME_PRELOAD",
     "GLOO_SOCKET_IFNAME",
     "TP_SOCKET_IFNAME",
     "NCCL_SOCKET_IFNAME",
@@ -635,6 +689,12 @@ build_checkpoint_args() {
     if [ "${NO_SAVE_OPTIM}" = "1" ]; then
         CKPT_ARGS+=(--no-save-optim)
     fi
+    if [ "${NO_SAVE_RNG}" = "1" ]; then
+        CKPT_ARGS+=(--no-save-rng)
+    fi
+    if [ "${NO_LOAD_RNG}" = "1" ]; then
+        CKPT_ARGS+=(--no-load-rng)
+    fi
 
     case "${SCHEDULER_RESUME_POLICY}" in
         strict)
@@ -679,6 +739,7 @@ build_rollout_args() {
         --rollout-temperature 0.8
         --global-batch-size "${GLOBAL_BATCH_SIZE}"
         --num-steps-per-rollout "${NUM_STEPS_PER_ROLLOUT}"
+        --update-weights-interval "${UPDATE_WEIGHTS_INTERVAL:-1}"
         --use-fault-tolerance
     )
     if [ "${USE_BALANCE_DATA}" = "1" ]; then
@@ -697,10 +758,14 @@ build_megatron_args() {
         --expert-model-parallel-size "${EXPERT_MODEL_PARALLEL_SIZE}"
         --expert-tensor-parallel-size "${EXPERT_TENSOR_PARALLEL_SIZE}"
         --micro-batch-size "${MICRO_BATCH_SIZE}"
-        --recompute-granularity full
-        --recompute-method uniform
-        --recompute-num-layers 1
     )
+    if [ "${ENABLE_RECOMPUTE}" = "1" ]; then
+        MEGATRON_PARALLEL_ARGS+=(
+            --recompute-granularity full
+            --recompute-method uniform
+            --recompute-num-layers 1
+        )
+    fi
     if [ "${ENABLE_SEQUENCE_PARALLEL}" = "1" ]; then
         MEGATRON_PARALLEL_ARGS+=(--sequence-parallel)
     fi
@@ -726,9 +791,9 @@ build_algorithm_args() {
 build_optimizer_args() {
     OPTIMIZER_ARGS=(
         --optimizer adam
-        --lr 1e-6
+        --lr "${LR:-1e-6}"
         --lr-decay-style constant
-        --weight-decay 0.1
+        --weight-decay "${WEIGHT_DECAY:-0.1}"
         --adam-beta1 0.9
         --adam-beta2 0.98
     )
@@ -737,7 +802,7 @@ build_optimizer_args() {
 build_wandb_args() {
     WANDB_ARGS=(
         --use-wandb
-        --wandb-mode online
+        --wandb-mode "${WANDB_MODE:-online}"
         --wandb-team "${WANDB_ENTITY}"
         --wandb-project "${WANDB_PROJECT}"
         --wandb-group "${WANDB_GROUP}"
@@ -763,6 +828,80 @@ build_debug_args() {
     append_env_arg RELAX_SAVE_DEBUG_TRAIN_DATA --save-debug-train-data
     append_env_arg RELAX_LOAD_DEBUG_ROLLOUT_DATA --load-debug-rollout-data
     append_env_arg RELAX_LOAD_DEBUG_ROLLOUT_DATA_SUBSAMPLE --load-debug-rollout-data-subsample
+    append_env_arg RELAX_CUSTOM_MEGATRON_BEFORE_TRAIN_STEP_HOOK_PATH --custom-megatron-before-train-step-hook-path
+}
+
+append_profiling_arg() {
+    local env_name="$1"
+    local flag="$2"
+    local value="${!env_name:-}"
+
+    if [ -n "${value}" ]; then
+        PROFILING_ARGS+=("${flag}" "${value}")
+    fi
+}
+
+append_profiling_flag() {
+    local env_name="$1"
+    local flag="$2"
+    local value="${!env_name:-}"
+
+    case "${value}" in
+        "")
+            ;;
+        0)
+            ;;
+        1)
+            PROFILING_ARGS+=("${flag}")
+            ;;
+        *)
+            echo "${env_name} must be 0 or 1 when set, got ${value}" >&2
+            exit 2
+            ;;
+    esac
+}
+
+append_profiling_list_arg() {
+    local env_name="$1"
+    local flag="$2"
+    local value="${!env_name:-}"
+    local values=()
+
+    if [ -z "${value}" ]; then
+        return 0
+    fi
+
+    read -ra values <<< "${value}"
+    if [ "${#values[@]}" -eq 0 ]; then
+        return 0
+    fi
+    PROFILING_ARGS+=("${flag}" "${values[@]}")
+}
+
+build_profiling_args() {
+    PROFILING_ARGS=()
+
+    append_profiling_arg RELAX_TB_EXPERIMENT_NAME --tb-experiment-name
+    append_profiling_arg RELAX_TIMELINE_DUMP_DIR --timeline-dump-dir
+
+    append_profiling_flag RELAX_USE_PYTORCH_PROFILER --use-pytorch-profiler
+    append_profiling_list_arg RELAX_PROFILE_TARGETS --profile-target
+    append_profiling_arg RELAX_PROFILE_STEP_START --profile-step-start
+    append_profiling_arg RELAX_PROFILE_STEP_END --profile-step-end
+    append_profiling_flag RELAX_PROFILE_WITH_STACK --profile-with-stack
+    append_profiling_flag RELAX_PROFILE_WITH_MEMORY --profile-with-memory
+    append_profiling_flag RELAX_PROFILE_WITH_FLOPS --profile-with-flops
+
+    append_profiling_flag RELAX_SGLANG_PROFILE --sglang-profile
+    append_profiling_arg RELAX_SGLANG_PROFILE_STEP_START --sglang-profile-step-start
+    append_profiling_arg RELAX_SGLANG_PROFILE_STEP_END --sglang-profile-step-end
+    append_profiling_list_arg RELAX_SGLANG_PROFILE_STEPS --sglang-profile-steps
+    append_profiling_arg RELAX_SGLANG_PROFILE_NUM_STEPS --sglang-profile-num-steps
+    append_profiling_list_arg RELAX_SGLANG_PROFILE_ACTIVITIES --sglang-profile-activities
+    append_profiling_flag RELAX_SGLANG_PROFILE_BY_STAGE --sglang-profile-by-stage
+    append_profiling_flag RELAX_SGLANG_PROFILE_WITH_STACK --sglang-profile-with-stack
+    append_profiling_flag RELAX_SGLANG_PROFILE_RECORD_SHAPES --sglang-profile-record-shapes
+    append_profiling_arg RELAX_SGLANG_PROFILE_OUTPUT_DIR --sglang-profile-output-dir
 }
 
 build_sglang_args() {
@@ -775,7 +914,7 @@ build_sglang_args() {
         --sglang-expert-parallel-size "${SGLANG_EXPERT_PARALLEL_SIZE}"
         --sglang-mem-fraction-static "${SGLANG_MEM_FRACTION_STATIC:-0.7}"
         --sglang-model-impl transformers
-        --sglang-attention-backend triton
+        --sglang-attention-backend "${SGLANG_ATTENTION_BACKEND}"
         --sglang-sampling-backend pytorch
         --sglang-disable-custom-all-reduce
         --sglang-disable-cuda-graph
@@ -802,6 +941,7 @@ build_rocm_compat_args() {
         --attention-backend unfused
         --no-masked-softmax-fusion
         --no-bias-dropout-fusion
+        --no-gradient-accumulation-fusion
         --qkv-format bshd
         --no-rope-fusion
     )
@@ -815,6 +955,7 @@ build_training_args() {
     build_optimizer_args
     build_wandb_args
     build_debug_args
+    build_profiling_args
     build_sglang_args
     build_rocm_compat_args
     build_asynchronous_rl_args
@@ -824,18 +965,24 @@ log_launch_config() {
     echo "Launching Relax AMD ${MODEL_LOG_NAME} run" >&2
     echo "  mode: ${RELAX_EXECUTION_MODE}, max_staleness=${MAX_STALENESS}, balance_data=${USE_BALANCE_DATA}, use_kl_loss=${USE_KL_LOSS}" >&2
     echo "  resources: HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES}, RAY_NUM_GPUS=${RAY_NUM_GPUS}, actor_gpus=${ACTOR_RESOURCE_GPUS}, rollout_gpus=${ROLLOUT_RESOURCE_GPUS}, actor_fwd_gpus=${ACTOR_FWD_RESOURCE_GPUS}, RESOURCE_JSON=${RESOURCE_JSON}" >&2
-    echo "  training: TP=${TENSOR_MODEL_PARALLEL_SIZE}, PP=${PIPELINE_MODEL_PARALLEL_SIZE}, CP=${CONTEXT_PARALLEL_SIZE}, micro_batch=${MICRO_BATCH_SIZE}, global_batch=${GLOBAL_BATCH_SIZE}" >&2
+    echo "  training: TP=${TENSOR_MODEL_PARALLEL_SIZE}, PP=${PIPELINE_MODEL_PARALLEL_SIZE}, CP=${CONTEXT_PARALLEL_SIZE}, micro_batch=${MICRO_BATCH_SIZE}, global_batch=${GLOBAL_BATCH_SIZE}, recompute=${ENABLE_RECOMPUTE}" >&2
     echo "  rollout: num_rollout=${NUM_ROLLOUT}, steps_per_rollout=${NUM_STEPS_PER_ROLLOUT}, rollout_batch=${ROLLOUT_BATCH_SIZE}, samples_per_prompt=${N_SAMPLES_PER_PROMPT}" >&2
+    echo "  transfer_queue: num_data_storage_units=${NUM_DATA_STORAGE_UNITS}" >&2
     echo "  sequence: seq_length=${SEQ_LENGTH}, rollout_max_response_len=${ROLLOUT_MAX_RESPONSE_LEN}, rollout_max_context_len=${ROLLOUT_MAX_CONTEXT_LEN:-unset}, rollout_max_prompt_len=${ROLLOUT_MAX_PROMPT_LEN:-unset}" >&2
-    echo "  sglang: gpus_per_engine=${ROLLOUT_NUM_GPUS_PER_ENGINE}, pp=${SGLANG_PIPELINE_PARALLEL_SIZE}, dp=${SGLANG_DATA_PARALLEL_SIZE}, ep=${SGLANG_EXPERT_PARALLEL_SIZE}, server_concurrency=${SGLANG_SERVER_CONCURRENCY}, max_running_requests=${SGLANG_MAX_RUNNING_REQUESTS:-unset}, max_total_tokens=${SGLANG_MAX_TOTAL_TOKENS:-unset}" >&2
+    echo "  sglang: gpus_per_engine=${ROLLOUT_NUM_GPUS_PER_ENGINE}, pp=${SGLANG_PIPELINE_PARALLEL_SIZE}, dp=${SGLANG_DATA_PARALLEL_SIZE}, ep=${SGLANG_EXPERT_PARALLEL_SIZE}, attention_backend=${SGLANG_ATTENTION_BACKEND}, server_concurrency=${SGLANG_SERVER_CONCURRENCY}, max_running_requests=${SGLANG_MAX_RUNNING_REQUESTS:-unset}, max_total_tokens=${SGLANG_MAX_TOTAL_TOKENS:-unset}" >&2
 }
 
 submit_training_job() {
+    local tee_args=()
+    if [ "${RUN_LOG_APPEND:-0}" = "1" ]; then
+        tee_args=(-a)
+    fi
+
     localhost_bypass python3 -m ray.scripts.scripts job submit --address="${RAY_DASHBOARD_URL}" \
         --runtime-env-json="${RUNTIME_ENV_JSON}" \
         -- python3 -m relax.entrypoints.train \
         --resource "${RESOURCE_JSON}" \
-        --num-data-storage-units 1 \
+        --num-data-storage-units "${NUM_DATA_STORAGE_UNITS}" \
         "${MODEL_ARGS[@]}" \
         "${CKPT_ARGS[@]}" \
         "${ROLLOUT_ARGS[@]}" \
@@ -843,10 +990,11 @@ submit_training_job() {
         "${GRPO_ARGS[@]}" \
         "${WANDB_ARGS[@]}" \
         "${DEBUG_ARGS[@]}" \
+        "${PROFILING_ARGS[@]}" \
         "${MEGATRON_PARALLEL_ARGS[@]}" \
         "${SGLANG_ARGS[@]}" \
         "${ROCM_COMPAT_ARGS[@]}" \
-        "${ASYNC_RL_ARGS[@]}" 2>&1 | tee "${RUN_LOG}"
+        "${ASYNC_RL_ARGS[@]}" 2>&1 | tee "${tee_args[@]}" "${RUN_LOG}"
 }
 
 main() {
@@ -863,6 +1011,7 @@ main() {
     append_no_proxy
 
     start_ray_head
+    configure_rocm_library_preload
     RUNTIME_ENV_JSON="$(build_runtime_env_json)"
     build_training_args
     log_launch_config

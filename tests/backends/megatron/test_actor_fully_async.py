@@ -33,7 +33,26 @@ class _FakeCheckpointEngineClient:
 
 
 class _MegatronActorHarness:
+    _switch_model = actor_module.MegatronTrainRayActor._switch_model
     update_weights_fully_async = actor_module.MegatronTrainRayActor.update_weights_fully_async
+
+
+class _FakeWeightsBackuper:
+    backup_tags = ["actor", "ref"]
+
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    def restore(self, tag: str) -> None:
+        self.events.append(f"restore:{tag}")
+
+
+class _FakeOptimizer:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    def reload_model_params(self) -> None:
+        self.events.append("reload_model_params")
 
 
 def _install_update_weights_fakes(monkeypatch, events: list[str]) -> None:
@@ -50,6 +69,78 @@ def _install_update_weights_fakes(monkeypatch, events: list[str]) -> None:
         return None
 
     monkeypatch.setattr(actor_module.ray, "get", fake_ray_get)
+
+
+def test_switch_model_reloads_optimizer_main_params_on_rocm(monkeypatch):
+    events: list[str] = []
+    monkeypatch.setattr(
+        actor_module.device_utils,
+        "get_accelerator_type",
+        lambda: actor_module.device_utils.AcceleratorType.ROCM,
+    )
+
+    actor = _MegatronActorHarness()
+    actor.weights_backuper = _FakeWeightsBackuper(events)
+    actor.optimizer = _FakeOptimizer(events)
+    actor._active_model_tag = None
+
+    actor._switch_model("actor")
+
+    assert events == ["restore:actor", "reload_model_params"]
+    assert actor._active_model_tag == "actor"
+
+
+def test_should_update_rollout_weights_respects_interval():
+    assert actor_module.should_update_rollout_weights(update_weights_interval=1, rollout_id=0) is True
+    assert actor_module.should_update_rollout_weights(update_weights_interval=2, rollout_id=0) is False
+    assert actor_module.should_update_rollout_weights(update_weights_interval=2, rollout_id=1) is True
+
+
+def test_should_update_rollout_weights_rejects_invalid_interval():
+    try:
+        actor_module.should_update_rollout_weights(update_weights_interval=0, rollout_id=0)
+    except ValueError as exc:
+        assert str(exc) == "update_weights_interval must be >= 1, got 0"
+    else:
+        raise AssertionError("update_weights_interval=0 should fail loudly")
+
+
+def test_switch_model_skips_optimizer_reload_off_rocm(monkeypatch):
+    events: list[str] = []
+    monkeypatch.setattr(
+        actor_module.device_utils,
+        "get_accelerator_type",
+        lambda: actor_module.device_utils.AcceleratorType.CUDA,
+    )
+
+    actor = _MegatronActorHarness()
+    actor.weights_backuper = _FakeWeightsBackuper(events)
+    actor.optimizer = _FakeOptimizer(events)
+    actor._active_model_tag = None
+
+    actor._switch_model("ref")
+
+    assert events == ["restore:ref"]
+    assert actor._active_model_tag == "ref"
+
+
+def test_switch_model_skips_restore_when_target_is_already_active(monkeypatch):
+    events: list[str] = []
+    monkeypatch.setattr(
+        actor_module.device_utils,
+        "get_accelerator_type",
+        lambda: actor_module.device_utils.AcceleratorType.ROCM,
+    )
+
+    actor = _MegatronActorHarness()
+    actor.weights_backuper = _FakeWeightsBackuper(events)
+    actor.optimizer = _FakeOptimizer(events)
+    actor._active_model_tag = "actor"
+
+    actor._switch_model("actor")
+
+    assert events == []
+    assert actor._active_model_tag == "actor"
 
 
 def test_update_weights_fully_async_initializes_actor_fwd_before_rollout_lock(monkeypatch):
