@@ -12,6 +12,70 @@ Each entry should include:
 
 ---
 
+## 2026-06-10 - Retrospective on Qwen3-0.6B after_fix ROCm e2e
+
+**Type:** Retrospective
+**General description:** A clean `after_fix` Qwen3-0.6B ROCm e2e run succeeded
+without code changes after the Ray runtime used SGLang's built local
+`sgl_kernel` artifact and W&B was forced offline.
+
+### What we tried
+
+- Reverted the `after_fix` checkout back to a clean code state before the final
+  e2e validation.
+- Kept the ROCm conda environment as `relaxrl_rocm_after_fix`.
+- Avoided CUDA-only package fixes after confirming this is a ROCm environment.
+- Launched the existing Qwen3-0.6B two-GPU script with command-only overrides:
+  W&B offline, `NUM_ROLLOUT=2`, `SAVE_INTERVAL=1`,
+  `N_SAMPLES_PER_PROMPT=1`, `ROLLOUT_MAX_RESPONSE_LEN=128`, and
+  `SGLANG_SERVER_CONCURRENCY=16`.
+- Prepended the built SGLang kernel artifact before SGLang's source checkout in
+  `PYTHONPATH`:
+  `/vast/users/qirong.ho/erland/Python_project/sglang/sgl-kernel/build/lib.linux-x86_64-cpython-312`.
+
+### Key findings
+
+- The successful Ray job was `raysubmit_vQKenPVHTm4HiKL9`, with log
+  `log/amd-qwen3-0.6b-2gpu-20260610_111842.log`.
+- The run used offline W&B and did not need Transformer Engine or Apex. The
+  warning `Transformer Engine unavailable; force Megatron-Bridge provider to
+  use local layer spec` is expected on this path.
+- The original blocker was not that SGLang was absent. SGLang existed, but the
+  Ray runtime did not have an importable `sgl_kernel` because only the source
+  path was visible.
+- The successful run reached rollout, actor training, `forward_backward`,
+  `optimizer.step`, scheduler step, loss reduction, and checkpoint save.
+- Checkpoints were saved for iterations `0` and `1` under
+  `/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-0.6B_mcore_2gpu-20260610_111842`.
+  `latest_checkpointed_iteration.txt` contains `1`, and matching dataset
+  state files and `.metadata` files were present.
+
+### What failed
+
+- Adding only `/vast/users/qirong.ho/erland/Python_project/sglang/python` was
+  insufficient because Ray workers still failed with `No module named
+  'sgl_kernel'`.
+- Adding the SGLang kernel source path alone can fail on missing built pieces
+  such as `common_ops`. The validated path uses the built
+  `build/lib.linux-x86_64-cpython-312` directory.
+- Installing `cuda-python` would be the wrong fix on ROCm.
+- Debugging drift toward TE, Apex, or `torch_optimizer` was unnecessary for
+  the successful path.
+
+### Open questions
+
+- If this path regresses again, first verify that the built SGLang kernel path
+  is still present and compatible with the active Python version.
+- A longer Qwen3-0.6B run can be launched after this smoke if the goal changes
+  from "does e2e work" to durability beyond two rollout/training steps.
+
+### Reusable lessons captured
+
+- Added `skills/qwen3-0-6b-rocm-sgl-kernel-e2e/SKILL.md`.
+- Updated `skills/registry.json` so future skill discovery sees the new path.
+- Updated `skills/rocm-relax-bringup/SKILL.md` and
+  `references/troubleshooting.md` with the `sgl_kernel` import lesson.
+
 ## 2026-05-31 - Retrospective on Qwen3-0.5B four-GPU ROCm overnight regression
 
 **Type:** Retrospective

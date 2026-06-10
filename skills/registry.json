@@ -2,7 +2,7 @@
   "domain": "research",
   "version": "1.0.0",
   "created": "2026-04-15",
-  "updated": "2026-05-31",
+  "updated": "2026-06-10",
   "skills": {
     "domain-advisor": {
       "type": "core",
@@ -43,6 +43,10 @@
     "qwen3-mock-0-5b-rocm-e2e": {
       "type": "result",
       "description": "Validate the 0.5B Qwen3 mock ROCm e2e regression path with real rollout, W&B metrics, and optimizer-inclusive torch_dist checkpoints"
+    },
+    "qwen3-0-6b-rocm-sgl-kernel-e2e": {
+      "type": "result",
+      "description": "Validate the clean after_fix Qwen3-0.6B ROCm e2e path with the built local sgl_kernel artifact and offline W&B"
     }
   },
   "paths": {

@@ -58,6 +58,90 @@ This file documents error patterns encountered and their solutions.
 | W&B primary run is system-only after an actor dies at step 0 | Logs show `POST /metrics/log_metrics_batch 200` and rollout metrics, but W&B still has only system charts; later the actor reports `ActorDiedError` or Ray `SYSTEM_ERROR` before any `Reported ... metrics for step 0` line | MetricsService accepted the metrics but buffered them until `flush_metrics()` at the end of the actor train step; the actor crash prevented `/metrics/report_step` from running | For namespaced step metrics ending in `/step`, report immediately after `log_metrics_batch` so W&B receives rollout/train metrics even if a later actor failure prevents the normal end-of-step flush. When payloads already contain `train/step` or `rollout/step`, log to W&B without forcing the global `step=` argument so same-step batches are not dropped |
 | Four-GPU AMD launcher still starts a two-GPU or single-rank actor topology | Ray starts with fewer GPUs than expected, rollout placement waits for resources, or a 4-GPU command still logs `RESOURCE_JSON={"actor": [1, 1], "rollout": [1, 1]}` | The older `amd_qwen3_4b_2gpu_e2e.sh` launcher hardcoded Ray as two GPUs, `--num-gpus-per-node 2`, and one rollout GPU; the current Qwen3 path also needs two actor GPUs for TP2 GPU optimizer state | Use the environment-driven launcher topology: set `HIP_VISIBLE_DEVICES=0,1,2,3 RAY_NUM_GPUS=4 NUM_GPUS_PER_NODE=4 ACTOR_RESOURCE_GPUS=2 ROLLOUT_RESOURCE_GPUS=2 TENSOR_MODEL_PARALLEL_SIZE=2 GPU_LABEL=4gpu-tp2`. This keeps CPU optimizer offload disabled while fitting GPU optimizer state |
 | Step-0 `dapo` reward stalls inside the Ray reward-worker pool | The run reaches `Actor training step 0/200` and rollout generation, but the Megatron actor only logs `start to get rollout_id: 0 data from transfer queue for train with mcore.` and then dies much later with `ActorDiedError`, while `RolloutManager` only logs `RewardExecutor: created 16 RewardWorker actors` before a long silent gap | `dapo` is a small local string/regex reward, but it was still being dispatched through the generic `RewardWorker` actor pool. On the MI210 step-0 path, that turned a cheap per-sample reward into extra Ray actor RPCs and left rollout blocked before it could transfer `train_0` to the actor | Keep `dapo` on a local in-process path using `asyncio.to_thread` and reserve the Ray reward-worker pool for the heavier/thread-unsafe reward types. Revalidate from a clean Ray cluster so the 5-minute timeout window no longer wedges at `RewardExecutor: created ... RewardWorker actors` |
+| `sgl_kernel` missing in Qwen3-0.6B after_fix e2e | SGLang exists locally, but Ray workers or local import checks fail with `No module named 'sgl_kernel'` | The runtime sees `sglang/python` but not the built `sgl-kernel` artifact, and the source tree alone is not the importable runtime package | Prepend `/vast/users/qirong.ho/erland/Python_project/sglang/sgl-kernel/build/lib.linux-x86_64-cpython-312` before `/vast/users/qirong.ho/erland/Python_project/sglang/python` in `PYTHONPATH`; do not install CUDA-only packages on ROCm |
+
+## `sgl_kernel` missing in Qwen3-0.6B after_fix e2e
+
+**Added:** 2026-06-10
+**Domain:** research
+
+### Symptom
+
+A clean Qwen3-0.6B `after_fix` e2e run starts from the correct ROCm conda
+environment and has the local SGLang checkout available, but SGLang import or
+Ray worker startup fails with:
+
+```text
+No module named 'sgl_kernel'
+```
+
+### Cause
+
+The local SGLang Python source path is not enough for this ROCm runtime. The
+validated environment needs the built local kernel artifact in `PYTHONPATH`
+before the SGLang source path:
+
+```text
+/vast/users/qirong.ho/erland/Python_project/sglang/sgl-kernel/build/lib.linux-x86_64-cpython-312
+/vast/users/qirong.ho/erland/Python_project/sglang/python
+```
+
+Adding the SGLang kernel source tree alone can still fail on missing built
+pieces such as `common_ops`.
+
+### Solution
+
+Verify imports from the same conda environment used by the Ray job:
+
+```bash
+source /vast/users/qirong.ho/miniforge3/etc/profile.d/conda.sh
+conda activate relaxrl_rocm_after_fix
+
+SGL_KERNEL_BUILD=/vast/users/qirong.ho/erland/Python_project/sglang/sgl-kernel/build/lib.linux-x86_64-cpython-312
+SGLANG_PYTHON=/vast/users/qirong.ho/erland/Python_project/sglang/python
+PYTHONPATH="${SGL_KERNEL_BUILD}:${SGLANG_PYTHON}:${PYTHONPATH}" \
+  python -c "import sglang, sgl_kernel"
+```
+
+For command-only e2e validation, patch the launcher at execution time instead
+of editing the repository:
+
+```bash
+WANDB_MODE=offline \
+CONDA_ENV_NAME=relaxrl_rocm_after_fix \
+NUM_ROLLOUT=2 \
+SAVE_INTERVAL=1 \
+bash <(
+  sed \
+    -e 's/--wandb-mode online/--wandb-mode offline/g' \
+    -e "s#${SGLANG_PYTHON}:#${SGL_KERNEL_BUILD}:${SGLANG_PYTHON}:#g" \
+    amd_qwen3_0_6b_2gpu_e2e.sh
+)
+```
+
+Do not install `cuda-python` or other CUDA-only packages in the ROCm
+environment to solve this import error.
+
+### Prevention
+
+Before launching Qwen3-0.6B on `after_fix`, check:
+
+- `conda activate relaxrl_rocm_after_fix` succeeds;
+- `PYTHONPATH` includes the built `sgl-kernel/build/lib...` directory before
+  `sglang/python`;
+- `WANDB_MODE=offline` and launcher `--wandb-mode offline` are set for local
+  validation;
+- TE/Apex warnings are treated as non-fatal unless they become the top-level
+  exception.
+
+The validated run was Ray job `raysubmit_vQKenPVHTm4HiKL9`, log
+`log/amd-qwen3-0.6b-2gpu-20260610_111842.log`, and save directory
+`/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets/Qwen3-0.6B_mcore_2gpu-20260610_111842`.
+
+### Related
+
+- Skill: `qwen3-0-6b-rocm-sgl-kernel-e2e`
+- Skill: `rocm-relax-bringup`
 
 ## Qwen3 mock overnight judged healthy before first checkpoint
 
