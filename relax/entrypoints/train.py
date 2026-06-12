@@ -5,6 +5,7 @@ import importlib
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 import ray
@@ -65,6 +66,8 @@ def _graceful_shutdown(sig=None, frame=None):
 
 def main(args):
     global _ctrl
+    main_t0 = time.perf_counter()
+    logger.info("launch_timing: train_main begin")
 
     # Load runtime_env from config so we can both pass it to ray.init and
     # explicitly to the Serve deployment. Ensure it's available even if Ray
@@ -72,22 +75,33 @@ def main(args):
     with open(os.path.join(cur_file_dir, "configs/env.yaml")) as file:
         runtime_env = yaml.safe_load(file)
 
+    logger.info("launch_timing: post_process_env begin")
     runtime_env = post_process_env(args, runtime_env)
+    logger.info("launch_timing: post_process_env end elapsed=%.2fs", time.perf_counter() - main_t0)
+    logger.info("launch_timing: init_tracking begin")
     init_tracking(args, primary=True)
+    logger.info("launch_timing: init_tracking end elapsed=%.2fs", time.perf_counter() - main_t0)
     if not ray.is_initialized():
         # this is for local ray cluster
+        logger.info("launch_timing: ray_init begin")
         ray.init(runtime_env=runtime_env)
+        logger.info("launch_timing: ray_init end elapsed=%.2fs", time.perf_counter() - main_t0)
         logger.info("Ray initialized successfully")
         try:
+            logger.info("launch_timing: serve_start begin")
             serve.start(
                 http_options={"host": "0.0.0.0", "port": "8000"},
                 detached=True,
             )
+            logger.info("launch_timing: serve_start end elapsed=%.2fs", time.perf_counter() - main_t0)
         except RuntimeError:
+            logger.info("launch_timing: serve_start already_running elapsed=%.2fs", time.perf_counter() - main_t0)
             pass
 
+    logger.info("launch_timing: controller_init begin")
     ctrl = Controller(args, runtime_env)
     _ctrl = ctrl
+    logger.info("launch_timing: controller_init end elapsed=%.2fs", time.perf_counter() - main_t0)
 
     # Register signal handlers so that `ray job stop` (SIGTERM) triggers cleanup.
     signal.signal(signal.SIGTERM, _graceful_shutdown)
@@ -95,7 +109,9 @@ def main(args):
     atexit.register(_graceful_shutdown)
 
     try:
+        logger.info("launch_timing: training_loop begin")
         ctrl.training_loop()
+        logger.info("launch_timing: training_loop end elapsed=%.2fs", time.perf_counter() - main_t0)
     except Exception as e:
         logger.exception(f"Training loop failed with error: {e}")
         _graceful_shutdown()

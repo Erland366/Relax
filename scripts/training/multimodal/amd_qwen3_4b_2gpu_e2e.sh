@@ -4,10 +4,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 ROOT_DIR="${RELAX_ROOT_DIR:-$(cd -- "${SCRIPT_DIR}/../../.." &>/dev/null && pwd)}"
-ASSET_DIR="/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets"
+ASSET_DIR="${ASSET_DIR:-/vast/users/qirong.ho/erland/Python_project/Relax-rocm-megatron_root/relax_assets}"
 MEGATRON_DIR="${MEGATRON_DIR:-/vast/users/qirong.ho/erland/Python_project/ROCm-Megatron-LM}"
 LOG_DIR="${LOG_DIR:-${ROOT_DIR}/log}"
-mkdir -p "${LOG_DIR}"
+mkdir -p "${LOG_DIR}" "${ASSET_DIR}"
 
 localhost_bypass() {
     env \
@@ -60,6 +60,17 @@ require_boolean_flag() {
     esac
 }
 
+log_phase() {
+    local message="$1"
+    local line
+    line="$(printf '[%s] launch_phase: %s' "$(date -Is)" "${message}")"
+    if [ -n "${RUN_LOG:-}" ]; then
+        printf '%s\n' "${line}" | tee -a "${RUN_LOG}" >&2
+    else
+        printf '%s\n' "${line}" >&2
+    fi
+}
+
 require_execution_mode() {
     local value="${RELAX_EXECUTION_MODE}"
 
@@ -71,6 +82,10 @@ require_execution_mode() {
             exit 2
             ;;
     esac
+}
+
+is_external_rollout() {
+    [ "${RELAX_ROLLOUT_EXTERNAL:-0}" = "1" ] || [ -n "${RELAX_ROLLOUT_EXTERNAL_ENGINE_ADDRS:-}" ]
 }
 
 require_nonnegative_integer() {
@@ -133,7 +148,11 @@ configure_gpu_resources() {
     require_nonnegative_integer ACTOR_FWD_RESOURCE_GPUS
 
     ROLLOUT_RESOURCE_GPUS="${ROLLOUT_RESOURCE_GPUS:-$((RAY_NUM_GPUS - ACTOR_RESOURCE_GPUS))}"
-    require_positive_integer ROLLOUT_RESOURCE_GPUS
+    if is_external_rollout; then
+        require_nonnegative_integer ROLLOUT_RESOURCE_GPUS
+    else
+        require_positive_integer ROLLOUT_RESOURCE_GPUS
+    fi
 
     if [ "$((ACTOR_RESOURCE_GPUS + ROLLOUT_RESOURCE_GPUS + ACTOR_FWD_RESOURCE_GPUS))" -gt "${RAY_NUM_GPUS}" ]; then
         echo "ACTOR_RESOURCE_GPUS + ROLLOUT_RESOURCE_GPUS + ACTOR_FWD_RESOURCE_GPUS exceeds RAY_NUM_GPUS" >&2
@@ -165,14 +184,20 @@ configure_sglang_parallelism() {
     require_positive_integer SGLANG_EXPERT_PARALLEL_SIZE
     require_boolean_flag SGLANG_ENABLE_DP_ATTENTION
 
-    if [ "${ROLLOUT_NUM_GPUS_PER_ENGINE}" -gt "${ROLLOUT_RESOURCE_GPUS}" ]; then
-        echo "ROLLOUT_NUM_GPUS_PER_ENGINE=${ROLLOUT_NUM_GPUS_PER_ENGINE} exceeds ROLLOUT_RESOURCE_GPUS=${ROLLOUT_RESOURCE_GPUS}" >&2
-        exit 2
+    if is_external_rollout && [ "${ROLLOUT_RESOURCE_GPUS}" -eq 0 ]; then
+        ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-${ROLLOUT_NUM_GPUS_PER_ENGINE}}"
+    else
+        ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-${ROLLOUT_RESOURCE_GPUS}}"
+        if [ "${ROLLOUT_NUM_GPUS_PER_ENGINE}" -gt "${ROLLOUT_RESOURCE_GPUS}" ]; then
+            echo "ROLLOUT_NUM_GPUS_PER_ENGINE=${ROLLOUT_NUM_GPUS_PER_ENGINE} exceeds ROLLOUT_RESOURCE_GPUS=${ROLLOUT_RESOURCE_GPUS}" >&2
+            exit 2
+        fi
+        if [ "$((ROLLOUT_RESOURCE_GPUS % ROLLOUT_NUM_GPUS_PER_ENGINE))" -ne 0 ]; then
+            echo "ROLLOUT_RESOURCE_GPUS=${ROLLOUT_RESOURCE_GPUS} must be divisible by ROLLOUT_NUM_GPUS_PER_ENGINE=${ROLLOUT_NUM_GPUS_PER_ENGINE}" >&2
+            exit 2
+        fi
     fi
-    if [ "$((ROLLOUT_RESOURCE_GPUS % ROLLOUT_NUM_GPUS_PER_ENGINE))" -ne 0 ]; then
-        echo "ROLLOUT_RESOURCE_GPUS=${ROLLOUT_RESOURCE_GPUS} must be divisible by ROLLOUT_NUM_GPUS_PER_ENGINE=${ROLLOUT_NUM_GPUS_PER_ENGINE}" >&2
-        exit 2
-    fi
+    require_positive_integer ROLLOUT_NUM_GPUS
     if [ "$((ROLLOUT_NUM_GPUS_PER_ENGINE % SGLANG_PIPELINE_PARALLEL_SIZE))" -ne 0 ]; then
         echo "ROLLOUT_NUM_GPUS_PER_ENGINE=${ROLLOUT_NUM_GPUS_PER_ENGINE} must be divisible by SGLANG_PIPELINE_PARALLEL_SIZE=${SGLANG_PIPELINE_PARALLEL_SIZE}" >&2
         exit 2
@@ -248,10 +273,22 @@ configure_runtime_environment() {
     export RAY_grpc_client_keepalive_timeout_ms="${RAY_grpc_client_keepalive_timeout_ms:-300000}"
     unset ROCR_VISIBLE_DEVICES
 
-    export PYTHONPATH="/vast/users/qirong.ho/erland/Python_project/sglang/python:${MEGATRON_DIR}:${ROOT_DIR}"
+    RELAX_SGL_KERNEL_BUILD_DIR="${RELAX_SGL_KERNEL_BUILD_DIR:-/vast/users/qirong.ho/erland/Python_project/sglang/sgl-kernel/build/lib.linux-x86_64-cpython-312}"
+    RELAX_SGLANG_PYTHON_DIR="${RELAX_SGLANG_PYTHON_DIR:-/vast/users/qirong.ho/erland/Python_project/sglang/python}"
+    if [ ! -d "${RELAX_SGL_KERNEL_BUILD_DIR}" ]; then
+        echo "RELAX_SGL_KERNEL_BUILD_DIR does not exist: ${RELAX_SGL_KERNEL_BUILD_DIR}" >&2
+        echo "Build SGLang's sgl-kernel locally or set RELAX_SGL_KERNEL_BUILD_DIR to the built package directory." >&2
+        exit 2
+    fi
+    if [ ! -d "${RELAX_SGLANG_PYTHON_DIR}" ]; then
+        echo "RELAX_SGLANG_PYTHON_DIR does not exist: ${RELAX_SGLANG_PYTHON_DIR}" >&2
+        exit 2
+    fi
+    export PYTHONPATH="${RELAX_SGL_KERNEL_BUILD_DIR}:${RELAX_SGLANG_PYTHON_DIR}:${MEGATRON_DIR}:${ROOT_DIR}"
     export MEGATRON="${MEGATRON_DIR}"
     export RELAX="${ROOT_DIR}"
     export MODEL_CONFIG_DIR="${ROOT_DIR}/scripts/models"
+    export RELAX_SKIP_CUSTOM_MEGATRON_MODEL_IMPORTS="${RELAX_SKIP_CUSTOM_MEGATRON_MODEL_IMPORTS:-1}"
     export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 }
 
@@ -269,6 +306,9 @@ configure_run_defaults() {
     SAVE_INTERVAL="${SAVE_INTERVAL:-100}"
     CKPT_FORMAT="${CKPT_FORMAT:-torch_dist}"
     NO_SAVE_OPTIM="${NO_SAVE_OPTIM:-0}"
+    RELAX_DISABLE_SAVE="${RELAX_DISABLE_SAVE:-0}"
+    RELAX_USE_WANDB="${RELAX_USE_WANDB:-1}"
+    RELAX_USE_METRICS_SERVICE="${RELAX_USE_METRICS_SERVICE:-1}"
     SCHEDULER_RESUME_POLICY="${SCHEDULER_RESUME_POLICY:-strict}"
     case "${RELAX_EXECUTION_MODE}" in
         fully_async)
@@ -303,11 +343,17 @@ configure_run_defaults() {
     N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-8}"
     MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-1}"
     SGLANG_SERVER_CONCURRENCY="${SGLANG_SERVER_CONCURRENCY:-512}"
+    SGLANG_SKIP_TOKENIZER_INIT="${SGLANG_SKIP_TOKENIZER_INIT:-0}"
     SEQ_LENGTH="${SEQ_LENGTH:-4096}"
     ROLLOUT_MAX_RESPONSE_LEN="${ROLLOUT_MAX_RESPONSE_LEN:-768}"
+    RELAX_SKIP_INITIAL_FULLY_ASYNC_WEIGHT_UPDATE="${RELAX_SKIP_INITIAL_FULLY_ASYNC_WEIGHT_UPDATE:-0}"
     require_nonnegative_integer MAX_STALENESS
     require_boolean_flag USE_BALANCE_DATA
     require_boolean_flag USE_KL_LOSS
+    require_boolean_flag RELAX_DISABLE_SAVE
+    require_boolean_flag RELAX_USE_WANDB
+    require_boolean_flag RELAX_USE_METRICS_SERVICE
+    require_boolean_flag RELAX_SKIP_INITIAL_FULLY_ASYNC_WEIGHT_UPDATE
     require_positive_integer NUM_ROLLOUT
     require_positive_integer NUM_STEPS_PER_ROLLOUT
     require_positive_integer ROLLOUT_BATCH_SIZE
@@ -323,6 +369,7 @@ configure_run_defaults() {
     require_optional_positive_integer ROLLOUT_MAX_PROMPT_LEN
     require_optional_positive_integer SGLANG_MAX_RUNNING_REQUESTS
     require_optional_positive_integer SGLANG_MAX_TOTAL_TOKENS
+    require_boolean_flag SGLANG_SKIP_TOKENIZER_INIT
 
     if [ -n "${MAX_TOKENS_PER_GPU:-}" ] || [ -n "${LOG_PROBS_MAX_TOKENS_PER_GPU:-}" ]; then
         echo "MAX_TOKENS_PER_GPU and LOG_PROBS_MAX_TOKENS_PER_GPU require dynamic batch size, but this ROCm launcher uses qkv-format=bshd where Relax rejects dynamic batch size. Use MICRO_BATCH_SIZE instead." >&2
@@ -586,6 +633,9 @@ keys = [
     "all_proxy",
     "NO_PROXY",
     "no_proxy",
+    "RELAX_SKIP_CUSTOM_MEGATRON_MODEL_IMPORTS",
+    "RELAX_SKIP_INITIAL_FULLY_ASYNC_WEIGHT_UPDATE",
+    "RELAX_EXTERNAL_ROLLOUT_HEALTH_ENDPOINT",
 ]
 env_vars = {k: os.environ[k] for k in keys if os.environ.get(k)}
 local_entries = ["127.0.0.1", "localhost", "::1"]
@@ -624,16 +674,20 @@ build_checkpoint_args() {
         --hf-checkpoint "${HF_CHECKPOINT}"
         --ref-load "${HF_CHECKPOINT}"
         --megatron-to-hf-mode bridge
-        --save "${SAVE_DIR}"
-        --save-interval "${SAVE_INTERVAL}"
-        --ckpt-format "${CKPT_FORMAT}"
     )
 
     if [ -n "${LOAD_DIR}" ]; then
         CKPT_ARGS+=(--load "${LOAD_DIR}")
     fi
-    if [ "${NO_SAVE_OPTIM}" = "1" ]; then
-        CKPT_ARGS+=(--no-save-optim)
+    if [ "${RELAX_DISABLE_SAVE}" != "1" ]; then
+        CKPT_ARGS+=(
+            --save "${SAVE_DIR}"
+            --save-interval "${SAVE_INTERVAL}"
+            --ckpt-format "${CKPT_FORMAT}"
+        )
+        if [ "${NO_SAVE_OPTIM}" = "1" ]; then
+            CKPT_ARGS+=(--no-save-optim)
+        fi
     fi
 
     case "${SCHEDULER_RESUME_POLICY}" in
@@ -735,15 +789,27 @@ build_optimizer_args() {
 }
 
 build_wandb_args() {
-    WANDB_ARGS=(
-        --use-wandb
-        --wandb-mode online
-        --wandb-team "${WANDB_ENTITY}"
-        --wandb-project "${WANDB_PROJECT}"
-        --wandb-group "${WANDB_GROUP}"
-        --wandb-dir "${WANDB_DIR}"
-        --disable-wandb-random-suffix
-    )
+    WANDB_ARGS=()
+    if [ "${RELAX_USE_WANDB}" = "1" ]; then
+        WANDB_ARGS=(
+            --use-wandb
+            --wandb-mode "${WANDB_MODE:-online}"
+            --wandb-project "${WANDB_PROJECT}"
+            --wandb-group "${WANDB_GROUP}"
+            --wandb-dir "${WANDB_DIR}"
+            --disable-wandb-random-suffix
+        )
+        if [ -n "${WANDB_ENTITY:-}" ]; then
+            WANDB_ARGS+=(--wandb-team "${WANDB_ENTITY}")
+        fi
+    fi
+}
+
+build_metrics_args() {
+    METRICS_ARGS=()
+    if [ "${RELAX_USE_METRICS_SERVICE}" != "1" ]; then
+        METRICS_ARGS+=(--no-use-metrics-service)
+    fi
 }
 
 append_env_arg() {
@@ -768,6 +834,7 @@ build_debug_args() {
 build_sglang_args() {
     SGLANG_ARGS=(
         --num-gpus-per-node "${NUM_GPUS_PER_NODE}"
+        --rollout-num-gpus "${ROLLOUT_NUM_GPUS}"
         --rollout-num-gpus-per-engine "${ROLLOUT_NUM_GPUS_PER_ENGINE}"
         --sglang-server-concurrency "${SGLANG_SERVER_CONCURRENCY}"
         --sglang-pipeline-parallel-size "${SGLANG_PIPELINE_PARALLEL_SIZE}"
@@ -785,11 +852,23 @@ build_sglang_args() {
     if [ "${SGLANG_ENABLE_DP_ATTENTION}" = "1" ]; then
         SGLANG_ARGS+=(--sglang-enable-dp-attention)
     fi
+    if [ "${SGLANG_SKIP_TOKENIZER_INIT:-0}" = "1" ]; then
+        SGLANG_ARGS+=(--sglang-skip-tokenizer-init)
+    fi
     if [ -n "${SGLANG_MAX_TOTAL_TOKENS:-}" ]; then
         SGLANG_ARGS+=(--sglang-max-total-tokens "${SGLANG_MAX_TOTAL_TOKENS}")
     fi
     if [ -n "${SGLANG_MAX_RUNNING_REQUESTS:-}" ]; then
         SGLANG_ARGS+=(--sglang-max-running-requests "${SGLANG_MAX_RUNNING_REQUESTS}")
+    fi
+    if [ "${RELAX_ROLLOUT_EXTERNAL:-0}" = "1" ] || [ -n "${RELAX_ROLLOUT_EXTERNAL_ENGINE_ADDRS:-}" ]; then
+        if [ -z "${RELAX_ROLLOUT_EXTERNAL_ENGINE_ADDRS:-}" ]; then
+            echo "RELAX_ROLLOUT_EXTERNAL_ENGINE_ADDRS must be set when RELAX_ROLLOUT_EXTERNAL=1" >&2
+            exit 1
+        fi
+        export RELAX_EXTERNAL_ROLLOUT_HEALTH_ENDPOINT="${RELAX_EXTERNAL_ROLLOUT_HEALTH_ENDPOINT:-health}"
+        read -r -a ROLLOUT_EXTERNAL_ENGINE_ADDRS <<< "${RELAX_ROLLOUT_EXTERNAL_ENGINE_ADDRS}"
+        SGLANG_ARGS+=(--rollout-external --rollout-external-engine-addrs "${ROLLOUT_EXTERNAL_ENGINE_ADDRS[@]}")
     fi
 }
 
@@ -814,6 +893,7 @@ build_training_args() {
     build_algorithm_args
     build_optimizer_args
     build_wandb_args
+    build_metrics_args
     build_debug_args
     build_sglang_args
     build_rocm_compat_args
@@ -827,7 +907,8 @@ log_launch_config() {
     echo "  training: TP=${TENSOR_MODEL_PARALLEL_SIZE}, PP=${PIPELINE_MODEL_PARALLEL_SIZE}, CP=${CONTEXT_PARALLEL_SIZE}, micro_batch=${MICRO_BATCH_SIZE}, global_batch=${GLOBAL_BATCH_SIZE}" >&2
     echo "  rollout: num_rollout=${NUM_ROLLOUT}, steps_per_rollout=${NUM_STEPS_PER_ROLLOUT}, rollout_batch=${ROLLOUT_BATCH_SIZE}, samples_per_prompt=${N_SAMPLES_PER_PROMPT}" >&2
     echo "  sequence: seq_length=${SEQ_LENGTH}, rollout_max_response_len=${ROLLOUT_MAX_RESPONSE_LEN}, rollout_max_context_len=${ROLLOUT_MAX_CONTEXT_LEN:-unset}, rollout_max_prompt_len=${ROLLOUT_MAX_PROMPT_LEN:-unset}" >&2
-    echo "  sglang: gpus_per_engine=${ROLLOUT_NUM_GPUS_PER_ENGINE}, pp=${SGLANG_PIPELINE_PARALLEL_SIZE}, dp=${SGLANG_DATA_PARALLEL_SIZE}, ep=${SGLANG_EXPERT_PARALLEL_SIZE}, server_concurrency=${SGLANG_SERVER_CONCURRENCY}, max_running_requests=${SGLANG_MAX_RUNNING_REQUESTS:-unset}, max_total_tokens=${SGLANG_MAX_TOTAL_TOKENS:-unset}" >&2
+    echo "  sglang: gpus_per_engine=${ROLLOUT_NUM_GPUS_PER_ENGINE}, pp=${SGLANG_PIPELINE_PARALLEL_SIZE}, dp=${SGLANG_DATA_PARALLEL_SIZE}, ep=${SGLANG_EXPERT_PARALLEL_SIZE}, server_concurrency=${SGLANG_SERVER_CONCURRENCY}, max_running_requests=${SGLANG_MAX_RUNNING_REQUESTS:-unset}, max_total_tokens=${SGLANG_MAX_TOTAL_TOKENS:-unset}, skip_tokenizer_init=${SGLANG_SKIP_TOKENIZER_INIT:-0}" >&2
+    echo "  debug: use_wandb=${RELAX_USE_WANDB}, use_metrics_service=${RELAX_USE_METRICS_SERVICE}, disable_save=${RELAX_DISABLE_SAVE}, load_dir=${LOAD_DIR:-unset}, skip_initial_fully_async_weight_update=${RELAX_SKIP_INITIAL_FULLY_ASYNC_WEIGHT_UPDATE:-0}" >&2
 }
 
 submit_training_job() {
@@ -842,6 +923,7 @@ submit_training_job() {
         "${OPTIMIZER_ARGS[@]}" \
         "${GRPO_ARGS[@]}" \
         "${WANDB_ARGS[@]}" \
+        "${METRICS_ARGS[@]}" \
         "${DEBUG_ARGS[@]}" \
         "${MEGATRON_PARALLEL_ARGS[@]}" \
         "${SGLANG_ARGS[@]}" \
@@ -850,9 +932,12 @@ submit_training_job() {
 }
 
 main() {
+    log_phase "activate_environment begin"
     activate_environment
+    log_phase "activate_environment end"
     load_dotenv
 
+    log_phase "configure begin"
     configure_gpu_resources
     configure_execution_mode
     configure_sglang_parallelism
@@ -861,12 +946,21 @@ main() {
     configure_run_defaults
     load_model_config
     append_no_proxy
+    log_phase "configure end"
 
+    log_phase "ray_head_start begin"
     start_ray_head
+    log_phase "ray_head_start end"
+    log_phase "runtime_env_build begin"
     RUNTIME_ENV_JSON="$(build_runtime_env_json)"
+    log_phase "runtime_env_build end"
+    log_phase "training_args_build begin"
     build_training_args
+    log_phase "training_args_build end"
     log_launch_config
+    log_phase "ray_job_submit begin"
     submit_training_job
+    log_phase "ray_job_submit end"
 }
 
 main "$@"
