@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 
 import os
+import random
+import time
 from typing import Any
 
 import ray
@@ -8,6 +10,12 @@ from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from relax.distributed.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
+from relax.utils.http_utils import get_host_info
+from relax.utils.logging_utils import get_logger
+from relax.utils.misc import get_free_port
+
+
+logger = get_logger(__name__)
 
 
 class RayTrainGroup:
@@ -42,14 +50,26 @@ class RayTrainGroup:
         self.role = role
         self.runtime_env = runtime_env
         # Allocate the GPUs for actors w/o instantiating them
+        init_t0 = time.perf_counter()
         self._allocate_gpus_for_actor(pg, num_gpus_per_actor)
+        logger.info(
+            "launch_timing: ray_train_group.%s.__init__ num_gpus=%s elapsed=%.2fs",
+            self.role,
+            num_gpus,
+            time.perf_counter() - init_t0,
+        )
 
     def _allocate_gpus_for_actor(self, pg, num_gpus_per_actor):
+        alloc_t0 = time.perf_counter()
         world_size = self._num_gpus
 
         # Use placement group to lock resources for models of same type
         assert pg is not None
-        pg, reordered_bundle_indices, _reordered_gpu_ids = pg
+        if len(pg) == 4:
+            pg, reordered_bundle_indices, _reordered_gpu_ids, reordered_node_ips = pg
+        else:
+            pg, reordered_bundle_indices, _reordered_gpu_ids = pg
+            reordered_node_ips = None
 
         env_vars = {
             # because sglang will always set NCCL_CUMEM_ENABLE to 0
@@ -61,6 +81,7 @@ class RayTrainGroup:
             **self.args.train_env_vars,
         }
 
+        phase_t0 = time.perf_counter()
         if self.args.offload_train and self.args.train_backend == "megatron":
             import torch_memory_saver
 
@@ -77,22 +98,50 @@ class RayTrainGroup:
         # We cannot do routing replay for critic.
         if self.args.use_routing_replay and self.role == "actor":
             env_vars["ENABLE_ROUTING_REPLAY"] = "1"
+        logger.info(
+            "launch_timing: ray_train_group.%s.env_build elapsed=%.2fs",
+            self.role,
+            time.perf_counter() - phase_t0,
+        )
 
-        from relax.backends.megatron.actor import MegatronTrainRayActor
+        phase_t0 = time.perf_counter()
+        from relax.distributed.ray.train_actor import LazyMegatronTrainRayActor
+        logger.info(
+            "launch_timing: ray_train_group.%s.import_train_actor elapsed=%.2fs",
+            self.role,
+            time.perf_counter() - phase_t0,
+        )
 
-        actor_impl = MegatronTrainRayActor
+        actor_impl = LazyMegatronTrainRayActor
 
+        phase_t0 = time.perf_counter()
         TrainRayActor = ray.remote(
             num_gpus=1,
             runtime_env={"env_vars": env_vars},
             enable_task_events=False,
         )(actor_impl)
         lock = Lock.options(num_cpus=0, num_gpus=0).remote()
+        logger.info(
+            "launch_timing: ray_train_group.%s.remote_class_and_lock elapsed=%.2fs",
+            self.role,
+            time.perf_counter() - phase_t0,
+        )
 
         # Create worker actors
         self._actor_handlers = []
-        master_addr, master_port = None, None
+        phase_t0 = time.perf_counter()
+        master_addr, master_port = self._preallocate_rank0_master_addr(reordered_node_ips)
+        preallocated_master = master_addr is not None
+        logger.info(
+            "launch_timing: ray_train_group.%s.preallocate_master_addr elapsed=%.2fs preallocated=%s",
+            self.role,
+            time.perf_counter() - phase_t0,
+            preallocated_master,
+        )
+
+        phase_t0 = time.perf_counter()
         for rank in range(world_size):
+            rank_t0 = time.perf_counter()
             actor = TrainRayActor.options(
                 num_cpus=num_gpus_per_actor,
                 num_gpus=num_gpus_per_actor,
@@ -101,9 +150,42 @@ class RayTrainGroup:
                     placement_group_bundle_index=reordered_bundle_indices[rank],
                 ),
             ).remote(world_size, rank, master_addr, master_port, lock)
-            if rank == 0:
+            if rank == 0 and not preallocated_master:
+                wait_t0 = time.perf_counter()
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
+                logger.info(
+                    "launch_timing: ray_train_group.%s.rank0_master_addr elapsed=%.2fs",
+                    self.role,
+                    time.perf_counter() - wait_t0,
+                )
             self._actor_handlers.append(actor)
+            logger.info(
+                "launch_timing: ray_train_group.%s.create_actor_rank rank=%s elapsed=%.2fs",
+                self.role,
+                rank,
+                time.perf_counter() - rank_t0,
+            )
+        logger.info(
+            "launch_timing: ray_train_group.%s.create_all_actors elapsed=%.2fs",
+            self.role,
+            time.perf_counter() - phase_t0,
+        )
+        logger.info(
+            "launch_timing: ray_train_group.%s.allocate_total elapsed=%.2fs",
+            self.role,
+            time.perf_counter() - alloc_t0,
+        )
+
+    def _preallocate_rank0_master_addr(self, reordered_node_ips: list[str] | None) -> tuple[str | None, int | None]:
+        if not reordered_node_ips:
+            return None, None
+
+        rank0_node_ip = reordered_node_ips[0]
+        current_node_ip = get_host_info()[1]
+        if rank0_node_ip != current_node_ip:
+            return None, None
+
+        return rank0_node_ip, get_free_port(start_port=random.randint(20000, 21000))
 
     def async_init(self, args, role, with_ref=False, with_opd_teacher=False):
         """Allocate GPU resourced and initialize model, optimzier, local ckpt,

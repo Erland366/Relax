@@ -3,6 +3,7 @@
 import abc
 import os
 import random
+import time
 from datetime import timedelta
 
 import ray
@@ -11,10 +12,8 @@ import torch.distributed as dist
 
 import relax.utils.training.eval_config
 from relax.distributed.ray.ray_actor import RayActor
-from relax.utils import device as device_utils
 from relax.utils.distributed_utils import init_gloo_group
 from relax.utils.logging_utils import get_logger
-from relax.utils.memory_utils import clear_memory, print_memory
 
 
 logger = get_logger(__name__)
@@ -41,6 +40,8 @@ def should_sleep_train_actor_after_init(args) -> bool:
 
 
 def get_local_gpu_id():
+    from relax.utils import device as device_utils
+
     cvd = os.environ.get(device_utils.get_visible_devices_env_var(), None)
     if cvd is None:
         return ray.get_gpu_ids()[0]
@@ -70,6 +71,8 @@ class TrainRayActor(RayActor):
         os.environ["LOCAL_RANK"] = str(get_local_gpu_id())
 
     def init(self, args, role, with_ref=False, with_opd_teacher=False):
+        from relax.utils import device as device_utils
+
         self.args = args
         self.role = role
         self.with_ref = with_ref
@@ -95,6 +98,8 @@ class TrainRayActor(RayActor):
         device_utils.set_numa_affinity(numa_local_rank)
 
     def clear_memory(self):
+        from relax.utils.memory_utils import clear_memory, print_memory
+
         print_memory("before TrainRayActor.clear_memory")
         clear_memory()
         print_memory("after TrainRayActor.clear_memory")
@@ -146,3 +151,89 @@ class TrainRayActor(RayActor):
         resources.
         """
         self.genrm_manager = genrm_manager
+
+
+class LazyMegatronTrainRayActor(TrainRayActor):
+    """Thin Ray actor wrapper that imports the Megatron actor inside the worker.
+
+    RayTrainGroup only needs a remote actor class while constructing the Serve
+    replica. Importing ``relax.backends.megatron.actor`` there is expensive and
+    delays replica startup. This wrapper keeps the Ray actor surface lightweight
+    and creates the real Megatron actor inside the nested train worker on
+    ``init``.
+    """
+
+    def __init__(self, world_size, rank, master_addr, master_port, lock):
+        super().__init__(world_size, rank, master_addr, master_port, lock)
+        self._impl = None
+
+    def _require_impl(self):
+        assert self._impl is not None, "Megatron train actor has not been initialized."
+        return self._impl
+
+    def init(self, args, role, with_ref=False, with_opd_teacher=False):
+        phase_t0 = time.perf_counter()
+        from relax.backends.megatron.actor import MegatronTrainRayActor
+
+        logger.info(
+            "launch_timing: lazy_megatron_train_actor.import_impl role=%s rank=%s elapsed=%.2fs",
+            role,
+            self._rank,
+            time.perf_counter() - phase_t0,
+        )
+        self._impl = MegatronTrainRayActor(
+            self._world_size,
+            self._rank,
+            self.master_addr,
+            self.master_port,
+            self.lock,
+        )
+        return self._impl.init(args, role, with_ref=with_ref, with_opd_teacher=with_opd_teacher)
+
+    def clear_memory(self):
+        return self._require_impl().clear_memory()
+
+    def sleep(self, tags=None):
+        return self._require_impl().sleep() if tags is None else self._require_impl().sleep(tags)
+
+    def wake_up(self, tags=None):
+        return self._require_impl().wake_up() if tags is None else self._require_impl().wake_up(tags)
+
+    def train(self, *args, **kwargs):
+        return self._require_impl().train(*args, **kwargs)
+
+    def train_async(self, *args, **kwargs):
+        return self._require_impl().train_async(*args, **kwargs)
+
+    def train_hybrid(self, *args, **kwargs):
+        return self._require_impl().train_hybrid(*args, **kwargs)
+
+    def compute_ref_log_prob(self, *args, **kwargs):
+        return self._require_impl().compute_ref_log_prob(*args, **kwargs)
+
+    def compute_actor_log_prob(self, *args, **kwargs):
+        return self._require_impl().compute_actor_log_prob(*args, **kwargs)
+
+    def save_model(self, *args, **kwargs):
+        return self._require_impl().save_model(*args, **kwargs)
+
+    def update_weights(self, *args, **kwargs):
+        return self._require_impl().update_weights(*args, **kwargs)
+
+    def update_weights_fully_async(self, *args, **kwargs):
+        return self._require_impl().update_weights_fully_async(*args, **kwargs)
+
+    def recv_weight_fully_async(self, *args, **kwargs):
+        return self._require_impl().recv_weight_fully_async(*args, **kwargs)
+
+    def set_rollout_manager(self, *args, **kwargs):
+        return self._require_impl().set_rollout_manager(*args, **kwargs)
+
+    def set_genrm_manager(self, *args, **kwargs):
+        return self._require_impl().set_genrm_manager(*args, **kwargs)
+
+    def load_other_checkpoint(self, *args, **kwargs):
+        return self._require_impl().load_other_checkpoint(*args, **kwargs)
+
+    def _get_parallel_config(self):
+        return self._require_impl()._get_parallel_config()

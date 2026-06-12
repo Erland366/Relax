@@ -1,33 +1,36 @@
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 
 import logging
+import os
 
 
-try:
-    import relax.models  # noqa
-except BaseException as e:
-    print(f"failed to import relax.models, error={e}")
+_skip_custom_model_imports = os.environ.get("RELAX_SKIP_CUSTOM_MEGATRON_MODEL_IMPORTS") == "1"
 
-from relax.utils import device as device_utils
+if not _skip_custom_model_imports:
+    try:
+        import relax.models  # noqa
+    except BaseException as e:
+        print(f"failed to import relax.models, error={e}")
 
+    try:
+        import deep_ep
+        from torch_memory_saver import torch_memory_saver
 
-try:
-    import deep_ep
-    from torch_memory_saver import torch_memory_saver
+        from relax.utils import device as device_utils
 
-    old_init = deep_ep.Buffer.__init__
+        old_init = deep_ep.Buffer.__init__
 
-    def new_init(self, *args, **kwargs):
-        if torch_memory_saver._impl is not None:
-            torch_memory_saver._impl._binary_wrapper.cdll.tms_set_interesting_region(False)
-        old_init(self, *args, **kwargs)
-        device_utils.synchronize()
-        if torch_memory_saver._impl is not None:
-            torch_memory_saver._impl._binary_wrapper.cdll.tms_set_interesting_region(True)
+        def new_init(self, *args, **kwargs):
+            if torch_memory_saver._impl is not None:
+                torch_memory_saver._impl._binary_wrapper.cdll.tms_set_interesting_region(False)
+            old_init(self, *args, **kwargs)
+            device_utils.synchronize()
+            if torch_memory_saver._impl is not None:
+                torch_memory_saver._impl._binary_wrapper.cdll.tms_set_interesting_region(True)
 
-    deep_ep.Buffer.__init__ = new_init
-except ImportError:
-    logging.warning("deep_ep is not installed, some functionalities may be limited.")
+        deep_ep.Buffer.__init__ = new_init
+    except ImportError:
+        logging.warning("deep_ep is not installed, some functionalities may be limited.")
 
 
 def patch_rotary_embedding(cls):
@@ -39,22 +42,25 @@ def patch_rotary_embedding(cls):
     cls.forward = _patched_forward
 
 
-try:
-    from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.text_model import (
-        Qwen3VLMoETextRotaryEmbedding,
-        Qwen3VLTextRotaryEmbedding,
-    )
+if not _skip_custom_model_imports:
+    try:
+        from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.text_model import (
+            Qwen3VLMoETextRotaryEmbedding,
+            Qwen3VLTextRotaryEmbedding,
+        )
 
-    patch_rotary_embedding(Qwen3VLTextRotaryEmbedding)
-    patch_rotary_embedding(Qwen3VLMoETextRotaryEmbedding)
-except ImportError:
-    pass
+        patch_rotary_embedding(Qwen3VLTextRotaryEmbedding)
+        patch_rotary_embedding(Qwen3VLMoETextRotaryEmbedding)
+    except ImportError:
+        pass
 
-try:
-    from megatron.bridge.models.qwen_omni.modelling_qwen3_omni.text_model import Qwen3OmniMoeThinkerTextRotaryEmbedding
+    try:
+        from megatron.bridge.models.qwen_omni.modelling_qwen3_omni.text_model import (
+            Qwen3OmniMoeThinkerTextRotaryEmbedding,
+        )
 
-    patch_rotary_embedding(Qwen3OmniMoeThinkerTextRotaryEmbedding)
-except ImportError:
-    pass
+        patch_rotary_embedding(Qwen3OmniMoeThinkerTextRotaryEmbedding)
+    except ImportError:
+        pass
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
