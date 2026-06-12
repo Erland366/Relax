@@ -20,6 +20,25 @@ Before tuning, identify the bottleneck. Relax provides three complementary profi
 - **Memory snapshots** also include rank tags, e.g. `memory_snapshot_time1713780123_rank0_dp0_tp0_pp0_snapshot.pickle`
 - **SGLang traces** use `engine{i}` prefix to distinguish engine instances, e.g. `engine0-1713780123-TP-0.trace.json.gz`
 
+### Fully Async Profile Reports
+
+For fully asynchronous runs, use the generated `profile_report.md` as the
+first pass before opening individual traces. The report distinguishes raw
+timeline event counts from de-duplicated counts because metrics-service timeline
+dumps can be cumulative snapshots. Use de-duplicated rows for research
+comparisons.
+
+Interpret fully_async timing carefully:
+
+- Area totals can exceed wall-clock time because actor, rollout, actor_fwd,
+  advantages, and weight-sync work overlap.
+- Short `PROFILE_PASS=all` runs are useful diagnostics but are startup-biased
+  and include profiler overhead.
+- Prefer `PROFILE_PASS=timeline` with enough rollouts for steady-state
+  scheduling and overlap studies.
+- Use warmup-excluded rows before deciding whether to optimize train kernels,
+  rollout inference, weight sync, or queue/data movement.
+
 ### 1. SGLang Inference Profiling
 
 Runs `torch.profiler` on all SGLang engines during rollout via the `/start_profile` and `/stop_profile` HTTP APIs. Does not interfere with training-side profiling.
@@ -185,6 +204,40 @@ traces/my-profiling-run/
     ├── memory_snapshot_time..._rank1_dp0_tp1_pp0_snapshot.pickle
     └── ...
 ```
+
+### ROCm Qwen3-0.6B Fully Async Profiling
+
+For the current 4-GPU ROCm debug path, use the dedicated profiling wrapper:
+
+```bash
+PROFILE_PASS=timeline bash scripts/training/multimodal/profile_amd_qwen3_0_6b_4gpu_e2e.sh
+```
+
+Each run creates one artifact directory:
+
+```text
+profiling_results/qwen3-0.6b-fully-async-<timestamp>/
+├── launch.env
+├── run.log
+├── profile_report.md
+├── timeline/
+├── traces/<experiment>/train_trace/
+└── sglang_trace/
+```
+
+Use the passes in this order:
+
+| Pass | Command prefix | Purpose |
+|---|---|---|
+| Smoke | `PROFILE_PASS=smoke` | Confirm the runnable e2e path still succeeds before profiling |
+| Timeline | `PROFILE_PASS=timeline` | Low-overhead orchestration timing and async gap discovery |
+| Train profiler | `PROFILE_PASS=torch` | Focused PyTorch profiler for actor training and log-probs |
+| SGLang profiler | `PROFILE_PASS=sglang` | Focused rollout kernel/operator profiling |
+| Combined | `PROFILE_PASS=all` | Stress confirmation only; combined profiler overhead can distort timing or trip SGLang health checks |
+
+The wrapper defaults to `NUM_ROLLOUT=3` and profiles steps `1..2` for focused passes. This keeps one warmup rollout plus steady-state profiler coverage while avoiding TransferQueue overflow when profiler overhead slows the actor consumers. Open timeline JSON files in `chrome://tracing` or Perfetto. Open PyTorch/SGLang trace folders with TensorBoard profiler or a Chrome trace viewer.
+
+On ROCm, do not treat memory snapshots as a default profiling pass: the current memory snapshot implementation depends on CUDA-specific PyTorch memory APIs and will skip unsupported backends.
 
 ---
 
@@ -430,6 +483,20 @@ See [Fully Async Training](./fully-async-training.md) for the complete setup gui
 --sglang-mem-fraction-static 0.6 \
 --fully-async
 ```
+
+### Qwen3-0.6B on 4 GPUs (ROCm Fully Async E2E)
+
+Use this wrapper for the local MI210 debug path that should run from one command:
+
+```bash
+bash scripts/training/multimodal/run_amd_qwen3_0_6b_4gpu_e2e.sh
+```
+
+The wrapper pins the measured debug-scale defaults for the validated full-e2e path:
+`actor=2`, `rollout=1`, `actor_fwd=1`, `max_staleness=1`, `NUM_ROLLOUT=2`,
+`SEQ_LENGTH=1024`, and `ROLLOUT_MAX_RESPONSE_LEN=128`. It leaves environment
+overrides intact, so a caller can still override values without editing the
+script.
 
 ---
 

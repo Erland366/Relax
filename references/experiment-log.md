@@ -12,6 +12,85 @@ Each entry should include:
 
 ---
 
+## 2026-06-12 - Retrospective on Qwen3-0.6B fully_async all-profile e2e
+
+**Type:** Retrospective
+**General description:** The Qwen3-0.6B four-GPU fully_async path completed
+with both PyTorch train profiling and SGLang profiling enabled, producing
+timeline, train-trace, SGLang-trace, rollout, W&B offline, and checkpoint
+artifacts.
+
+### What we tried
+
+- Ran the profile wrapper:
+  `scripts/training/multimodal/profile_amd_qwen3_0_6b_4gpu_e2e.sh`.
+- Used `PROFILE_PASS=all`, `NUM_ROLLOUT=3`, `NUM_STEPS_PER_ROLLOUT=2`,
+  `GLOBAL_BATCH_SIZE=2`, `MICRO_BATCH_SIZE=1`, `SEQ_LENGTH=1024`,
+  `MAX_STALENESS=1`, and `HIP_VISIBLE_DEVICES=0,1,2,3`.
+- Kept the validated fully_async topology:
+  actor on two GPUs, rollout on one GPU, actor_fwd on one GPU, and advantages
+  on CPU.
+- Kept W&B offline and used the `relaxrl_rocm_after_fix` environment.
+- Verified the successful profile report and checkpoint artifacts after the
+  run completed.
+
+### Key findings
+
+- The successful Ray job was `raysubmit_qa93biVY2KTg9qxh`.
+- The successful profile root is
+  `profiling_results/qwen3-0.6b-fully-async-20260612_072552`.
+- The profile report records `Run status: success` and `Missing expected
+  artifacts: _None._`.
+- The run completed rollout steps `0/3`, `1/3`, and `2/3`, actor training
+  steps `0/3`, `1/3`, and `2/3`, actor_fwd log-prob work, async DCS weight
+  updates, and graceful SGLang engine shutdown.
+- The run saved checkpoint iteration `2` in `torch_dist` format under
+  `/vast/users/qirong.ho/erland/Python_project/Relax-rocm-megatron_root/relax_assets/Qwen3-0.6B_mcore_4gpu-fully-async-20260612_072552`.
+  `latest_checkpointed_iteration.txt` contains `2`.
+- The save directory contains `.metadata`, `common.pt`, `metadata.json`, four
+  `.distcp` shards, `dataset/global_dataset_state_dict_2.pt`, and rollout
+  result files for train steps `0`, `1`, and `2`.
+- The profile report found `180` timeline events, `3` train trace files, and
+  `2` SGLang trace files.
+- The largest timeline totals were orchestration-heavy rather than
+  kernel-only: `train_wait` total `799.132s`, `train` total `565.276s`,
+  `rollout` total `511.084s`, `init_actor` total `473.266s`, and
+  `recv_weight_fully_async` total `437.576s`.
+
+### What failed
+
+- The earlier `PROFILE_PASS=all` run
+  `profiling_results/qwen3-0.6b-fully-async-20260612_055528` stopped with Ray
+  job `raysubmit_buLM4RFZqwrkKUK2`.
+- That stopped run reached `Start rollout 0/3` and `Actor training step 0/3`
+  but then failed rollout generation with `503 Service Unavailable` from
+  `http://127.0.0.1:3718/generate`.
+- The stopped run produced no timeline files, no train traces, and no SGLang
+  traces. Its report lists all three artifact classes as missing.
+- The failure mode was not reproduced in the completed rerun with the same
+  `PROFILE_PASS=all` shape, so treat it as a run-level SGLang/router health
+  failure unless it recurs.
+
+### Open questions
+
+- The all-profile pass is now validated for the short three-rollout e2e shape,
+  but longer runs should still be split into targeted passes if profiler
+  overhead becomes unstable.
+- The largest profile gaps are outside pure train kernels. The next profiling
+  question should focus on orchestration boundaries such as train wait,
+  rollout, actor initialization, and async weight transfer before kernel-level
+  tuning.
+- If the `503` rollout failure recurs, capture SGLang router and engine logs
+  around `/health_generate` and `/generate` before changing training flags.
+
+### Reusable lessons captured
+
+- Update the existing `qwen3-0-6b-rocm-fully-async-e2e` result skill with this
+  2026-06-12 profiling evidence rather than creating a duplicate skill.
+- A troubleshooting entry is not yet warranted for the single stopped `all`
+  run because the immediate rerun completed successfully with all expected
+  artifacts.
+
 ## 2026-06-10 - Retrospective on Qwen3-0.6B fully_async ROCm e2e
 
 **Type:** Retrospective
@@ -3426,3 +3505,134 @@ Expected impact:
 - Code: `Megatron-LM/megatron/core/optimizer/cpu_offloading/hybrid_optimizer.py`, `relax/backends/megatron/optimizer_utils.py`
 - Test: `tests/utils/test_megatron_model.py`
 - Troubleshooting: `references/troubleshooting.md`
+
+## 2026-06-12 - Measurement-first plan for Qwen3-0.6B fully_async profiling
+
+**Type:** Research plan
+**General description:** The latest successful `PROFILE_PASS=all` run proved
+that the fully_async profiling path can capture actor training, rollout
+inference, actor_fwd logprobs, advantages, train traces, SGLang traces, and a
+torch_dist checkpoint. The next research step is to improve profile report
+interpretability before launching more GPU ablations.
+
+### Details
+
+Baseline evidence:
+
+- profile root:
+  `profiling_results/qwen3-0.6b-fully-async-20260612_081719`
+- Ray job: `raysubmit_Tr1U4pdZEAEa9zxr`
+- run status: `success`
+- checkpoint: `latest_checkpointed_iteration.txt` contains `2`
+- artifacts: timeline JSON, 3 train traces, and 2 SGLang traces
+
+Research interpretation:
+
+- timeline totals are overlapped service/rank spans, not wall-clock
+  percentages;
+- metrics-service timeline files can be cumulative snapshots, so raw event
+  totals need de-duplication before comparison;
+- short `PROFILE_PASS=all` runs are useful diagnostics but are startup-biased
+  and profiler-perturbed;
+- the current evidence points first at orchestration, queue/data movement, and
+  weight sync, not standalone kernel tuning.
+
+### Key Points
+
+- Improve `scripts/tools/summarize_fully_async_profile.py` before launching
+  the next ablation.
+- Use `PROFILE_PASS=timeline` with more rollouts for the first steady-state
+  follow-up.
+- Treat `actor_fwd` as `log_probs` in timeline reports.
+- Treat `advantages_compute` separately from `advantages_get_data`; the current
+  profile suggests the advantages path is data/queue-bound rather than
+  compute-bound.
+
+### Links
+
+- Report: `profiling_results/qwen3-0.6b-fully-async-20260612_081719/profile_report.md`
+- Tool: `scripts/tools/summarize_fully_async_profile.py`
+- Skill: `skills/qwen3-0-6b-rocm-fully-async-e2e/SKILL.md`
+
+## 2026-06-12 - Retrospective on timeline-only fully_async profiling
+
+**Type:** Retrospective
+**General description:** The follow-up timeline-only run produced a clearer
+component-level profile, but failed before full steady state because the rollout
+engine became unhealthy during the next fully_async weight-update boundary.
+
+### What we tried
+
+- Improved `scripts/tools/summarize_fully_async_profile.py` before launching
+  the next ablation.
+- Added timeline de-duplication because metrics-service timeline dumps can be
+  cumulative snapshots.
+- Added component summaries for `actor_train`, `rollout`, `actor_fwd`,
+  `advantages`, `weight_sync`, and `startup`.
+- Added warmup-excluded step-area rows and critical-path approximation so
+  overlapped fully_async spans are easier to interpret.
+- Ran the E1 profile with:
+  `PROFILE_PASS=timeline`, `NUM_ROLLOUT=8`, `NUM_STEPS_PER_ROLLOUT=2`, and
+  `SAVE_INTERVAL=100`.
+
+### Key findings
+
+- The production profile root is
+  `profiling_results/qwen3-0.6b-fully-async-20260612_094824`.
+- The Ray job was `raysubmit_weY1KG4zSW6AvGSS`.
+- The final profile report has `Run status: stopped` because the job had to be
+  stopped after the actor-side failure left Ray in a running state.
+- The report records `5752` raw timeline events and `1650` de-duplicated
+  timeline events.
+- Timeline files reached `timeline_step_3.json`, but the run did not reach the
+  main success marker.
+- Before failure, area totals were dominated by `actor_train` (`235.530s`),
+  `weight_sync` (`82.331s`), `advantages` (`69.980s`), `startup` (`69.611s`),
+  `rollout` (`33.031s`), and `actor_fwd` (`2.653s`).
+- The warmup-excluded step-1 rows were led by `advantages` (`41.045s`) and
+  `rollout` (`17.038s`), but these should not be treated as final steady-state
+  optimization targets because the run failed early.
+
+### What failed
+
+- SGLang reported that it could not get a detokenizer response for more than
+  20 seconds.
+- The SGLang detokenizer heartbeat stopped advancing at `09:55:36`.
+- The normal `/health` endpoint intermittently returned `200 OK`, but
+  `/health_generate` timed out.
+- The actor failed during `update_weights_fully_async` through:
+  `checkpoint_engine_client.update_weights_for_rollout` ->
+  `device_direct._update_rollout_engines`.
+- The terminal actor-side exception was:
+  `RuntimeError: No healthy rollout engines available after 30 retries`.
+- Rollout generation later returned `503 Service Unavailable` with
+  `no_available_workers` and `all circuits open or unhealthy`.
+
+### Open questions
+
+- Does lowering SGLang concurrency or max running requests stabilize the
+  detokenizer heartbeat under the same timeline-only instrumentation?
+- Does lowering rollout response/token pressure avoid the `/health_generate`
+  timeout?
+- Does `RELAX_SKIP_INITIAL_FULLY_ASYNC_WEIGHT_UPDATE=1` isolate the failure to
+  rollout health before the actor attempts the next rollout weight update?
+- Is the `advantages_get_data` dominance a steady-state bottleneck, or mostly
+  an artifact of the short run failing before stable overlap?
+
+### Key Points
+
+- The next profiling step should be a stability matrix, not kernel tuning.
+- Treat `/health_generate` as the meaningful rollout readiness signal; plain
+  `/health` can be green while generation is unavailable.
+- Use de-duplicated timeline rows and warmup-excluded step-area summaries for
+  research comparisons.
+- Do not optimize `advantages_compute` yet; current evidence points at
+  queue/data movement and rollout health before arithmetic compute.
+
+### Links
+
+- Report: `profiling_results/qwen3-0.6b-fully-async-20260612_094824/profile_report.md`
+- Tool: `scripts/tools/summarize_fully_async_profile.py`
+- Skill candidate: update `skills/qwen3-0-6b-rocm-fully-async-e2e/SKILL.md`
+  with the rollout-health failure mode after the next stability run confirms
+  whether this is reproducible.

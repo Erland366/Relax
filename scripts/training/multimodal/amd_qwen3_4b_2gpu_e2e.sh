@@ -831,6 +831,71 @@ build_debug_args() {
     append_env_arg RELAX_LOAD_DEBUG_ROLLOUT_DATA_SUBSAMPLE --load-debug-rollout-data-subsample
 }
 
+append_profile_arg() {
+    local env_name="$1"
+    local flag="$2"
+    local value="${!env_name:-}"
+
+    if [ -n "${value}" ]; then
+        PROFILING_ARGS+=("${flag}" "${value}")
+    fi
+}
+
+append_profile_flag() {
+    local env_name="$1"
+    local flag="$2"
+    local value="${!env_name:-0}"
+
+    case "${value}" in
+        0 | "")
+            ;;
+        1)
+            PROFILING_ARGS+=("${flag}")
+            ;;
+        *)
+            echo "${env_name} must be 0 or 1, got ${value}" >&2
+            exit 2
+            ;;
+    esac
+}
+
+append_profile_list_arg() {
+    local env_name="$1"
+    local flag="$2"
+    local value="${!env_name:-}"
+    local values=()
+
+    if [ -n "${value}" ]; then
+        read -r -a values <<< "${value}"
+        PROFILING_ARGS+=("${flag}" "${values[@]}")
+    fi
+}
+
+build_profiling_args() {
+    PROFILING_ARGS=()
+    append_profile_arg RELAX_TB_EXPERIMENT_NAME --tb-experiment-name
+    append_profile_arg RELAX_TIMELINE_DUMP_DIR --timeline-dump-dir
+
+    append_profile_flag RELAX_USE_PYTORCH_PROFILER --use-pytorch-profiler
+    append_profile_list_arg RELAX_PROFILE_TARGETS --profile-target
+    append_profile_arg RELAX_PROFILE_STEP_START --profile-step-start
+    append_profile_arg RELAX_PROFILE_STEP_END --profile-step-end
+    append_profile_flag RELAX_PROFILE_WITH_STACK --profile-with-stack
+    append_profile_flag RELAX_PROFILE_WITH_MEMORY --profile-with-memory
+    append_profile_flag RELAX_PROFILE_WITH_FLOPS --profile-with-flops
+
+    append_profile_flag RELAX_SGLANG_PROFILE --sglang-profile
+    append_profile_arg RELAX_SGLANG_PROFILE_STEP_START --sglang-profile-step-start
+    append_profile_arg RELAX_SGLANG_PROFILE_STEP_END --sglang-profile-step-end
+    append_profile_list_arg RELAX_SGLANG_PROFILE_STEPS --sglang-profile-steps
+    append_profile_arg RELAX_SGLANG_PROFILE_NUM_STEPS --sglang-profile-num-steps
+    append_profile_list_arg RELAX_SGLANG_PROFILE_ACTIVITIES --sglang-profile-activities
+    append_profile_flag RELAX_SGLANG_PROFILE_BY_STAGE --sglang-profile-by-stage
+    append_profile_flag RELAX_SGLANG_PROFILE_WITH_STACK --sglang-profile-with-stack
+    append_profile_flag RELAX_SGLANG_PROFILE_RECORD_SHAPES --sglang-profile-record-shapes
+    append_profile_arg RELAX_SGLANG_PROFILE_OUTPUT_DIR --sglang-profile-output-dir
+}
+
 build_sglang_args() {
     SGLANG_ARGS=(
         --num-gpus-per-node "${NUM_GPUS_PER_NODE}"
@@ -895,6 +960,7 @@ build_training_args() {
     build_wandb_args
     build_metrics_args
     build_debug_args
+    build_profiling_args
     build_sglang_args
     build_rocm_compat_args
     build_asynchronous_rl_args
@@ -925,6 +991,7 @@ submit_training_job() {
         "${WANDB_ARGS[@]}" \
         "${METRICS_ARGS[@]}" \
         "${DEBUG_ARGS[@]}" \
+        "${PROFILING_ARGS[@]}" \
         "${MEGATRON_PARALLEL_ARGS[@]}" \
         "${SGLANG_ARGS[@]}" \
         "${ROCM_COMPAT_ARGS[@]}" \

@@ -2,6 +2,7 @@
 
 import threading
 from argparse import Namespace
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any, Dict
 
 import torch
@@ -11,6 +12,7 @@ from tensordict import TensorDict
 
 from relax.components.base import Base
 from relax.utils.async_utils import run as run_
+from relax.utils.timer import Timer
 from relax.utils.training.ppo_utils import (
     compute_approx_kl,
     get_advantages_and_returns_batch,
@@ -36,6 +38,33 @@ class Advantages(Base):
         tq.init(self.config.tq_config)
         self.data_system_client = tq.get_client()
         self.step = 0
+        self._timeline_enabled = getattr(self.config, "timeline_dump_dir", None) is not None and getattr(
+            self.config, "use_metrics_service", False
+        )
+        if self._timeline_enabled:
+            from relax.utils.metrics.metrics_service_adapter import init_metrics_service_adapter
+
+            init_metrics_service_adapter(self.config)
+
+    def _timeline(self, name: str) -> AbstractContextManager:
+        if not self._timeline_enabled:
+            return nullcontext()
+        return Timer().context(name)
+
+    def _flush_timeline(self, step: int) -> None:
+        if not self._timeline_enabled:
+            return
+        if not Timer().records:
+            return
+        from relax.utils.metrics.metrics_service_adapter import (
+            get_metrics_service_adapter,
+            init_metrics_service_adapter,
+        )
+
+        adapter = get_metrics_service_adapter()
+        if adapter is None:
+            adapter = init_metrics_service_adapter(self.config)
+        adapter.direct_log(step, {})
 
     async def run(self) -> None:
         step = self.step
@@ -48,46 +77,54 @@ class Advantages(Base):
                 self._logger.info(
                     f"Start to got rollout_id: {step} data from transfer queue for compute advantages and returns."
                 )
-                while not run_(
-                    self.data_system_client.async_check_consumption_status(
-                        "compute_advantages_and_returns", f"train_{step}"
-                    )
-                ):
-                    adv_data_fields = [
-                        "tokens",
-                        "total_lengths",
-                        "response_lengths",
-                        "loss_masks",
-                        "rollout_log_probs",
-                        "rewards",
-                    ]
-                    # log_probs is only needed for KL divergence; in true on-policy mode
-                    # the actor_fwd role is absent and log_probs is not produced upstream.
-                    if not getattr(self.config, "true_on_policy_mode", False):
-                        adv_data_fields.append("log_probs")
-                    if self.config.kl_coef != 0 or self.config.use_kl_loss:
-                        adv_data_fields.append("ref_log_probs")
-                    if getattr(self.config, "use_opd", False):
-                        adv_data_fields.append("teacher_log_probs")
-                    batch_meta = run_(
-                        self.data_system_client.async_get_meta(
-                            data_fields=adv_data_fields,
-                            batch_size=self.config.global_batch_size // self.config.num_iters_per_train_update,
-                            partition_id=f"train_{step}",
-                            task_name="compute_advantages_and_returns",
-                        )  # type: ignore
-                    )
+                with self._timeline("advantages"):
+                    while not run_(
+                        self.data_system_client.async_check_consumption_status(
+                            "compute_advantages_and_returns", f"train_{step}"
+                        )
+                    ):
+                        adv_data_fields = [
+                            "tokens",
+                            "total_lengths",
+                            "response_lengths",
+                            "loss_masks",
+                            "rollout_log_probs",
+                            "rewards",
+                        ]
+                        # log_probs is only needed for KL divergence; in true on-policy mode
+                        # the actor_fwd role is absent and log_probs is not produced upstream.
+                        if not getattr(self.config, "true_on_policy_mode", False):
+                            adv_data_fields.append("log_probs")
+                        if self.config.kl_coef != 0 or self.config.use_kl_loss:
+                            adv_data_fields.append("ref_log_probs")
+                        if getattr(self.config, "use_opd", False):
+                            adv_data_fields.append("teacher_log_probs")
+                        with self._timeline("advantages_get_data"):
+                            batch_meta = run_(
+                                self.data_system_client.async_get_meta(
+                                    data_fields=adv_data_fields,
+                                    batch_size=self.config.global_batch_size // self.config.num_iters_per_train_update,
+                                    partition_id=f"train_{step}",
+                                    task_name="compute_advantages_and_returns",
+                                )  # type: ignore
+                            )
 
-                    if batch_meta.size == 0:
-                        continue
-                    rollout_data = run_(self.data_system_client.async_get_data(batch_meta))
-                    self._logger.info(
-                        f"Successfully got rollout_id: {step} data from transfer queue for compute advantages and returns."
-                    )
-                    advantages_and_returns = self.compute_advantages_and_returns(rollout_data)
-                    advantages_and_returns = TensorDict(advantages_and_returns, batch_size=[len(batch_meta.samples)])
-                    run_(self.data_system_client.async_put(data=advantages_and_returns, metadata=batch_meta))
+                            if batch_meta.size == 0:
+                                continue
+                            rollout_data = run_(self.data_system_client.async_get_data(batch_meta))
+                        self._logger.info(
+                            f"Successfully got rollout_id: {step} data from transfer queue for compute advantages "
+                            "and returns."
+                        )
+                        with self._timeline("advantages_compute"):
+                            advantages_and_returns = self.compute_advantages_and_returns(rollout_data)
+                        advantages_and_returns = TensorDict(
+                            advantages_and_returns, batch_size=[len(batch_meta.samples)]
+                        )
+                        with self._timeline("advantages_put"):
+                            run_(self.data_system_client.async_put(data=advantages_and_returns, metadata=batch_meta))
                 self._logger.info(f"Successfully run compute advantages and returns for step {step}.")
+                self._flush_timeline(step)
                 step += 1
         except Exception as e:
             error_msg = f"Advantage computation failed at step {self.step}: {type(e).__name__}: {str(e)}"

@@ -20,6 +20,24 @@ Relax 训练吞吐量最大化实践指南。本文提到的所有参数均可�
 - **内存快照** 文件名同样包含 rank 标识，例如 `memory_snapshot_time1713780123_rank0_dp0_tp0_pp0_snapshot.pickle`
 - **SGLang trace** 文件以 `engine{i}` 为前缀区分不同引擎实例，例如 `engine0-1713780123-TP-0.trace.json.gz`
 
+### Fully Async Profile 报告
+
+对于 fully_async 运行，先看生成的 `profile_report.md`，再打开单个
+trace 文件。报告会区分 raw timeline event count 和 de-duplicated timeline
+event count，因为 metrics service 的 timeline dump 可能是累计快照。做研究
+对比时应使用去重后的统计。
+
+解读 fully_async 时间时需要注意：
+
+- Area total 可能超过 wall-clock time，因为 actor、rollout、actor_fwd、
+  advantages 和 weight sync 会重叠执行。
+- 短的 `PROFILE_PASS=all` 运行适合诊断，但会受到启动阶段和 profiler
+  开销影响。
+- 做 steady-state 调度和 overlap 分析时，优先使用足够 rollout 数量的
+  `PROFILE_PASS=timeline`。
+- 判断要优化 train kernel、rollout inference、weight sync 还是队列/数据
+  搬运之前，先看 warmup-excluded 统计。
+
 ### 1. SGLang 推理 Profiling
 
 对 Rollout 阶段所有 SGLang 引擎进行 `torch.profiler` 采集。通过 HTTP API `/start_profile` 和 `/stop_profile` 触发，不影响训练侧的 profiler。
@@ -185,6 +203,40 @@ traces/my-profiling-run/
     ├── memory_snapshot_time..._rank1_dp0_tp1_pp0_snapshot.pickle
     └── ...
 ```
+
+### ROCm Qwen3-0.6B 全异步 Profiling
+
+当前 4-GPU ROCm 调试路径使用专门的 profiling wrapper：
+
+```bash
+PROFILE_PASS=timeline bash scripts/training/multimodal/profile_amd_qwen3_0_6b_4gpu_e2e.sh
+```
+
+每次运行都会创建一个 artifact 目录：
+
+```text
+profiling_results/qwen3-0.6b-fully-async-<timestamp>/
+├── launch.env
+├── run.log
+├── profile_report.md
+├── timeline/
+├── traces/<experiment>/train_trace/
+└── sglang_trace/
+```
+
+按以下顺序执行：
+
+| Pass | 命令前缀 | 目的 |
+|---|---|---|
+| Smoke | `PROFILE_PASS=smoke` | profiling 前先确认 e2e 路径仍可成功运行 |
+| Timeline | `PROFILE_PASS=timeline` | 低开销编排计时，用于发现 async gap |
+| Train profiler | `PROFILE_PASS=torch` | 对 actor training 和 log-probs 做定点 PyTorch profiler |
+| SGLang profiler | `PROFILE_PASS=sglang` | 对 rollout kernel / operator 做定点 profiling |
+| Combined | `PROFILE_PASS=all` | 仅用于压力确认；组合 profiler overhead 可能扭曲耗时或触发 SGLang health check 失败 |
+
+wrapper 默认 `NUM_ROLLOUT=3`，定点 profiler 默认采集 step `1..2`。这样可以保留一轮 warmup 和 steady-state profiler 覆盖，同时避免 profiler overhead 放慢 actor consumer 后导致 TransferQueue 溢出。Timeline JSON 可用 `chrome://tracing` 或 Perfetto 打开；PyTorch/SGLang trace 目录可用 TensorBoard profiler 或 Chrome trace viewer 打开。
+
+ROCm 上不要把 memory snapshot 当作默认 profiling pass：当前 memory snapshot 实现依赖 CUDA-specific PyTorch memory APIs，在不支持的后端会跳过。
 
 ---
 
@@ -430,6 +482,19 @@ Partial Rollout 最适合 `max_response_len` 较大（如 8K+）且响应长度�
 --sglang-mem-fraction-static 0.6 \
 --fully-async
 ```
+
+### Qwen3-0.6B 4 GPU（ROCm 全异步 E2E）
+
+本地 MI210 调试路径使用这个 wrapper，一条命令即可运行：
+
+```bash
+bash scripts/training/multimodal/run_amd_qwen3_0_6b_4gpu_e2e.sh
+```
+
+该 wrapper 固定已验证 full-e2e 路径的 debug-scale 默认值：
+`actor=2`、`rollout=1`、`actor_fwd=1`、`max_staleness=1`、`NUM_ROLLOUT=2`、
+`SEQ_LENGTH=1024`、`ROLLOUT_MAX_RESPONSE_LEN=128`。它仍保留环境变量覆盖能力，
+因此需要调整单个参数时不必编辑脚本。
 
 ---
 

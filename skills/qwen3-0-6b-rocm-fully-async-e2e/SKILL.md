@@ -73,6 +73,40 @@ Do NOT use when:
 | Checkpoint proof | Iterations `0` and `1` saved | Each iteration has `.metadata`, four `.distcp` shards, `common.pt`, and `metadata.json` |
 | Optimizer proof | Distributed optimizer state saved | Metadata contains optimizer/exp_avg entries; log says `Storing distributed optimizer sharded state of type dp_reshardable` |
 
+### 2026-06-12 All-Profile Validation
+
+A later `PROFILE_PASS=all` run validated the same Qwen3-0.6B four-GPU
+fully_async path with both PyTorch train profiling and SGLang profiling
+enabled.
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Validated date | 2026-06-12 | `after_fix` worktree |
+| Profile pass | `all` | PyTorch train profiler plus SGLang profiler |
+| Successful Ray job | `raysubmit_qa93biVY2KTg9qxh` | Completed successfully |
+| Profile root | `profiling_results/qwen3-0.6b-fully-async-20260612_072552` | `Run status: success` |
+| Save dir | `/vast/users/qirong.ho/erland/Python_project/Relax-rocm-megatron_root/relax_assets/Qwen3-0.6B_mcore_4gpu-fully-async-20260612_072552` | `latest_checkpointed_iteration.txt` contains `2` |
+| Timeline events | `180` | No expected artifacts missing |
+| Train traces | `3` | `train_trace/*.pt.trace.json.gz` |
+| SGLang traces | `2` | `rollout_1` and `rollout_2` |
+| Checkpoint proof | Iteration `2` | `.metadata`, `common.pt`, `metadata.json`, four `.distcp` shards, dataset state |
+
+When using `PROFILE_PASS=all`, require all of these before calling the run
+complete: Ray job success, `Main func successfully`, checkpoint iteration `2`,
+timeline files, train traces, SGLang traces, and rollout result JSONL files.
+
+After 2026-06-12, new timeline/profile runs also expose the CPU advantages
+service as first-class timeline spans: `advantages`, `advantages_get_data`,
+`advantages_compute`, and `advantages_put`. Older profile reports do not have
+these rows, so do not use their absence as evidence that the advantages service
+did not run.
+
+The earlier all-profile attempt
+`profiling_results/qwen3-0.6b-fully-async-20260612_055528` stopped with
+`503 Service Unavailable` from rollout generation and produced no profiling
+artifacts. Treat such stopped runs as failed evidence; rerun or split profiling
+passes before drawing performance conclusions.
+
 ## Recommended Practice
 
 ### Step 1: Preflight the Environment

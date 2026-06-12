@@ -45,6 +45,8 @@ logs
 output
 outputs
 tensorboard_log
+profiling_results/
+traces/
 
 compiled_resources/
 
