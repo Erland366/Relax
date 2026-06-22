@@ -124,6 +124,7 @@ class MegatronTrainRayActor(TrainRayActor):
         dist.barrier(group=get_gloo_group())
 
         self._torch_memory_saver_enabled = False
+        self._torch_memory_saver_paused = False
         if args.offload_train:
             x = max(int(args.train_memory_margin_bytes), 0)
             try:
@@ -328,8 +329,7 @@ class MegatronTrainRayActor(TrainRayActor):
         destroy_process_groups()
         self._is_sleeping = True
 
-        if self._torch_memory_saver_enabled:
-            torch_memory_saver.pause()
+        self._pause_torch_memory_saver()
 
         print_memory("after offload model")
 
@@ -338,13 +338,30 @@ class MegatronTrainRayActor(TrainRayActor):
         assert self.args.offload_train
         print_memory("before wake_up model")
 
-        if self._torch_memory_saver_enabled:
-            torch_memory_saver.resume()
+        self._resume_torch_memory_saver()
 
         clear_memory()
         reload_process_groups(timeout_minutes=self.args.distributed_timeout_minutes)
         self._is_sleeping = False
         print_memory("after wake_up model")
+
+    def _pause_torch_memory_saver(self) -> None:
+        if not self._torch_memory_saver_enabled or self._torch_memory_saver_paused:
+            return
+
+        torch_memory_saver.pause()
+        self._torch_memory_saver_paused = True
+
+    def _resume_torch_memory_saver(self) -> None:
+        if not self._torch_memory_saver_enabled:
+            return
+
+        if not self._torch_memory_saver_paused:
+            logger.info("Skip torch_memory_saver.resume because allocations are already active")
+            return
+
+        torch_memory_saver.resume()
+        self._torch_memory_saver_paused = False
 
     def _switch_model(self, target_tag: str) -> None:
         if target_tag not in self.weights_backuper.backup_tags:
@@ -1184,6 +1201,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 logger.info("HIP/ROCm detected: synchronizing after rollout weight update")
                 device_utils.synchronize()
             print_memory("after update_weights", clear_before_print=True)
+            if self._torch_memory_saver_enabled:
+                self._torch_memory_saver_paused = False
 
             if self.args.ci_test and len(rollout_engines) > 0:
                 engine = random.choice(rollout_engines)
@@ -1203,10 +1222,8 @@ class MegatronTrainRayActor(TrainRayActor):
                     self.weights_backuper.backup("rollout_actor")
                 else:
                     self.weights_backuper.backup("old_actor")
-        if reconnect_rollout_engines:
+        if self.args.offload_train:
             self.sleep()
-        elif self.args.offload_train:
-            destroy_process_groups()
 
         if self.args.offload_rollout and dist.get_rank() == 0:
             ray.get(self.rollout_manager.onload_kv.remote())

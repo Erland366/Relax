@@ -37,6 +37,7 @@ _PROCESS_MEGATRON_PATH_PRUNED = False
 _PROCESS_MEGATRON_IMPORTS_BLOCKED = False
 _PROCESS_SGL_KERNEL_STUB_INSTALLED = False
 _MEGATRON_BLOCKED_PREFIXES = ("megatron.core",)
+_DISABLE_MEMORY_SAVER_ENV_VAR = "RELAX_SGLANG_DISABLE_MEMORY_SAVER"
 
 
 if TYPE_CHECKING:
@@ -55,6 +56,17 @@ def _get_sglang_router():
     import sglang_router
 
     return sglang_router
+
+
+def _sglang_memory_saver_enabled(offload_rollout: bool) -> bool:
+    if not offload_rollout:
+        return False
+
+    if os.environ.get(_DISABLE_MEMORY_SAVER_ENV_VAR) != "1":
+        return True
+
+    logger.info("Disabled SGLang memory saver via %s=1", _DISABLE_MEMORY_SAVER_ENV_VAR)
+    return False
 
 
 def _kill_process_tree(pid: int) -> None:
@@ -1285,7 +1297,7 @@ def _compute_genrm_server_args(
         "trust_remote_code": True,
         "random_seed": args.seed + rank,
         # memory
-        "enable_memory_saver": args.offload_rollout,
+        "enable_memory_saver": _sglang_memory_saver_enabled(args.offload_rollout),
         # distributed
         "host": host,
         "port": port,
@@ -1372,7 +1384,7 @@ def _compute_server_args(
         "trust_remote_code": True,
         "random_seed": args.seed + rank,
         # memory
-        "enable_memory_saver": args.offload_rollout,
+        "enable_memory_saver": _sglang_memory_saver_enabled(args.offload_rollout),
         # distributed
         "host": host,
         "port": port,

@@ -12,6 +12,123 @@ Each entry should include:
 
 ---
 
+## 2026-06-21 - Observation on mini colocate memory-saver diagnostic
+
+**Type:** Observation
+**General description:** The Qwen3-Mock-0.5B mini path reproduces the colocated
+SGLang HIP prefill failure quickly and is now the preferred debug target for
+this issue.
+
+### Details
+
+- Qwen3-Mock-0.5B sync colocate baseline run `2usrz00j` reproduced the same
+  SGLang first-prefill HIP named-symbol failure with
+  `enable_memory_saver=True`, so the colocate failure is not specific to 0.6B
+  or 4B model size.
+- Added `RELAX_SGLANG_DISABLE_MEMORY_SAVER=1` as an opt-in diagnostic that is
+  forwarded through the AMD launcher into Ray runtime env. With this override,
+  Qwen3-Mock-0.5B foreground validation run `kse80ff1` passed the old immediate
+  failure point far enough to load SGLang weights and allocate KV cache with
+  `enable_memory_saver=False`, but the 5-minute validation cutoff interrupted
+  before first prefill/training could be observed.
+- Follow-up no-memory-saver mini colocate runs reached rollout metrics. Run
+  `tyhcen6i` completed rollout 0 with `rollout/reward/mean=-64.0`,
+  `rollout/response_len/mean=64.0`, and `truncated_ratio=1.0`, then failed in
+  actor step 0 with ROCm `HIP error: named symbol not found` during the first
+  Megatron log-prob forward.
+- The same mini model and reward succeeded in a non-colocated A/B control:
+  W&B run `oc9gqu3i` / Ray job `raysubmit_3iJmqWyawsa16HLq` completed one
+  rollout, one actor training step, weight update, and checkpoint save. This
+  rules out the Qwen3-Mock-0.5B asset as the primary cause of the colocated
+  actor crash.
+- Added actor memory-saver paused-state bookkeeping and made sync
+  `update_weights()` return offloaded actors to `sleep()` before rollout KV
+  resumes. This fixed the earlier `Cannot resume allocation that is not paused`
+  state error and verified GPU memory is released before rollout, but did not
+  fix the colocated actor HIP named-symbol failure.
+- Mini colocate run `frx2vwtb` with the sleep-after-weight-update patch, and
+  run `6dq4eeav` with both the patch and `AMD_SERIALIZE_KERNEL=3`, both still
+  completed rollout and then failed in actor log-prob forward at the same
+  ROCm `HIP error: named symbol not found` boundary. `AMD_SERIALIZE_KERNEL=3`
+  did not move the reported stack closer to the real failing kernel on this
+  stack.
+
+## 2026-06-20 - Retrospective on completion-length reward sync and colocate probes
+
+**Type:** Retrospective
+**General description:** The toy completion-length reward path is useful for
+reward/W&B plumbing, but the current blocking failures are now separated into a
+colocated SGLang ROCm prefill crash and a non-colocated 4B actor optimizer OOM.
+
+### What we tried
+
+- Added a simple completion-length reward where the reward is
+  `-len(completion_tokens)` and the optimal response is immediate EOS.
+- Ran short sync and fully-async probes with small prompt batches, online W&B,
+  `ROLLOUT_MAX_RESPONSE_LEN=64`, and higher rollout temperature to test whether
+  reward improves away from the generation cap.
+- Repeated sync probes across Qwen3-0.6B and Qwen3-4B, and across colocated
+  versus non-colocated rollout/actor placement.
+- Added `USE_COLLOCATE=1` support to the AMD Qwen3 launcher so the same
+  environment can be rerun with colocated placement.
+
+### Key findings
+
+- The early Qwen3-0.6B sync run completed, but rollout reward stayed flat at
+  `-64.0`, response length stayed at 64, and advantages/gradients collapsed to
+  zero. That run proves plumbing more than learning quality.
+- Qwen3-4B sync colocate loaded the real `Qwen/Qwen3-4B` weights in both
+  Megatron and SGLang, then failed during first SGLang prefill with
+  `torch.AcceleratorError: HIP error: named symbol not found`.
+- Qwen3-4B sync non-colocate reached rollout and actor training, proving the
+  4B SGLang path itself can prefill/generate on this stack. It then OOMed at
+  the first actor `optimizer.step()` while allocating Adam state on MI210.
+- Qwen3-0.6B sync colocate reproduced the same SGLang HIP
+  `named symbol not found` failure after actor sleep/offload and SGLang server
+  readiness. This makes the colocated ROCm runtime path the stronger suspect,
+  not the 4B model weights.
+
+### What failed
+
+- Fully-async execution remains noisy for this toy setup because queue/storage
+  pressure can dominate the learning signal.
+- Sync learning with the earlier 0.6B configuration did not improve reward
+  because all samples hit the max response length, producing no useful
+  within-prompt reward variance.
+- Colocated sync startup currently fails before rollout metrics on both 0.6B
+  and 4B with the same HIP named-symbol signature.
+- Non-colocated 4B separates that failure from model loading, but hits a
+  separate actor optimizer memory ceiling at Adam state initialization.
+
+### Open questions
+
+- Whether the colocated HIP failure is triggered by SGLang memory saver,
+  actor sleep/offload, Ray placement/process state, or a specific SGLang ROCm
+  prefill kernel.
+- Whether lower SGLang pressure plus `AMD_SERIALIZE_KERNEL=3` exposes a more
+  precise failing kernel boundary for the colocated path.
+- Whether the non-colocated 4B optimizer OOM should be addressed with a larger
+  actor topology, shorter sequence settings, or the already validated TP2 GPU
+  optimizer path rather than CPU optimizer offload.
+
+### Reusable lessons captured
+
+- Updated `skills/completion-length-reward-smoke-test/SKILL.md` with the
+  Qwen3-4B colocate, Qwen3-4B non-colocate, and Qwen3-0.6B colocate probe
+  outcomes.
+- Added opt-in propagation for `AMD_SERIALIZE_KERNEL` from the AMD launcher to
+  Ray runtime env and SGLang rollout engines so ROCm kernel serialization can
+  be used in the next colocate diagnostic without affecting normal runs.
+- Follow-up Qwen3-0.6B sync colocate run `jidwd60n` with reduced SGLang
+  pressure and `AMD_SERIALIZE_KERNEL=3` reproduced the same first-prefill
+  failure on both SGLang engines. The SGLang server reached ready state, then
+  `schedule_batch.py:1510` raised `torch.AcceleratorError: HIP error: named
+  symbol not found`; logs also warned that `AMD_SERIALIZE_KERNEL=3` was parsed
+  as an invalid boolean-style env value.
+- Candidate troubleshooting entry: colocated SGLang on ROCm can fail during
+  first prefill with `HIP error: named symbol not found` even when the same
+  model works non-colocated.
+
 ## 2026-05-31 - Retrospective on Qwen3-0.5B four-GPU ROCm overnight regression
 
 **Type:** Retrospective

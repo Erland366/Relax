@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 ROOT_DIR="${RELAX_ROOT_DIR:-$(cd -- "${SCRIPT_DIR}/../../.." &>/dev/null && pwd)}"
-ASSET_DIR="/vast/users/qirong.ho/erland/Python_project/relax_e2e_assets"
+ASSET_DIR="${ASSET_DIR:-/vast/users/qirong.ho/erland/Python_project/Relax-rocm-megatron_root/relax_assets}"
 MEGATRON_DIR="${MEGATRON_DIR:-/vast/users/qirong.ho/erland/Python_project/ROCm-Megatron-LM}"
 MEGATRON_BRIDGE_DIR="${MEGATRON_BRIDGE_DIR:-/vast/users/qirong.ho/erland/Python_project/Megatron-Bridge}"
 LOG_DIR="${LOG_DIR:-${ROOT_DIR}/log}"
@@ -414,7 +414,12 @@ configure_run_defaults() {
         exit 2
     fi
 
-    PROMPT_SET="${ASSET_DIR}/dapo-math-17k/dapo-math-17k.jsonl"
+    PROMPT_SET="${PROMPT_SET:-${ASSET_DIR}/dapo-math-17k/dapo-math-17k.jsonl}"
+    RM_TYPE="${RM_TYPE:-dapo}"
+    REWARD_KEY="${REWARD_KEY-score}"
+    ROLLOUT_TEMPERATURE="${ROLLOUT_TEMPERATURE:-0.8}"
+    ROLLOUT_TOP_P="${ROLLOUT_TOP_P:-1.0}"
+    ROLLOUT_TOP_K="${ROLLOUT_TOP_K:--1}"
     HF_CHECKPOINT="${HF_CHECKPOINT:-${ASSET_DIR}/${MODEL_ASSET_NAME}}"
     RUN_LOG="${RUN_LOG:-${LOG_DIR}/amd-${MODEL_LOG_NAME}-${GPU_LABEL}-${NOW}.log}"
     mkdir -p "$(dirname "${RUN_LOG}")"
@@ -618,6 +623,8 @@ keys = [
     "MEGATRON_BRIDGE_DIR",
     "LD_PRELOAD",
     "ROCM_HSA_RUNTIME_PRELOAD",
+    "AMD_SERIALIZE_KERNEL",
+    "RELAX_SGLANG_DISABLE_MEMORY_SAVER",
     "GLOO_SOCKET_IFNAME",
     "TP_SOCKET_IFNAME",
     "NCCL_SOCKET_IFNAME",
@@ -661,6 +668,9 @@ build_asynchronous_rl_args() {
     ASYNC_RL_ARGS=(
         --max-staleness "${MAX_STALENESS}"
     )
+    if [ "${USE_COLLOCATE:-0}" = "1" ]; then
+        ASYNC_RL_ARGS+=(--colocate)
+    fi
     case "${RELAX_EXECUTION_MODE}" in
         fully_async)
             ASYNC_RL_ARGS+=(--fully-async)
@@ -730,18 +740,22 @@ build_rollout_args() {
         --label-key label
         --apply-chat-template
         --rollout-shuffle
-        --rm-type dapo
-        --reward-key score
+        --rm-type "${RM_TYPE}"
         --num-rollout "${NUM_ROLLOUT}"
         --rollout-batch-size "${ROLLOUT_BATCH_SIZE}"
         --n-samples-per-prompt "${N_SAMPLES_PER_PROMPT}"
         --rollout-max-response-len "${ROLLOUT_MAX_RESPONSE_LEN}"
-        --rollout-temperature 0.8
+        --rollout-temperature "${ROLLOUT_TEMPERATURE}"
+        --rollout-top-p "${ROLLOUT_TOP_P}"
+        --rollout-top-k "${ROLLOUT_TOP_K}"
         --global-batch-size "${GLOBAL_BATCH_SIZE}"
         --num-steps-per-rollout "${NUM_STEPS_PER_ROLLOUT}"
         --update-weights-interval "${UPDATE_WEIGHTS_INTERVAL:-1}"
         --use-fault-tolerance
     )
+    if [ -n "${REWARD_KEY}" ]; then
+        ROLLOUT_ARGS+=(--reward-key "${REWARD_KEY}")
+    fi
     if [ "${USE_BALANCE_DATA}" = "1" ]; then
         ROLLOUT_ARGS+=(--balance-data)
     fi
@@ -966,7 +980,7 @@ log_launch_config() {
     echo "  mode: ${RELAX_EXECUTION_MODE}, max_staleness=${MAX_STALENESS}, balance_data=${USE_BALANCE_DATA}, use_kl_loss=${USE_KL_LOSS}" >&2
     echo "  resources: HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES}, RAY_NUM_GPUS=${RAY_NUM_GPUS}, actor_gpus=${ACTOR_RESOURCE_GPUS}, rollout_gpus=${ROLLOUT_RESOURCE_GPUS}, actor_fwd_gpus=${ACTOR_FWD_RESOURCE_GPUS}, RESOURCE_JSON=${RESOURCE_JSON}" >&2
     echo "  training: TP=${TENSOR_MODEL_PARALLEL_SIZE}, PP=${PIPELINE_MODEL_PARALLEL_SIZE}, CP=${CONTEXT_PARALLEL_SIZE}, micro_batch=${MICRO_BATCH_SIZE}, global_batch=${GLOBAL_BATCH_SIZE}, recompute=${ENABLE_RECOMPUTE}" >&2
-    echo "  rollout: num_rollout=${NUM_ROLLOUT}, steps_per_rollout=${NUM_STEPS_PER_ROLLOUT}, rollout_batch=${ROLLOUT_BATCH_SIZE}, samples_per_prompt=${N_SAMPLES_PER_PROMPT}" >&2
+    echo "  rollout: num_rollout=${NUM_ROLLOUT}, steps_per_rollout=${NUM_STEPS_PER_ROLLOUT}, rollout_batch=${ROLLOUT_BATCH_SIZE}, samples_per_prompt=${N_SAMPLES_PER_PROMPT}, temperature=${ROLLOUT_TEMPERATURE}, top_p=${ROLLOUT_TOP_P}, top_k=${ROLLOUT_TOP_K}" >&2
     echo "  transfer_queue: num_data_storage_units=${NUM_DATA_STORAGE_UNITS}" >&2
     echo "  sequence: seq_length=${SEQ_LENGTH}, rollout_max_response_len=${ROLLOUT_MAX_RESPONSE_LEN}, rollout_max_context_len=${ROLLOUT_MAX_CONTEXT_LEN:-unset}, rollout_max_prompt_len=${ROLLOUT_MAX_PROMPT_LEN:-unset}" >&2
     echo "  sglang: gpus_per_engine=${ROLLOUT_NUM_GPUS_PER_ENGINE}, pp=${SGLANG_PIPELINE_PARALLEL_SIZE}, dp=${SGLANG_DATA_PARALLEL_SIZE}, ep=${SGLANG_EXPERT_PARALLEL_SIZE}, attention_backend=${SGLANG_ATTENTION_BACKEND}, server_concurrency=${SGLANG_SERVER_CONCURRENCY}, max_running_requests=${SGLANG_MAX_RUNNING_REQUESTS:-unset}, max_total_tokens=${SGLANG_MAX_TOTAL_TOKENS:-unset}" >&2

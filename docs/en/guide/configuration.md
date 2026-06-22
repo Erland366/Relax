@@ -381,7 +381,7 @@ Recomputation parameters use native Megatron parameters. For details, refer to M
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `--rm-type` | str | None | Built-in reward model type |
+| `--rm-type` | str | None | Built-in reward model type. Includes task rewards such as `completion_length`, which returns `-response_length` for length-minimization sanity checks |
 | `--custom-rm-path` | str | None | Custom reward function path. Function signature: `def custom_rm(args, sample) -> float` |
 | `--reward-key` | str | None | Key to extract reward value when reward function returns dict |
 | `--eval-reward-key` | str | None | Reward key for evaluation. When None, equals `--reward-key` |

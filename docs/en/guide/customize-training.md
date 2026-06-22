@@ -124,6 +124,18 @@ You can define `reward_func(args, sample: Sample, **kwargs) -> float` in your ow
 --reward-key score
 ```
 
+For a minimal length-control sanity check, Relax also provides the built-in
+`completion_length` reward:
+
+```bash
+--rm-type completion_length
+```
+
+This reward is `-response_length`, where `response_length` is the generated
+completion token count recorded on `Sample`. If the policy emits only EOS, the
+completion length is 1 and the reward is `-1`; any longer completion receives a
+lower reward.
+
 ## Custom Generate Function
 
 For multi-turn dialogue, tool calling, or agentic rollout, define a custom `generate` function to replace the default single-turn logic. The function signature is:

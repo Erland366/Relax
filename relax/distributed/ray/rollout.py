@@ -35,6 +35,7 @@ from relax.utils.logging_utils import get_logger
 from relax.utils.metrics.metric_checker import MetricChecker
 from relax.utils.metrics.metric_utils import (
     compute_pass_rate,
+    compute_rollout_primary_reward_metrics,
     compute_rollout_explicit_reward_metrics,
     compute_rollout_step,
     compute_statistics,
@@ -460,6 +461,9 @@ class EngineGroup:
                 env_vars["PYTHONPATH"] = pythonpath
 
         env_vars[_MEGATRON_ISOLATION_ENV_VAR] = "1" if self.args.sglang_model_impl.lower() == "transformers" else "0"
+
+        if value := os.environ.get("AMD_SERIALIZE_KERNEL"):
+            env_vars["AMD_SERIALIZE_KERNEL"] = value
 
         return env_vars
 
@@ -3733,6 +3737,7 @@ def compute_metrics_from_samples(args, samples):
 
     log_dict = {}
     log_dict |= dict_add_prefix(compute_statistics(response_lengths), "response_len/")
+    log_dict |= compute_rollout_primary_reward_metrics(args, samples)
     log_dict |= compute_rollout_explicit_reward_metrics(args, samples)
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_spec_metrics(args, samples)

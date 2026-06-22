@@ -381,7 +381,7 @@
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `--rm-type` | str | None | 内置 Reward 模型类型 |
+| `--rm-type` | str | None | 内置 Reward 模型类型。包括 `completion_length` 等任务 reward；`completion_length` 返回 `-response_length`，用于最小长度 sanity check |
 | `--custom-rm-path` | str | None | 自定义 Reward 函数路径。函数签名：`def custom_rm(args, sample) -> float` |
 | `--reward-key` | str | None | Reward 函数返回 dict 时提取 reward 值的 key |
 | `--eval-reward-key` | str | None | 评估时的 reward key。None 时等于 `--reward-key` |

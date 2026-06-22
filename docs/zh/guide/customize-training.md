@@ -123,6 +123,17 @@ python scripts/tools/process_avqa.py \
 --reward-key score
 ```
 
+对于最小化长度控制的 sanity check，Relax 也提供内置
+`completion_length` reward：
+
+```bash
+--rm-type completion_length
+```
+
+该 reward 为 `-response_length`，其中 `response_length` 是 `Sample` 记录的
+生成 completion token 数。如果策略只生成 EOS，completion 长度为 1，reward
+为 `-1`；更长的 completion 会得到更低的 reward。
+
 ## 自定义 Generate 函数
 
 对于多轮对话、工具调用、Agent 交互等场景，可自定义 `generate` 函数替换默认的单轮生成逻辑。函数签名如下：

@@ -89,6 +89,17 @@ def finalize_rollout_explicit_metric_values(metric_values: dict[str, list[float]
     return log_dict
 
 
+def compute_rollout_primary_reward_metrics(args, samples: list[Sample]) -> dict[str, float]:
+    rewards = []
+    for sample in samples:
+        reward = sample.get_reward_value(args)
+        if is_rollout_numeric_metric_value(reward):
+            rewards.append(float(reward))
+    if not rewards:
+        return {}
+    return dict_add_prefix(compute_statistics(rewards), "reward/")
+
+
 def compute_rollout_explicit_reward_metrics(args, samples: list[Sample]) -> dict[str, float]:
     reward_metric_values: dict[str, list[float]] = {}
     primary_reward_key = getattr(args, "reward_key", None)

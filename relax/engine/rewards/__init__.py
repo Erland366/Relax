@@ -10,6 +10,7 @@ from relax.utils.logging_utils import get_logger
 from relax.utils.misc import load_function
 from relax.utils.types import Sample
 
+from .completion_length import get_completion_length_reward
 from .dapo_genrm import async_compute_score_genrm
 from .deepscaler import get_deepscaler_rule_based_reward
 from .f1 import f1_score
@@ -162,6 +163,11 @@ class RewardExecutor:
         "dapo": _compute_dapo_reward,
     }
 
+    # Cheap local reward functions that need the full Sample object.
+    _LOCAL_SAMPLE_RM_DISPATCH = {
+        "completion_length": get_completion_length_reward,
+    }
+
     # CPU-bound / thread-unsafe rm_types dispatched to the Ray worker pool.
     _SYNC_RM_TYPES = frozenset(
         {
@@ -209,6 +215,10 @@ class RewardExecutor:
             local_sync_handler = self._LOCAL_SYNC_RM_DISPATCH.get(rm_type)
             if local_sync_handler is not None:
                 return await asyncio.to_thread(local_sync_handler, response, label, metadata)
+
+            local_sample_handler = self._LOCAL_SAMPLE_RM_DISPATCH.get(rm_type)
+            if local_sample_handler is not None:
+                return local_sample_handler(sample)
 
             # --- sync rm types: dispatch to worker pool ------------------
             # Default to sync path for any non-empty rm_type not in async dispatch
