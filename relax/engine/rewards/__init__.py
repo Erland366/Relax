@@ -13,6 +13,7 @@ from relax.utils.types import Sample
 from .completion_length import get_completion_length_reward
 from .dapo_genrm import async_compute_score_genrm
 from .deepscaler import get_deepscaler_rule_based_reward
+from .eos_two_action_bandit import get_eos_two_action_bandit_reward
 from .f1 import f1_score
 from .gpqa import compute_gpqa_reward
 from .math_dapo_utils import compute_score as compute_score_dapo
@@ -167,6 +168,7 @@ class RewardExecutor:
     # Cheap local reward functions that need the full Sample object.
     _LOCAL_SAMPLE_RM_DISPATCH = {
         "completion_length": get_completion_length_reward,
+        "eos_two_action_bandit": get_eos_two_action_bandit_reward,
         "two_action_bandit": get_two_action_bandit_reward,
     }
 

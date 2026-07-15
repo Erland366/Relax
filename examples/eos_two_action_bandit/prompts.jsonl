@@ -1,0 +1,2 @@
+{"prompt":[{"role":"system","content":"Emit EOS immediately. Do not write any text."},{"role":"user","content":"End the response immediately."}],"label":"","metadata":{"task":"eos"}}
+{"prompt":[{"role":"system","content":"This is a two-action test. Reply with exactly one uppercase ASCII character: A or B. Do not explain and do not output whitespace."},{"role":"user","content":"Choose an action now."}],"label":"A","metadata":{"task":"two_action_bandit"}}
