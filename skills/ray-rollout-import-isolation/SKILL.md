@@ -40,8 +40,9 @@ Do NOT use when:
 | Metric | Value | Notes |
 |--------|-------|-------|
 | Reproduced import leaks | DCS package init, `core.registry` via `advantages`, rollout-side function loading | All were observed on the MI210 path |
-| Effective fixes | Lazy package exports, lazy Megatron imports, earlier rollout-side isolation | These moved the clean run to SGLang weight loading |
-| Latest validated state | `SGLangEngine` reached `Load weight begin` on the transformers backend | The remaining issue is narrower than the original startup contamination |
+| Effective fixes | Lazy package exports, lightweight isolation helpers, lazy `RayTrainGroup`, earlier rollout-side isolation | A plain `relax.components.rollout` import fell from about 14 seconds to 4.1-5.0 seconds |
+| Latest validated state | Two one-step end-to-end runs completed with rollout startup of 128 and 130 seconds | The comparable pre-fix run took 154 seconds; an earlier run took 168 seconds |
+| SGLang worker startup | 59-60 seconds from HTTP engine launch to server ready | Standalone SGLang took about 85 seconds on the same node, so Relax is not making the engine itself slower |
 
 ## Recommended Practice
 
@@ -75,6 +76,8 @@ do not immediately import backend-only modules like `device_direct.py`.
 
 If a registry or service module imports a helper that is only needed on one training path, move that import into the branch that actually uses it. On this stack, `relax.components.advantages` had to stop importing Megatron-backed helpers at file scope so `relax.core.registry` and `relax.core.controller` could stay lightweight.
 
+Keep reusable import-isolation helpers in `relax.backends.sglang.import_isolation`, which must remain free of Torch, Ray, and SGLang imports. Importing those helpers from `sglang_engine.py` defeats the boundary because it eagerly imports the full engine. Likewise, import `RayTrainGroup` inside `allocate_train_group()` so rollout service startup does not load the training backend through `placement_group.py`.
+
 ### Step 4: Install rollout-side isolation before loading rollout functions
 
 Do not rely only on `SGLangEngine` isolation. On this stack, `RolloutManager.__init__` loads the configured rollout function before any engine actor exists. Install the transformers-mode Megatron isolation at the start of:
@@ -89,6 +92,19 @@ in that order.
 
 Import-time pruning of local Megatron paths and cached modules is safe. A hard `MetaPathFinder` blocker at module import time is not always safe in Ray workers because it can interfere with actor creation or deserialization. Install stronger blocking later in the actor lifecycle.
 
+### Step 6: Keep worker tracking lightweight when MetricsService is enabled
+
+When `use_metrics_service=True`, only the primary process and MetricsService should initialize or attach W&B. RolloutManager and training workers should initialize the MetricsService HTTP adapter without calling `init_wandb_secondary`; otherwise every worker pays another W&B startup cost even though it sends metrics through the service.
+
+For reproducible ROCm validation, set the launcher's own environment selector explicitly:
+
+```bash
+CONDA_ENV_NAME=relaxrl_rocm_after_fix SAVE_CHECKPOINTS=0 \
+  bash scripts/training/multimodal/amd_qwen3_mock_2gpu_e2e.sh
+```
+
+Activating an environment outside this script is insufficient because the launcher activates `CONDA_ENV_NAME` internally. Do not install or upgrade packages while profiling startup; a different existing environment changes both import time and ABI behavior.
+
 ## Failure Modes
 
 | What Failed | Why | Lesson Learned |
@@ -98,6 +114,7 @@ Import-time pruning of local Megatron paths and cached modules is safe. A hard `
 | `RolloutManager` still loaded Megatron-backed code before engine startup | Isolation only existed inside `SGLangEngine` | Install rollout-side isolation before loading rollout functions |
 | `SGLangEngine` actor creation died immediately | Hard Megatron blocking was installed too early at module import time | Use early pruning, then later blocking inside actor/process startup |
 | Clean run still emitted early rollout warnings | Another shared bootstrap/import path remained | Keep narrowing the import surface instead of jumping straight to overnight retries |
+| Repeat run loaded `relaxrl_rocm` and failed with `CXXABI_1.3.15` missing | The launcher default overrode the shell's already-active conda environment | Set `CONDA_ENV_NAME` explicitly for every comparison |
 
 ## Configuration
 
@@ -113,9 +130,11 @@ rollout_side_isolation_order:
 import_time_policy:
   prune_megatron_paths: true
   block_megatron_imports: late_only
+  helper_module: relax.backends.sglang.import_isolation
 validation:
   first_step: plain_python_import_probe
-  second_step: clean_5min_ray_validation
+  second_step: focused_unit_and_import_tests
+  third_step: two_clean_one_step_ray_validations
 ```
 
 ## References

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import torch
 
-from relax.backends.sglang.sglang_engine import _blocked_megatron_imports, _install_process_megatron_isolation
+from relax.backends.sglang.import_isolation import _blocked_megatron_imports, _install_process_megatron_isolation
 from relax.utils.data.data import Dataset
 from relax.utils.data.processing_utils import load_processor, load_tokenizer
 from relax.utils.logging_utils import get_logger

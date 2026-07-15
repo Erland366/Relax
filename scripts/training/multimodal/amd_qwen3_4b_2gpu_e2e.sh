@@ -288,13 +288,24 @@ configure_run_defaults() {
     WANDB_PROJECT="${WANDB_PROJECT:-relax-amd}"
     WANDB_GROUP="${WANDB_GROUP:-${MODEL_LOG_NAME}-mi210-${GPU_LABEL}-${NOW}}"
     WANDB_DIR="${WANDB_DIR:-${ASSET_DIR}/wandb}"
-    SAVE_DIR="${SAVE_DIR:-${ASSET_DIR}/${MODEL_ASSET_NAME}_mcore_${GPU_LABEL}-${NOW}}"
+    SAVE_CHECKPOINTS="${SAVE_CHECKPOINTS:-1}"
+    require_boolean_flag SAVE_CHECKPOINTS
     LOAD_DIR="${LOAD_DIR:-}"
-    SAVE_INTERVAL="${SAVE_INTERVAL:-100}"
-    CKPT_FORMAT="${CKPT_FORMAT:-torch_dist}"
-    NO_SAVE_OPTIM="${NO_SAVE_OPTIM:-0}"
-    NO_SAVE_RNG="${NO_SAVE_RNG:-0}"
     NO_LOAD_RNG="${NO_LOAD_RNG:-0}"
+    if [ "${SAVE_CHECKPOINTS}" = "1" ]; then
+        SAVE_DIR="${SAVE_DIR:-${ASSET_DIR}/${MODEL_ASSET_NAME}_mcore_${GPU_LABEL}-${NOW}}"
+        SAVE_INTERVAL="${SAVE_INTERVAL:-100}"
+        CKPT_FORMAT="${CKPT_FORMAT:-torch_dist}"
+        NO_SAVE_OPTIM="${NO_SAVE_OPTIM:-0}"
+        NO_SAVE_RNG="${NO_SAVE_RNG:-0}"
+    else
+        for save_var in SAVE_DIR SAVE_INTERVAL CKPT_FORMAT NO_SAVE_OPTIM NO_SAVE_RNG; do
+            if [ -n "${!save_var:-}" ]; then
+                echo "${save_var} requires SAVE_CHECKPOINTS=1; unset ${save_var} for debug runs without checkpoint writes" >&2
+                exit 2
+            fi
+        done
+    fi
     NUM_DATA_STORAGE_UNITS="${NUM_DATA_STORAGE_UNITS:-1}"
     require_positive_integer NUM_DATA_STORAGE_UNITS
     SCHEDULER_RESUME_POLICY="${SCHEDULER_RESUME_POLICY:-strict}"
@@ -688,19 +699,23 @@ build_checkpoint_args() {
         --hf-checkpoint "${HF_CHECKPOINT}"
         --ref-load "${HF_CHECKPOINT}"
         --megatron-to-hf-mode bridge
-        --save "${SAVE_DIR}"
-        --save-interval "${SAVE_INTERVAL}"
-        --ckpt-format "${CKPT_FORMAT}"
     )
 
     if [ -n "${LOAD_DIR}" ]; then
         CKPT_ARGS+=(--load "${LOAD_DIR}")
     fi
-    if [ "${NO_SAVE_OPTIM}" = "1" ]; then
-        CKPT_ARGS+=(--no-save-optim)
-    fi
-    if [ "${NO_SAVE_RNG}" = "1" ]; then
-        CKPT_ARGS+=(--no-save-rng)
+    if [ "${SAVE_CHECKPOINTS}" = "1" ]; then
+        CKPT_ARGS+=(
+            --save "${SAVE_DIR}"
+            --save-interval "${SAVE_INTERVAL}"
+            --ckpt-format "${CKPT_FORMAT}"
+        )
+        if [ "${NO_SAVE_OPTIM}" = "1" ]; then
+            CKPT_ARGS+=(--no-save-optim)
+        fi
+        if [ "${NO_SAVE_RNG}" = "1" ]; then
+            CKPT_ARGS+=(--no-save-rng)
+        fi
     fi
     if [ "${NO_LOAD_RNG}" = "1" ]; then
         CKPT_ARGS+=(--no-load-rng)
@@ -759,6 +774,7 @@ build_rollout_args() {
     if [ "${USE_BALANCE_DATA}" = "1" ]; then
         ROLLOUT_ARGS+=(--balance-data)
     fi
+    append_rollout_arg "${APPLY_CHAT_TEMPLATE_KWARGS:-}" --apply-chat-template-kwargs
     append_rollout_arg "${ROLLOUT_MAX_CONTEXT_LEN:-}" --rollout-max-context-len
     append_rollout_arg "${ROLLOUT_MAX_PROMPT_LEN:-}" --rollout-max-prompt-len
 }
@@ -981,6 +997,11 @@ log_launch_config() {
     echo "  resources: HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES}, RAY_NUM_GPUS=${RAY_NUM_GPUS}, actor_gpus=${ACTOR_RESOURCE_GPUS}, rollout_gpus=${ROLLOUT_RESOURCE_GPUS}, actor_fwd_gpus=${ACTOR_FWD_RESOURCE_GPUS}, RESOURCE_JSON=${RESOURCE_JSON}" >&2
     echo "  training: TP=${TENSOR_MODEL_PARALLEL_SIZE}, PP=${PIPELINE_MODEL_PARALLEL_SIZE}, CP=${CONTEXT_PARALLEL_SIZE}, micro_batch=${MICRO_BATCH_SIZE}, global_batch=${GLOBAL_BATCH_SIZE}, recompute=${ENABLE_RECOMPUTE}" >&2
     echo "  rollout: num_rollout=${NUM_ROLLOUT}, steps_per_rollout=${NUM_STEPS_PER_ROLLOUT}, rollout_batch=${ROLLOUT_BATCH_SIZE}, samples_per_prompt=${N_SAMPLES_PER_PROMPT}, temperature=${ROLLOUT_TEMPERATURE}, top_p=${ROLLOUT_TOP_P}, top_k=${ROLLOUT_TOP_K}" >&2
+    if [ "${SAVE_CHECKPOINTS}" = "1" ]; then
+        echo "  checkpointing: enabled, save_dir=${SAVE_DIR}, save_interval=${SAVE_INTERVAL}, format=${CKPT_FORMAT}" >&2
+    else
+        echo "  checkpointing: disabled (SAVE_CHECKPOINTS=0)" >&2
+    fi
     echo "  transfer_queue: num_data_storage_units=${NUM_DATA_STORAGE_UNITS}" >&2
     echo "  sequence: seq_length=${SEQ_LENGTH}, rollout_max_response_len=${ROLLOUT_MAX_RESPONSE_LEN}, rollout_max_context_len=${ROLLOUT_MAX_CONTEXT_LEN:-unset}, rollout_max_prompt_len=${ROLLOUT_MAX_PROMPT_LEN:-unset}" >&2
     echo "  sglang: gpus_per_engine=${ROLLOUT_NUM_GPUS_PER_ENGINE}, pp=${SGLANG_PIPELINE_PARALLEL_SIZE}, dp=${SGLANG_DATA_PARALLEL_SIZE}, ep=${SGLANG_EXPERT_PARALLEL_SIZE}, attention_backend=${SGLANG_ATTENTION_BACKEND}, server_concurrency=${SGLANG_SERVER_CONCURRENCY}, max_running_requests=${SGLANG_MAX_RUNNING_REQUESTS:-unset}, max_total_tokens=${SGLANG_MAX_TOTAL_TOKENS:-unset}" >&2

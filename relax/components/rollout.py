@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from ray import serve
 
-from relax.backends.sglang.sglang_engine import _install_process_megatron_isolation
+from relax.backends.sglang.import_isolation import _install_process_megatron_isolation
 from relax.components.base import Base
 from relax.distributed.ray.placement_group import create_rollout_manager
 from relax.utils.http_utils import _wrap_ipv6

@@ -9,8 +9,6 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from relax.utils.http_utils import get_host_info
 from relax.utils.logging_utils import get_logger
 
-from .actor_group import RayTrainGroup
-
 
 logger = get_logger(__name__)
 
@@ -70,6 +68,8 @@ def sort_key(x):
 
 
 def allocate_train_group(args, num_gpus, pg, runtime_env=None):
+    from .actor_group import RayTrainGroup
+
     return RayTrainGroup(
         args=args,
         num_gpus=num_gpus,

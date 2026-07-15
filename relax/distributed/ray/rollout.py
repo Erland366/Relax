@@ -20,12 +20,12 @@ import transfer_queue as tq
 import yaml
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from relax.backends.sglang.sglang_engine import (
+from relax.backends.sglang.import_isolation import (
     _MEGATRON_ISOLATION_ENV_VAR,
-    SGLangEngine,
     _filtered_pythonpath_without_megatron,
     _install_process_megatron_isolation,
 )
+from relax.backends.sglang.sglang_engine import SGLangEngine
 from relax.engine.rollout.base_types import call_rollout_fn
 from relax.utils import device as device_utils
 from relax.utils import tracking_utils

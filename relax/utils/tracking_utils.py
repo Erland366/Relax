@@ -10,13 +10,16 @@ from relax.utils.metrics.metrics_service_adapter import get_metrics_service_adap
 
 
 def init_tracking(args, primary: bool = True, **kwargs):
+    use_metrics_service = getattr(args, "use_metrics_service", False)
+
     if primary:
         init_wandb_primary(args, **kwargs)
-    else:
+    elif not use_metrics_service:
+        # MetricsService owns the W&B run when service-based logging is
+        # enabled. Secondary workers only need its lightweight HTTP adapter.
         init_wandb_secondary(args, **kwargs)
 
-    # Initialize metrics service adapter if using new service-based logging
-    if getattr(args, "use_metrics_service", False):
+    if use_metrics_service:
         init_metrics_service_adapter(args)
 
 

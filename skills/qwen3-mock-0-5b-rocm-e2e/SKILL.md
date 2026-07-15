@@ -90,7 +90,7 @@ Use the two-GPU smoke for quick validation:
 ```bash
 source /vast/users/qirong.ho/miniforge3/etc/profile.d/conda.sh
 conda activate relaxrl_rocm
-NUM_ROLLOUT=2 SAVE_INTERVAL=1 CKPT_FORMAT=torch_dist NO_SAVE_OPTIM=0 \
+SAVE_CHECKPOINTS=1 NUM_ROLLOUT=2 SAVE_INTERVAL=1 CKPT_FORMAT=torch_dist NO_SAVE_OPTIM=0 \
   ./amd_qwen3_mock_2gpu_e2e.sh
 ```
 
@@ -125,6 +125,7 @@ MOCK_ROLLOUT_MAX_RESPONSE_LEN=128 \
 NUM_ROLLOUT=1000 \
 SAVE_INTERVAL=20 \
 CKPT_FORMAT=torch_dist \
+SAVE_CHECKPOINTS=1 \
 NO_SAVE_OPTIM=0 \
 ./amd_qwen3_mock_2gpu_e2e.sh
 ```

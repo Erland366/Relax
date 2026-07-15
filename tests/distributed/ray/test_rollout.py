@@ -70,6 +70,24 @@ print('\\n'.join(seen))
     assert result.stdout.strip() == ""
 
 
+def test_importing_rollout_service_keeps_backend_helpers_lazy():
+    script = """
+import sys
+
+import relax.components.rollout
+
+heavy_modules = [
+    "relax.backends.sglang.sglang_engine",
+    "relax.distributed.ray.actor_group",
+    "relax.utils.device",
+]
+print(",".join(name for name in heavy_modules if name in sys.modules))
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+
+    assert result.stdout.strip() == ""
+
+
 def test_rollout_manager_isolation_enables_blocker_for_transformers(monkeypatch):
     calls = []
 

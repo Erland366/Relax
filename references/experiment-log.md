@@ -3403,3 +3403,266 @@ Expected impact:
 - Code: `Megatron-LM/megatron/core/optimizer/cpu_offloading/hybrid_optimizer.py`, `relax/backends/megatron/optimizer_utils.py`
 - Test: `tests/utils/test_megatron_model.py`
 - Troubleshooting: `references/troubleshooting.md`
+
+## 2026-06-22 - Completion-length reward convergence depends on Qwen3 thinking mode
+
+**Type:** Experiment retrospective
+**General description:** The toy `reward = -len(completion_tokens)` task did
+not converge under the default Qwen3 chat template because rollout samples
+usually spent the short generation budget on reasoning/opening text; disabling
+thinking mode created reward variance and produced clear improvement.
+
+### What we tried
+
+- Built and ran the completion-length reward environment where the optimal
+  policy emits EOS immediately.
+- Compared fully async, sync non-colocate, and sync colocate paths.
+- Tested Qwen3-Mock-0.5B, real Qwen3-0.6B, and real Qwen3-4B.
+- Moved from short flat probes to a known-good real Qwen3-4B TP2 shape:
+  `ACTOR_RESOURCE_GPUS=2`, `ROLLOUT_RESOURCE_GPUS=2`,
+  `TENSOR_MODEL_PARALLEL_SIZE=2`, and `ENABLE_SEQUENCE_PARALLEL=1`.
+- Increased sampled batch size to `ROLLOUT_BATCH_SIZE=4`,
+  `N_SAMPLES_PER_PROMPT=4`, `GLOBAL_BATCH_SIZE=16`, `MICRO_BATCH_SIZE=4`,
+  and reduced weight-sync overhead with `UPDATE_WEIGHTS_INTERVAL=5`.
+- Added `APPLY_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'` for the
+  final Qwen3-4B TP2 convergence probe.
+
+### Key findings
+
+- The default-thinking Qwen3-4B TP2 b4/n4 run (`64t0zmav`) completed 30/30
+  rollout/train steps but all 480 completions hit `ROLLOUT_MAX_RESPONSE_LEN=4`;
+  reward stayed `-4.0`, advantages stayed zero, and actor gradients stayed zero.
+- The thinking-disabled Qwen3-4B TP2 run (`fjjfcs2l`) completed 30/30 steps and
+  improved `rollout/reward/mean` from `-3.0625` to `-2.0`.
+- In that run, `rollout/response_len/mean` fell from `3.0625` to `2.0`,
+  truncation fell from `0.125` to `0.0`, and `train/grad_norm` was nonzero on
+  27/30 steps.
+- The saved rollout JSONL files contained 218 length-2 samples, 228 length-3
+  samples, and 34 length-4 samples; the final rollout had all 16 samples at
+  length 2.
+- The logged scalar mean of `rollout/advantages` can be misleadingly near zero
+  because group-normalized advantages average out; reward variance plus nonzero
+  `train/grad_norm` are the better indicators of a real learning signal.
+
+### What failed
+
+- Fully async longer runs exposed TransferQueue capacity/backpressure failures
+  before they could serve as clean convergence evidence.
+- Sync colocate runs hit ROCm SGLang/Megatron same-GPU handoff failures, so
+  non-colocate TP2 remains the reliable convergence-debug path for now.
+- Real model size alone did not fix convergence: both 0.6B and 4B stayed flat
+  when the rollout distribution had no reward variance.
+- Larger sampled batches and less frequent weight sync improved throughput, but
+  did not solve EOS discovery under the default thinking template.
+- The thinking-disabled run improved to `-2.0`, but still did not reach the
+  theoretical immediate-EOS optimum `-1`; the chat-style assistant turn still
+  tends to emit a short textual answer such as `OK` or `Okay` before EOS.
+
+### Open questions
+
+- Would a raw/non-chat prompt or a different assistant prefill make immediate
+  EOS reachable and allow reward `-1`?
+- Should the smoke test use a reward/stop setup that treats `<|im_end|>` as the
+  expected terminal token while avoiding an instruction-like assistant answer?
+- Can fully async convergence be revisited after TransferQueue capacity or
+  producer/consumer backpressure is fixed?
+
+### Links
+
+- W&B flat default-thinking run: `https://wandb.ai/erlandpg/relax-amd-completion-length/runs/64t0zmav`
+- W&B thinking-disabled run: `https://wandb.ai/erlandpg/relax-amd-completion-length/runs/fjjfcs2l`
+- Launcher: `scripts/training/multimodal/amd_qwen3_4b_2gpu_e2e.sh`
+- Skill: `skills/completion-length-reward-smoke-test/SKILL.md`
+
+## 2026-06-22 - EOS-SFT mini Qwen3 did not create an EOS-learning signal
+
+**Type:** Experiment result
+**General description:** Tested the Hugging Face branch
+`Erland/mini-qwen3-0.5b@Erland/EOS-SFT` on the completion-length reward task to
+see whether SFT on the EOS task would make the toy RL run converge from a
+better initialization.
+
+### What we tried
+
+- Downloaded the branch to
+  `/vast/users/qirong.ho/erland/Python_project/Relax-rocm-megatron_root/relax_assets/Qwen3-Mock-0.5B-EOS-SFT`.
+- Ran the existing Qwen3 mock 2-GPU sync non-colocate e2e path with:
+  `ROLLOUT_BATCH_SIZE=4`, `N_SAMPLES_PER_PROMPT=4`,
+  `GLOBAL_BATCH_SIZE=16`, `MICRO_BATCH_SIZE=4`,
+  `ROLLOUT_MAX_RESPONSE_LEN=4`, `UPDATE_WEIGHTS_INTERVAL=5`,
+  and `APPLY_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'`.
+- Logged online to W&B run `omaybwka`.
+
+### Result
+
+- The run completed 30/30 rollout/train steps and saved a torch_dist checkpoint
+  at iteration 29.
+- All 480 saved samples were `status="truncated"` with
+  `response_length=4`, `reward=-4.0`, and no reward variance.
+- Actor training therefore had no policy-gradient signal:
+  `rollout/advantages=0.0`, `rollout/returns=0.0`, `train/loss=0.0`, and
+  `train/grad_norm=0.0` on every step.
+- The most common response was `system\nEmit` (365/480 samples), including the
+  first and last saved rollouts.
+
+### Interpretation
+
+The failure was not a Relax optimizer or W&B logging failure. A direct
+Transformers generation check reproduced the same behavior before RL training:
+
+```text
+chat template with enable_thinking=false -> "system\nEmit EOS immediately. Do"
+assistant prefix without thinking block -> "Emit EOS immediately. Do not write"
+```
+
+So this EOS-SFT branch appears to have learned an instruction-like continuation
+around "Emit EOS immediately" rather than assigning high probability to the EOS
+token under the Qwen chat prompt used by Relax. Because every sampled completion
+hit the response cap, GRPO had zero within-group reward variance and could not
+update the policy.
+
+### Links
+
+- W&B run: `https://wandb.ai/erlandpg/relax-amd-completion-length/runs/omaybwka`
+- Log: `log/completion-length-eos-sft-mini-30-20260622.log`
+- Rollouts:
+  `/vast/users/qirong.ho/erland/Python_project/Relax-rocm-megatron_root/relax_assets/Qwen3-Mock-0.5B-EOS-SFT_mcore_2gpu-20260622_095932/rollout_result/train/`
+
+## 2026-06-23 - EOS-SFT mini reaches optimal reward with matched system prompt
+
+**Type:** Experiment result
+**General description:** Retried the EOS-SFT mini checkpoint with a Relax
+prompt file that matches the SFT dataset format: a system instruction
+`Emit EOS immediately. Do not write any text.` plus the user message, followed
+by Qwen3 `enable_thinking=false` chat-template rendering.
+
+### What changed
+
+- Added `examples/completion_length/prompts_system_eos.jsonl` with the system
+  instruction used by the SFT dataset.
+- Reused the same local checkpoint:
+  `/vast/users/qirong.ho/erland/Python_project/Relax-rocm-megatron_root/relax_assets/Qwen3-Mock-0.5B-EOS-SFT`.
+- Ran the sync non-colocate mock 2-GPU e2e path with:
+  `ROLLOUT_BATCH_SIZE=4`, `N_SAMPLES_PER_PROMPT=4`,
+  `GLOBAL_BATCH_SIZE=16`, `MICRO_BATCH_SIZE=4`,
+  `ROLLOUT_MAX_RESPONSE_LEN=4`, `UPDATE_WEIGHTS_INTERVAL=5`,
+  and `APPLY_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'`.
+
+### Result
+
+- The run completed 30/30 rollout/train steps and saved a torch_dist
+  checkpoint at iteration 29.
+- All 480 saved rollout samples generated exactly `<|im_end|>`.
+- Reward was optimal from the first rollout through the last:
+  `rollout/reward/mean=-1.0`, `rollout/response_len/mean=1.0`, and
+  `rollout/truncated_ratio=0.0`.
+- Because every group was already at the same optimum, GRPO correctly had no
+  update signal: `rollout/zero_std/count_-1.0=4`, `train/loss=0.0`, and
+  `train/grad_norm=0.0`.
+
+### Interpretation
+
+This confirms the previous EOS-SFT failure was prompt mismatch, not a bad SFT
+checkpoint and not a Relax reward-plumbing issue. The checkpoint behaves
+correctly when Relax rollout uses the same system-message structure as the SFT
+dataset. This run proves the model can represent the optimal EOS policy under
+the matched prompt, but it is not a learning curve because the policy starts
+already optimal and has zero reward variance.
+
+### Links
+
+- W&B run: `https://wandb.ai/erlandpg/relax-amd-completion-length/runs/523l4j1i`
+- Log: `log/completion-length-eos-sft-system-30-20260623.log`
+- Prompt file: `examples/completion_length/prompts_system_eos.jsonl`
+- Rollouts:
+  `/vast/users/qirong.ho/erland/Python_project/Relax-rocm-megatron_root/relax_assets/Qwen3-Mock-0.5B-EOS-SFT_mcore_2gpu-20260623_081453/rollout_result/train/`
+
+## 2026-07-14 - Replace the EOS learning probe with a fixed-length A/B bandit
+
+**Type:** Retrospective and experiment design
+**General description:** The matched EOS-SFT runs were separated into what
+they actually prove versus what remains untested, the local reduced-model
+inventory was audited, and a fixed-length two-action task was prepared as the
+next minimal GRPO learning test.
+
+### What we tried
+
+- The original completion-length run with default Qwen3 thinking generated to
+  the response cap, produced constant reward `-4`, and had zero gradients.
+- Disabling thinking on a non-saturated Qwen3-4B policy produced length and
+  reward variation and nonzero gradients, showing that prompt/template
+  behavior—not model scale alone—controlled the useful learning signal.
+- The first prompt-matched EOS-SFT became fully saturated: all 480 responses
+  were immediate EOS, every reward was `-1`, every GRPO group had zero reward
+  variance, and all 30 actor steps had zero loss and gradient norm.
+- A tied, randomly initialized mixed EOS/`OK + EOS` SFT recovered variation.
+  Its strict sampling check measured first-token probabilities of about 0.522
+  for EOS and 0.432 for `OK`, with 0.954 combined mass and about 0.998
+  probability of EOS after `OK`. A live one-step Relax run then observed
+  response lengths 1 and 2, mean reward `-1.625`, and gradient norm `14.489`.
+- The SFT workspace was audited for other reduced model families. Historical
+  EOS and Reverse-Text checkpoints exist for Qwen3, GLM-4-MoE, and MiniMax-M2,
+  but only Qwen3 has a validated reduced-model ROCm Relax launcher and weight
+  conversion path. The corrected tied SFT recipe is also Qwen-specific.
+- A new Qwen3 fixed-length A/B initializer was trained from config with no
+  pretrained weights: 32 `A + EOS` targets and 32 `B + EOS` targets under the
+  exact Relax prompt. The 100-step SFT completed in about 70 seconds in W&B run
+  `2qypr13o` and wrote only its final model.
+
+### Key findings
+
+- The saturated EOS run is a successful regression test for prompt alignment,
+  SGLang stop handling, reward routing, safe normalization of constant groups,
+  actor orchestration, logging, and shutdown. It is not evidence of learning.
+- The mixed EOS/OK run does exercise nonzero advantages and optimizer work,
+  but completion length remains entangled with the action being rewarded.
+- A/B is the cleaner next test because both valid trajectories have exactly
+  two rollout tokens: one content token plus EOS. Any change in reward must
+  therefore come from action probability, not response length.
+- The accepted A/B initializer is close to the desired 50/50 policy. On 256
+  samples it produced 120 A, 131 B, and 5 invalid responses: A rate `0.46875`,
+  B rate `0.51172`, valid rate `0.98047`, mixed eight-sample group rate `1.0`,
+  and truncation rate `0.0`. First-token A/B probability mass was `0.98226`;
+  EOS probability after either action was about `0.9989`.
+- Qwen3 is not the only architecture represented in the SFT directory, but it
+  is the only reduced architecture currently ready for this end-to-end Relax
+  experiment. Treating the GLM or MiniMax files as drop-in alternatives would
+  hide missing model-integration work.
+
+### What failed or was rejected
+
+- Training only immediate EOS solves the synthetic objective during SFT and
+  removes the within-group variance GRPO needs.
+- Changing model scale without controlling Qwen thinking behavior did not fix
+  the constant-reward failure.
+- Reusing the current Qwen-specific tied SFT script for GLM-4-MoE would change
+  its intended untied architecture and mis-handle its assistant template.
+- MiniMax-M2 has no Relax model provider, converter, or launch recipe in this
+  repository, so its historical SFT checkpoint cannot validate this pipeline.
+- A one-token rollout cap was rejected for the bandit because it truncates
+  before EOS. A cap of exactly two also makes SGLang report `length` when EOS
+  lands at the cap. The final launcher allows three generated tokens but the
+  reward accepts only the exact two-token action-plus-EOS trajectory.
+
+### Open questions
+
+- In the 30-step Relax run, does `rollout/action_a/mean` rise from roughly
+  0.47 while `action_b` falls after per-step weight synchronization?
+- Do mixed early groups produce nonzero gradient norms, followed by naturally
+  increasing zero-variance all-A groups near convergence?
+- Does the accepted SFT preserve its 98% valid-action rate through the SGLang
+  and Megatron weight-conversion path?
+- Cross-family coverage should be considered separately: GLM-4-MoE needs a
+  reduced ROCm launcher and prompt-aware SFT recipe; MiniMax-M2 needs full
+  Relax model integration before either can be compared fairly with Qwen3.
+
+### One-step Relax integration result
+
+The first one-step integration exposed and fixed a parser mismatch: Relax keeps
+Qwen's visible `<|im_end|>` marker in `Sample.response`, so the reward must
+classify `A<|im_end|>` and `B<|im_end|>` while still requiring
+`response_length == 2`. After that correction, W&B run `kihpsxz1` sampled 16
+valid actions with A rate `0.375`, B rate `0.625`, reward mean `0.375`, reward
+range `[0, 1]`, and actor gradient norm `9.0062`. The optimizer step and
+immediate actor-to-SGLang weight synchronization both completed. The run used
+`SAVE_CHECKPOINTS=0`, exited successfully, and left all GPUs idle.

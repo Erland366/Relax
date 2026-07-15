@@ -20,6 +20,7 @@ from .math_utils import extract_answer as extract_boxed_answer
 from .math_utils import grade_answer_verl
 from .multiple_choice import get_multiple_choice_reward
 from .openr1mm import get_openr1mm_rule_based_reward
+from .two_action_bandit import get_two_action_bandit_reward
 
 
 logger = get_logger(__name__)
@@ -166,6 +167,7 @@ class RewardExecutor:
     # Cheap local reward functions that need the full Sample object.
     _LOCAL_SAMPLE_RM_DISPATCH = {
         "completion_length": get_completion_length_reward,
+        "two_action_bandit": get_two_action_bandit_reward,
     }
 
     # CPU-bound / thread-unsafe rm_types dispatched to the Ray worker pool.
