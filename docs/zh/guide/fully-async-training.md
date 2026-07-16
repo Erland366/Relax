@@ -287,7 +287,7 @@ def update_weights_fully_async(self, rollout_id, rollout_only=False, actor_fwd_o
 3. **分发权重**：
    - **非专家参数**：`all_gather` TP 分片 → 完整参数，PP 源 rank 广播到 Rollout（HF 格式）和 ActorFwd/Reference（原始格式）
    - **专家参数**：额外 EP `all_gather`，然后同上
-4. **恢复 Rollout 推理**：HTTP 请求 `/continue_generation`
+4. **恢复 Rollout 推理**：HTTP 请求 `/continue_generation`；清理临时 Ray 代理 actor 前，等待所有引擎确认请求完成
 
 #### Actor → ActorFwd/Reference
 

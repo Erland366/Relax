@@ -23,20 +23,20 @@ export MODEL_LOG_NAME=qwen3-mock-0.5b-eos-two-action-bandit-sft
 export PROMPT_SET="${ROOT_DIR}/examples/eos_two_action_bandit/prompts.jsonl"
 export APPLY_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 
-export RELAX_EXECUTION_MODE=sync
+export RELAX_EXECUTION_MODE=fully_async
+export MAX_STALENESS=0
 export USE_COLLOCATE=0
 export RM_TYPE=eos_two_action_bandit
 export REWARD_KEY=score
 export USE_KL_LOSS=0
 export USE_BALANCE_DATA=0
-export MAX_STALENESS=0
 
-export NUM_ROLLOUT="${NUM_ROLLOUT:-100}"
+export NUM_ROLLOUT="${NUM_ROLLOUT:-500}"
 export NUM_STEPS_PER_ROLLOUT=1
 export ROLLOUT_BATCH_SIZE=2
 export N_SAMPLES_PER_PROMPT=8
 export GLOBAL_BATCH_SIZE=16
-export MICRO_BATCH_SIZE=8
+export MICRO_BATCH_SIZE=2
 export ROLLOUT_MAX_RESPONSE_LEN=3
 export UPDATE_WEIGHTS_INTERVAL=1
 

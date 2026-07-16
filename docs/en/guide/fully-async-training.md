@@ -287,7 +287,7 @@ Internal flow of `update_weights_for_rollout` (`DeviceDirectBackend`):
 3. **Distribute weights**:
    - **Non-expert parameters**: `all_gather` TP shards → full parameters, then PP source rank broadcasts to Rollout (HF format) and ActorFwd/Reference (raw format)
    - **Expert parameters**: additional EP `all_gather`, then same as above
-4. **Resume Rollout inference**: HTTP request `/continue_generation`
+4. **Resume Rollout inference**: HTTP request `/continue_generation`; wait for every engine to acknowledge the request before cleaning up the temporary Ray proxy actors
 
 #### Actor → ActorFwd/Reference
 

@@ -569,7 +569,7 @@ class DeviceDirectBackend(CommBackend):
             if dist.get_rank() == 0:
                 # Continue generation on all rollout nodes
                 logger.info("Resuming generation on all rollout nodes...")
-                self._batch_request("/continue_generation")
+                ray.get(self._batch_request("/continue_generation"))
             dist.barrier(group=get_gloo_group())
             self._cleanup_rollout_engines()
 

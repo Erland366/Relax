@@ -23,11 +23,11 @@ export MAX_STALENESS=0
 
 export NUM_ROLLOUT=200
 export NUM_STEPS_PER_ROLLOUT=1
-export MOCK_ROLLOUT_BATCH_SIZE=4
-export MOCK_N_SAMPLES_PER_PROMPT=4
-export MOCK_GLOBAL_BATCH_SIZE=16
+export ROLLOUT_BATCH_SIZE=4
+export N_SAMPLES_PER_PROMPT=4
+export GLOBAL_BATCH_SIZE=16
 export MICRO_BATCH_SIZE=4
-export MOCK_ROLLOUT_MAX_RESPONSE_LEN=4
+export ROLLOUT_MAX_RESPONSE_LEN=4
 export UPDATE_WEIGHTS_INTERVAL=5
 
 export ROLLOUT_TEMPERATURE=1.0
@@ -41,7 +41,7 @@ export RUN_LOG="${PWD}/log/completion-length-eos-sft-system-30-${RUN_TAG}.log"
 export WANDB_MODE=online
 export WANDB_ENTITY=
 export WANDB_PROJECT=relax-amd-completion-length
-export WANDB_GROUP="completion-length-eos-sft-system-30-${RUN_TAG}"
+export WANDB_GROUP="${WANDB_GROUP:-completion-length-eos-sft-system-30-${RUN_TAG}}"
 export WANDB_DIR="${ASSET_DIR}/wandb"
 
 bash scripts/training/multimodal/amd_qwen3_mock_2gpu_e2e.sh
