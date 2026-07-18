@@ -194,11 +194,50 @@ def test_install_rocm_bridge_qwen_vl_local_layer_spec_patch_forces_local_specs(m
     fake_qwen3_vl_provider = types.ModuleType("megatron.bridge.models.qwen_vl.qwen3_vl_provider")
     fake_layer_specs = types.ModuleType("megatron.core.models.gpt.gpt_layer_specs")
     fake_qwen3_vl_model = types.ModuleType("megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model")
+    fake_vision_model = types.ModuleType("megatron.bridge.models.qwen_vl.modelling_qwen3_vl.vision_model")
+    fake_vit_layer_specs = types.ModuleType("megatron.core.models.vision.vit_layer_specs")
+    fake_tensor_parallel_layers = types.ModuleType("megatron.core.tensor_parallel.layers")
+    fake_torch_norm = types.ModuleType("megatron.core.transformer.torch_norm")
+
+    class FakeTENorm:
+        pass
+
+    class FakeTEColumnParallelLinear:
+        pass
+
+    class FakeTERowParallelLinear:
+        pass
+
+    class FakeLocalNorm:
+        pass
+
+    class FakeColumnParallelLinear:
+        pass
+
+    class FakeRowParallelLinear:
+        pass
+
+    fake_qwen3_vl_model.get_vit_layer_with_transformer_engine_spec = lambda: "te-vision"
+    fake_qwen3_vl_model.TENorm = FakeTENorm
+    fake_qwen3_vl_model.TEColumnParallelLinear = FakeTEColumnParallelLinear
+    fake_qwen3_vl_model.TERowParallelLinear = FakeTERowParallelLinear
+    fake_qwen3_vl_model.PatchMergerSubmodules = types.SimpleNamespace
+    fake_qwen3_vl_model.get_vision_model_config = lambda config, megatron_config=None: config
+    fake_vit_layer_specs.get_vit_layer_with_local_spec = lambda: "local-vision"
+    fake_tensor_parallel_layers.ColumnParallelLinear = FakeColumnParallelLinear
+    fake_tensor_parallel_layers.RowParallelLinear = FakeRowParallelLinear
+    fake_torch_norm.WrappedTorchNorm = FakeLocalNorm
 
     class FakeQwen3VLModel:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
             self.freeze_kwargs = None
+            self.vision_transformer_layer_spec = fake_qwen3_vl_model.get_vit_layer_with_transformer_engine_spec()
+            self.vision_patch_merger_spec = fake_qwen3_vl_model.PatchMergerSubmodules(
+                patch_norm=fake_qwen3_vl_model.TENorm,
+                linear_fc1=fake_qwen3_vl_model.TEColumnParallelLinear,
+                linear_fc2=fake_qwen3_vl_model.TERowParallelLinear,
+            )
 
         def freeze(self, **kwargs):
             self.freeze_kwargs = kwargs
@@ -233,6 +272,10 @@ def test_install_rocm_bridge_qwen_vl_local_layer_spec_patch_forces_local_specs(m
         "megatron.bridge.models.qwen_vl.qwen3_vl_provider": fake_qwen3_vl_provider,
         "megatron.core.models.gpt.gpt_layer_specs": fake_layer_specs,
         "megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model": fake_qwen3_vl_model,
+        "megatron.bridge.models.qwen_vl.modelling_qwen3_vl.vision_model": fake_vision_model,
+        "megatron.core.models.vision.vit_layer_specs": fake_vit_layer_specs,
+        "megatron.core.tensor_parallel.layers": fake_tensor_parallel_layers,
+        "megatron.core.transformer.torch_norm": fake_torch_norm,
     }
     monkeypatch.setattr(megatron_bridge_utils, "import_module", lambda name: fake_modules[name])
 
@@ -250,6 +293,10 @@ def test_install_rocm_bridge_qwen_vl_local_layer_spec_patch_forces_local_specs(m
     assert dense_model.kwargs["pre_process"] is True
     assert dense_model.kwargs["post_process"] is False
     assert dense_model.freeze_kwargs is None
+    assert dense_model.vision_transformer_layer_spec == "local-vision"
+    assert dense_model.vision_patch_merger_spec.patch_norm is FakeLocalNorm
+    assert dense_model.vision_patch_merger_spec.linear_fc1 is FakeColumnParallelLinear
+    assert dense_model.vision_patch_merger_spec.linear_fc2 is FakeRowParallelLinear
 
     moe_model = FakeMoEProvider().provide()
     moe_spec_name, moe_spec_kwargs = moe_model.kwargs["language_transformer_layer_spec"]
@@ -265,6 +312,159 @@ def test_install_rocm_bridge_qwen_vl_local_layer_spec_patch_forces_local_specs(m
         "freeze_vision_model": False,
         "freeze_vision_projection": True,
     }
+
+
+def test_install_rocm_bridge_qwen_vl_local_layer_spec_patch_builds_boolean_vision_mask(monkeypatch):
+    if not torch.version.hip:
+        return
+
+    fake_qwen3_vl_provider = types.ModuleType("megatron.bridge.models.qwen_vl.qwen3_vl_provider")
+    fake_layer_specs = types.ModuleType("megatron.core.models.gpt.gpt_layer_specs")
+    fake_qwen3_vl_model = types.ModuleType("megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model")
+    fake_vision_model = types.ModuleType("megatron.bridge.models.qwen_vl.modelling_qwen3_vl.vision_model")
+    fake_vit_layer_specs = types.ModuleType("megatron.core.models.vision.vit_layer_specs")
+    fake_tensor_parallel_layers = types.ModuleType("megatron.core.tensor_parallel.layers")
+    fake_torch_norm = types.ModuleType("megatron.core.transformer.torch_norm")
+
+    class FakeProvider:
+        def provide(self, pre_process=None, post_process=None, vp_stage=None):
+            return (pre_process, post_process, vp_stage)
+
+    fake_qwen3_vl_provider.Qwen3VLModelProvider = FakeProvider
+    fake_qwen3_vl_provider.Qwen3VLMoEModelProvider = type("FakeMoEProvider", (FakeProvider,), {})
+    fake_layer_specs.get_gpt_layer_local_spec = lambda **kwargs: kwargs
+    fake_qwen3_vl_model.Qwen3VLModel = object
+    fake_qwen3_vl_model.get_vision_model_config = lambda config, megatron_config=None: config
+    fake_vit_layer_specs.get_vit_layer_with_local_spec = lambda: "local-vision"
+    fake_tensor_parallel_layers.ColumnParallelLinear = object
+    fake_tensor_parallel_layers.RowParallelLinear = object
+    fake_torch_norm.WrappedTorchNorm = object
+
+    def fake_packed_attention_setup(
+        use_cuda_graph_padding,
+        hidden_states,
+        original_seq_len,
+        seq_len,
+        grid_thw,
+        build_packed_seq_params,
+    ):
+        del use_cuda_graph_padding, hidden_states, original_seq_len, seq_len
+        return build_packed_seq_params(grid_thw), None
+
+    fake_vision_model._vision_forward_packed_attention_setup = fake_packed_attention_setup
+    fake_modules = {
+        "megatron.bridge.models.qwen_vl.qwen3_vl_provider": fake_qwen3_vl_provider,
+        "megatron.core.models.gpt.gpt_layer_specs": fake_layer_specs,
+        "megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model": fake_qwen3_vl_model,
+        "megatron.bridge.models.qwen_vl.modelling_qwen3_vl.vision_model": fake_vision_model,
+        "megatron.core.models.vision.vit_layer_specs": fake_vit_layer_specs,
+        "megatron.core.tensor_parallel.layers": fake_tensor_parallel_layers,
+        "megatron.core.transformer.torch_norm": fake_torch_norm,
+    }
+    monkeypatch.setattr(megatron_bridge_utils, "import_module", lambda name: fake_modules[name])
+
+    megatron_bridge_utils.install_rocm_bridge_qwen_vl_local_layer_spec_patch()
+
+    grid_thw = torch.tensor([[1, 1, 2], [2, 1, 1]])
+    packed_seq_params, attention_mask = fake_vision_model._vision_forward_packed_attention_setup(
+        use_cuda_graph_padding=False,
+        hidden_states=torch.zeros(4, 1, 2),
+        original_seq_len=4,
+        seq_len=4,
+        grid_thw=grid_thw,
+        build_packed_seq_params=lambda _: "packed",
+    )
+    expected_mask = torch.tensor(
+        [
+            [False, False, True, True],
+            [False, False, True, True],
+            [True, True, False, True],
+            [True, True, True, False],
+        ]
+    ).view(1, 1, 4, 4)
+
+    assert packed_seq_params is None
+    assert attention_mask.dtype == torch.bool
+    assert torch.equal(attention_mask, expected_mask)
+
+
+def test_install_rocm_bridge_qwen_vl_local_layer_spec_patch_adds_legacy_attention_output_gate(monkeypatch):
+    if not torch.version.hip:
+        return
+
+    fake_qwen3_vl_provider = types.ModuleType("megatron.bridge.models.qwen_vl.qwen3_vl_provider")
+    fake_layer_specs = types.ModuleType("megatron.core.models.gpt.gpt_layer_specs")
+    fake_qwen3_vl_model = types.ModuleType("megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model")
+    fake_vision_model = types.ModuleType("megatron.bridge.models.qwen_vl.modelling_qwen3_vl.vision_model")
+    fake_vit_layer_specs = types.ModuleType("megatron.core.models.vision.vit_layer_specs")
+    fake_tensor_parallel_layers = types.ModuleType("megatron.core.tensor_parallel.layers")
+    fake_torch_norm = types.ModuleType("megatron.core.transformer.torch_norm")
+
+    class FakeProvider:
+        def provide(self, pre_process=None, post_process=None, vp_stage=None):
+            return (pre_process, post_process, vp_stage)
+
+    fake_qwen3_vl_provider.Qwen3VLModelProvider = FakeProvider
+    fake_qwen3_vl_provider.Qwen3VLMoEModelProvider = type("FakeMoEProvider", (FakeProvider,), {})
+    fake_qwen3_vl_provider.Qwen3VLMoEModelProvider.attention_output_gate = True
+    fake_layer_specs.get_gpt_layer_local_spec = lambda **kwargs: kwargs
+    fake_qwen3_vl_model.Qwen3VLModel = object
+    fake_qwen3_vl_model.get_vision_model_config = lambda config, megatron_config=None: config
+    fake_vit_layer_specs.get_vit_layer_with_local_spec = lambda: "local-vision"
+    fake_tensor_parallel_layers.ColumnParallelLinear = object
+    fake_tensor_parallel_layers.RowParallelLinear = object
+    fake_torch_norm.WrappedTorchNorm = object
+    fake_modules = {
+        "megatron.bridge.models.qwen_vl.qwen3_vl_provider": fake_qwen3_vl_provider,
+        "megatron.core.models.gpt.gpt_layer_specs": fake_layer_specs,
+        "megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model": fake_qwen3_vl_model,
+        "megatron.bridge.models.qwen_vl.modelling_qwen3_vl.vision_model": fake_vision_model,
+        "megatron.core.models.vision.vit_layer_specs": fake_vit_layer_specs,
+        "megatron.core.tensor_parallel.layers": fake_tensor_parallel_layers,
+        "megatron.core.transformer.torch_norm": fake_torch_norm,
+    }
+    monkeypatch.setattr(megatron_bridge_utils, "import_module", lambda name: fake_modules[name])
+
+    megatron_bridge_utils.install_rocm_bridge_qwen_vl_local_layer_spec_patch()
+
+    legacy_config = fake_qwen3_vl_model.get_vision_model_config(types.SimpleNamespace())
+    existing_config = fake_qwen3_vl_model.get_vision_model_config(
+        types.SimpleNamespace(attention_output_gate=True)
+    )
+
+    assert legacy_config.attention_output_gate is False
+    assert existing_config.attention_output_gate is True
+    assert FakeProvider.attention_output_gate is False
+    assert fake_qwen3_vl_provider.Qwen3VLMoEModelProvider.attention_output_gate is True
+
+
+def test_install_rocm_bridge_qwen3_local_mapping_patch_adds_qwen3_vl_local_vision_norm_aliases():
+    if not torch.version.hip:
+        return
+
+    megatron_bridge_utils.install_rocm_bridge_modelopt_shims()
+    megatron_bridge_utils.install_rocm_bridge_peft_shims()
+    megatron_bridge_utils.install_rocm_bridge_qwen3_local_mapping_patch()
+
+    from megatron.bridge.models.qwen_vl.qwen3_vl_bridge import Qwen3VLBridge
+
+    original_mapping_registry = getattr(Qwen3VLBridge.mapping_registry, "_relax_rocm_original_mapping_registry", None)
+    try:
+        registry = object.__new__(Qwen3VLBridge).mapping_registry()
+        expected_aliases = {
+            "vision_model.decoder.layers.0.input_layernorm.weight": "model.visual.blocks.0.norm1.weight",
+            "vision_model.decoder.layers.0.input_layernorm.bias": "model.visual.blocks.0.norm1.bias",
+            "vision_model.decoder.layers.0.pre_mlp_layernorm.weight": "model.visual.blocks.0.norm2.weight",
+            "vision_model.decoder.layers.0.pre_mlp_layernorm.bias": "model.visual.blocks.0.norm2.bias",
+        }
+
+        for megatron_param, hf_param in expected_aliases.items():
+            mapping = registry.megatron_to_hf_lookup(megatron_param)
+            assert mapping is not None
+            assert mapping.hf_param == hf_param
+    finally:
+        if original_mapping_registry is not None:
+            Qwen3VLBridge.mapping_registry = original_mapping_registry
 
 
 def test_install_rocm_bridge_qwen3_local_mapping_patch_adds_local_aliases():

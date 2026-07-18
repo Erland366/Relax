@@ -341,8 +341,10 @@ def install_rocm_bridge_qwen_vl_local_layer_spec_patch() -> None:
     ``get_gpt_layer_with_transformer_engine_spec`` inside ``provide()``, so the
     generic ``provider.transformer_layer_spec = local_layer_spec`` override is
     bypassed. On MI210 this reaches TE RMSNorm and can die with a HIP illegal
-    memory access during the first actor forward pass. Keep Bridge importable,
-    but build Qwen3-VL language layers with Megatron's local spec on ROCm.
+    memory access during the first actor forward pass. The Qwen3-VL vision
+    model and patch mergers also hard-code TE modules and packed THD attention.
+    Keep Bridge importable, but build both language and vision layers with
+    Megatron's local modules and an explicit block-diagonal vision mask.
     """
 
     if not torch.version.hip:
@@ -351,9 +353,66 @@ def install_rocm_bridge_qwen_vl_local_layer_spec_patch() -> None:
     qwen3_vl_provider = import_module("megatron.bridge.models.qwen_vl.qwen3_vl_provider")
     layer_specs = import_module("megatron.core.models.gpt.gpt_layer_specs")
     qwen3_vl_model = import_module("megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model")
+    qwen3_vl_vision_model = import_module("megatron.bridge.models.qwen_vl.modelling_qwen3_vl.vision_model")
+    vit_layer_specs = import_module("megatron.core.models.vision.vit_layer_specs")
+    tensor_parallel_layers = import_module("megatron.core.tensor_parallel.layers")
+    torch_norm = import_module("megatron.core.transformer.torch_norm")
+
+    def _local_vision_layer_spec():
+        spec = vit_layer_specs.get_vit_layer_with_local_spec()
+        if hasattr(spec, "submodules"):
+            transformer_enums = import_module("megatron.core.transformer.enums")
+            spec.submodules.self_attention.params["attn_mask_type"] = transformer_enums.AttnMaskType.padding
+        return spec
+
+    def _local_vision_attention_setup(
+        use_cuda_graph_padding,
+        hidden_states,
+        original_seq_len,
+        seq_len,
+        grid_thw,
+        build_packed_seq_params,
+    ):
+        del hidden_states, build_packed_seq_params
+        if use_cuda_graph_padding or original_seq_len != seq_len:
+            raise RuntimeError(
+                "Qwen3-VL vision CUDA-graph padding is unsupported with ROCm local attention; "
+                "disable vision CUDA graphs."
+            )
+
+        frame_lengths = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0])
+        frame_ids = torch.repeat_interleave(
+            torch.arange(frame_lengths.shape[0], device=grid_thw.device),
+            frame_lengths,
+            output_size=original_seq_len,
+        )
+        attention_mask = frame_ids[:, None] != frame_ids[None, :]
+        return None, attention_mask.view(1, 1, seq_len, seq_len)
+
+    qwen3_vl_model.get_vit_layer_with_transformer_engine_spec = _local_vision_layer_spec
+    qwen3_vl_model.TENorm = torch_norm.WrappedTorchNorm
+    qwen3_vl_model.TEColumnParallelLinear = tensor_parallel_layers.ColumnParallelLinear
+    qwen3_vl_model.TERowParallelLinear = tensor_parallel_layers.RowParallelLinear
+    qwen3_vl_vision_model._vision_forward_packed_attention_setup = _local_vision_attention_setup
+
+    original_get_vision_model_config = qwen3_vl_model.get_vision_model_config
+    if not getattr(original_get_vision_model_config, "_relax_rocm_legacy_attention_output_gate_patch", False):
+
+        def _get_vision_model_config_with_legacy_attention_output_gate(config, megatron_config=None):
+            vision_config = original_get_vision_model_config(config, megatron_config=megatron_config)
+            if not hasattr(vision_config, "attention_output_gate"):
+                vision_config.attention_output_gate = False
+            return vision_config
+
+        _get_vision_model_config_with_legacy_attention_output_gate._relax_rocm_legacy_attention_output_gate_patch = True
+        qwen3_vl_model.get_vision_model_config = _get_vision_model_config_with_legacy_attention_output_gate
 
     qwen3_vl_cls = qwen3_vl_provider.Qwen3VLModelProvider
     qwen3_vl_moe_cls = qwen3_vl_provider.Qwen3VLMoEModelProvider
+    if not hasattr(qwen3_vl_cls, "attention_output_gate"):
+        qwen3_vl_cls.attention_output_gate = False
+    if not hasattr(qwen3_vl_moe_cls, "attention_output_gate"):
+        qwen3_vl_moe_cls.attention_output_gate = False
     if getattr(qwen3_vl_cls.provide, "_relax_rocm_qwen_vl_local_layer_spec_patch", False) and getattr(
         qwen3_vl_moe_cls.provide, "_relax_rocm_qwen_vl_local_layer_spec_patch", False
     ):

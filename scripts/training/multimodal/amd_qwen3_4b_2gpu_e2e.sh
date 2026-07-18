@@ -775,6 +775,7 @@ build_rollout_args() {
         ROLLOUT_ARGS+=(--balance-data)
     fi
     append_rollout_arg "${APPLY_CHAT_TEMPLATE_KWARGS:-}" --apply-chat-template-kwargs
+    append_rollout_arg "${MULTIMODAL_KEYS:-}" --multimodal-keys
     append_rollout_arg "${ROLLOUT_MAX_CONTEXT_LEN:-}" --rollout-max-context-len
     append_rollout_arg "${ROLLOUT_MAX_PROMPT_LEN:-}" --rollout-max-prompt-len
 }
@@ -997,6 +998,7 @@ log_launch_config() {
     echo "  resources: HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES}, RAY_NUM_GPUS=${RAY_NUM_GPUS}, actor_gpus=${ACTOR_RESOURCE_GPUS}, rollout_gpus=${ROLLOUT_RESOURCE_GPUS}, actor_fwd_gpus=${ACTOR_FWD_RESOURCE_GPUS}, RESOURCE_JSON=${RESOURCE_JSON}" >&2
     echo "  training: TP=${TENSOR_MODEL_PARALLEL_SIZE}, PP=${PIPELINE_MODEL_PARALLEL_SIZE}, CP=${CONTEXT_PARALLEL_SIZE}, micro_batch=${MICRO_BATCH_SIZE}, global_batch=${GLOBAL_BATCH_SIZE}, recompute=${ENABLE_RECOMPUTE}" >&2
     echo "  rollout: num_rollout=${NUM_ROLLOUT}, steps_per_rollout=${NUM_STEPS_PER_ROLLOUT}, rollout_batch=${ROLLOUT_BATCH_SIZE}, samples_per_prompt=${N_SAMPLES_PER_PROMPT}, temperature=${ROLLOUT_TEMPERATURE}, top_p=${ROLLOUT_TOP_P}, top_k=${ROLLOUT_TOP_K}" >&2
+    echo "  multimodal_keys: ${MULTIMODAL_KEYS:-disabled}" >&2
     if [ "${SAVE_CHECKPOINTS}" = "1" ]; then
         echo "  checkpointing: enabled, save_dir=${SAVE_DIR}, save_interval=${SAVE_INTERVAL}, format=${CKPT_FORMAT}" >&2
     else

@@ -22,6 +22,7 @@ from .math_utils import grade_answer_verl
 from .multiple_choice import get_multiple_choice_reward
 from .openr1mm import get_openr1mm_rule_based_reward
 from .two_action_bandit import get_two_action_bandit_reward
+from .visual_xor import get_visual_xor_reward
 
 
 logger = get_logger(__name__)
@@ -170,6 +171,7 @@ class RewardExecutor:
         "completion_length": get_completion_length_reward,
         "eos_two_action_bandit": get_eos_two_action_bandit_reward,
         "two_action_bandit": get_two_action_bandit_reward,
+        "visual_xor": get_visual_xor_reward,
     }
 
     # CPU-bound / thread-unsafe rm_types dispatched to the Ray worker pool.
