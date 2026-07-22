@@ -42,6 +42,10 @@ _FORBIDDEN_WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth", ".ckpt")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a random-initialized compact Qwen3-VL visual bootstrap.")
     parser.add_argument("--processor-path", required=True, help="Local metadata-only Qwen3-VL processor directory.")
+    parser.add_argument(
+        "--initial-checkpoint",
+        help="Optional local checkpoint produced by this random-initialized trainer; no external weights are loaded.",
+    )
     parser.add_argument("--train-data", required=True)
     parser.add_argument("--eval-data", required=True)
     parser.add_argument("--output-dir", required=True)
@@ -221,13 +225,45 @@ def initialize_random_model(config: Qwen3VLConfig, seed: int) -> Qwen3VLForCondi
     return model
 
 
+def load_training_model(
+    config: Qwen3VLConfig,
+    seed: int,
+    initial_checkpoint: str | None,
+) -> Qwen3VLForConditionalGeneration:
+    if initial_checkpoint is None:
+        return initialize_random_model(config, seed)
+
+    checkpoint = Path(initial_checkpoint)
+    ensure_loadable_model_was_saved(checkpoint)
+    model = Qwen3VLForConditionalGeneration.from_pretrained(
+        checkpoint,
+        dtype=torch.bfloat16,
+        attn_implementation="sdpa",
+        local_files_only=True,
+    )
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    if parameter_count != EXPECTED_PARAMETER_COUNT:
+        raise RuntimeError(
+            f"Initial visual SFT checkpoint has {parameter_count} parameters; expected {EXPECTED_PARAMETER_COUNT}"
+        )
+    if not model.config.tie_word_embeddings:
+        raise RuntimeError("Initial visual SFT checkpoint must use tied embeddings")
+    if model.get_input_embeddings().weight is not model.get_output_embeddings().weight:
+        raise RuntimeError("Initial visual SFT checkpoint did not restore tied input/output embeddings")
+    model.config.use_cache = False
+    model.config.text_config.use_cache = False
+    return model
+
+
 def ensure_loadable_model_was_saved(output_dir: Path) -> None:
     expected_files = ("model.safetensors", "model.safetensors.index.json")
     if not any((output_dir / filename).is_file() for filename in expected_files):
         raise RuntimeError(f"Final SFT save did not produce Hugging Face weights in {output_dir}")
     required_processor_files = ("config.json", "tokenizer_config.json")
     missing = [filename for filename in required_processor_files if not (output_dir / filename).is_file()]
-    if not any((output_dir / filename).is_file() for filename in ("preprocessor_config.json", "processor_config.json")):
+    if not any(
+        (output_dir / filename).is_file() for filename in ("preprocessor_config.json", "processor_config.json")
+    ):
         missing.append("preprocessor_config.json or processor_config.json")
     if missing:
         raise RuntimeError(f"Final SFT checkpoint is missing processor/config files: {missing}")
@@ -246,9 +282,14 @@ def main() -> None:
     train_dataset = load_sft_dataset(args.train_data)
     eval_dataset = load_sft_dataset(args.eval_data)
     alignment = validate_processor_alignment(processor, train_dataset)
+    if args.initial_checkpoint is not None:
+        ensure_loadable_model_was_saved(Path(args.initial_checkpoint))
+    initialization = (
+        "random_from_config" if args.initial_checkpoint is None else f"local_sft:{args.initial_checkpoint}"
+    )
     print(
         "Visual SFT preflight passed: "
-        f"initialization=random_from_config, parameters={parameter_count}, tied_embeddings=True, "
+        f"initialization={initialization}, parameters={parameter_count}, tied_embeddings=True, "
         f"train_examples={len(train_dataset)}, eval_examples={len(eval_dataset)}, alignment={alignment}"
     )
     if args.preflight_only:
@@ -256,7 +297,7 @@ def main() -> None:
 
     output_dir = Path(args.output_dir)
     ensure_output_dir_is_empty(output_dir)
-    model = initialize_random_model(config, args.seed)
+    model = load_training_model(config, args.seed, args.initial_checkpoint)
     collator = DataCollatorForVisionLanguageModeling(
         processor=processor,
         max_length=None,

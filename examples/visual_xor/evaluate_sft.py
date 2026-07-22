@@ -135,6 +135,8 @@ def _evaluate_rows(
     correct = 0
     truncated = 0
     total = 0
+    combination_correct = Counter()
+    combination_total = Counter()
     for row in frame.to_dict(orient="records"):
         actions, group_truncated = _sample_group(
             model,
@@ -151,7 +153,13 @@ def _evaluate_rows(
         mixed_groups += int("A" in actions and "B" in actions)
         truncated += group_truncated
         total += len(actions)
-    return {
+        combination = row.get("combination")
+        if combination is None and isinstance(row.get("metadata"), dict):
+            combination = row["metadata"].get("combination")
+        if combination is not None:
+            combination_correct[combination] += sum(action == target for action in actions)
+            combination_total[combination] += len(actions)
+    summary = {
         "num_images": len(frame),
         "num_samples": total,
         "action_counts": dict(counts),
@@ -162,6 +170,12 @@ def _evaluate_rows(
         "mixed_group_rate": mixed_groups / len(frame),
         "truncated_rate": truncated / total,
     }
+    if combination_total:
+        summary["combination_accuracy"] = {
+            combination: combination_correct[combination] / combination_total[combination]
+            for combination in sorted(combination_total)
+        }
+    return summary
 
 
 def evaluate(model, processor, args: argparse.Namespace) -> tuple[dict, list[str]]:
@@ -187,7 +201,7 @@ def evaluate(model, processor, args: argparse.Namespace) -> tuple[dict, list[str
         num_images=args.num_images,
         group_size=args.group_size,
         device=args.device,
-        include_system=False,
+        include_system=True,
     )
 
     counterfactual_shifts = []

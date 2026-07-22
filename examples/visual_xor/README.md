@@ -5,16 +5,22 @@ policy. It uses a compact, randomly initialized Qwen3-VL model and does not
 load pretrained language, vision, projection, embedding, or output-head
 weights.
 
-The experiment deliberately has two stages:
+The experiment has two benchmark tiers that share the same renderer and strict
+reward:
 
-1. Multimodal SFT teaches the model to read the left glyph and to emit a valid
-   `A<|im_end|>` or `B<|im_end|>` response while preserving both actions.
-2. Relax GRPO learns visual XOR: `A` when the two glyphs have the same
-   orientation and `B` when their orientations differ.
+1. **Refinement (the default learning smoke test):** a short second SFT stage
+   gives the model a deliberately noisy 70%-correct XOR policy. Relax only has
+   to refine that real image-conditioned policy toward 100%.
+2. **Discovery (the harder diagnostic):** the original visual bootstrap only
+   learns to read the left glyph and emit valid `A<|im_end|>` or
+   `B<|im_end|>`. Relax must discover XOR from reward alone.
 
-The SFT task never contains the XOR rule or XOR labels. This example also does
-not reproduce Engram-ViT's memory/reasoning split, lookup addresses, or memory
-objectives.
+Only the discovery SFT excludes the XOR rule and XOR labels. The refinement
+SFT intentionally includes noisy XOR labels because its purpose is to answer a
+much narrower question: can this Relax path improve a multimodal policy when
+the correct visual feature and both actions are already represented? This
+example does not reproduce Engram-ViT's memory/reasoning split, lookup
+addresses, or memory objectives.
 
 ## Task contract
 
@@ -41,6 +47,11 @@ correct action + EOS:  +1
 wrong action + EOS:     0
 invalid or truncated:  -1
 ```
+
+The refinement tier is the first test to run. It should improve quickly; if it
+does not, the likely problem is in rollout, reward/advantage computation,
+weight synchronization, or actor optimization rather than visual task
+discovery.
 
 ## Prepare metadata and datasets
 
@@ -125,7 +136,99 @@ The gate requires at least 95% valid A/B+EOS responses, both actions at a
 left-glyph preference rate, a 35-65% unsolved XOR baseline, at most 5%
 truncation, and a measurable left-glyph counterfactual probability shift.
 
-## Run Relax without checkpoints
+## Build the easy refinement initializer
+
+Generate the separate refinement datasets. This does not overwrite the
+original discovery datasets:
+
+```bash
+export VISUAL_REFINEMENT_DATA="$SFT_ROOT/visual_xor_refinement_data"
+
+python "$RELAX_ROOT/examples/visual_xor/generate_refinement_data.py" \
+  --output-dir "$VISUAL_REFINEMENT_DATA"
+```
+
+The bundle contains an 8,000-row noisy SFT training set, a 1,000-row noisy SFT
+evaluation set, 64 fixed ordered RL training images, 128 held-out RL images,
+and permuted-image and constant-image control sets. Within each SFT split,
+every one of `00`, `01`, `10`, and `11` has exactly 70% correct XOR targets
+and 30% flipped targets. Render seeds do not overlap between splits.
+
+Continue from the accepted local random-initialized visual bootstrap. Despite
+the Transformers API method name used internally, this is a local checkpoint
+continuation: it never loads an external pretrained model.
+
+```bash
+export VISUAL_REFINEMENT_SFT="$SFT_ROOT/qwen3-vl-0.37b-visual-xor-refinement-sft"
+
+python "$RELAX_ROOT/examples/visual_xor/train_sft.py" \
+  --processor-path "$PROCESSOR_DIR" \
+  --initial-checkpoint "$VISUAL_SFT" \
+  --train-data "$VISUAL_REFINEMENT_DATA/refinement_sft_train.parquet" \
+  --eval-data "$VISUAL_REFINEMENT_DATA/refinement_sft_eval.parquet" \
+  --output-dir "$VISUAL_REFINEMENT_SFT" \
+  --max-steps 512 \
+  --learning-rate 5e-5 \
+  --run-name qwen3-vl-0.37b-visual-xor-refinement-sft \
+  --preflight-only --report-to none
+
+accelerate launch \
+  --config_file "$SFT_ROOT/accelerate_configs/sft.yaml" \
+  --num_processes 2 \
+  "$RELAX_ROOT/examples/visual_xor/train_sft.py" \
+  --processor-path "$PROCESSOR_DIR" \
+  --initial-checkpoint "$VISUAL_SFT" \
+  --train-data "$VISUAL_REFINEMENT_DATA/refinement_sft_train.parquet" \
+  --eval-data "$VISUAL_REFINEMENT_DATA/refinement_sft_eval.parquet" \
+  --output-dir "$VISUAL_REFINEMENT_SFT" \
+  --max-steps 512 \
+  --learning-rate 5e-5 \
+  --run-name qwen3-vl-0.37b-visual-xor-refinement-sft
+```
+
+As in the bootstrap stage, SFT writes no intermediate checkpoints and saves
+one final checkpoint because Relax needs that initializer. Apply the dedicated
+gate before launching RL:
+
+```bash
+python "$RELAX_ROOT/examples/visual_xor/evaluate_refinement_sft.py" \
+  "$VISUAL_REFINEMENT_SFT" \
+  --xor-eval-data "$VISUAL_REFINEMENT_DATA/refinement_rl_eval.parquet" \
+  --permuted-eval-data "$VISUAL_REFINEMENT_DATA/refinement_rl_eval_permuted.parquet" \
+  --constant-eval-data "$VISUAL_REFINEMENT_DATA/refinement_rl_eval_constant.parquet"
+```
+
+The accepted checkpoint must already respond validly, use both actions, score
+60-80% on sampled held-out XOR, exceed 55% on every combination, react in the
+correct direction when either glyph is flipped, and stay near chance when the
+images are permuted or replaced by one constant image. Those controls reject a
+global A/B bias or a label-order shortcut.
+
+## Run the easy refinement benchmark
+
+```bash
+cd "$RELAX_ROOT"
+HF_CHECKPOINT="$VISUAL_REFINEMENT_SFT" \
+REFINEMENT_DATA="$VISUAL_REFINEMENT_DATA" \
+HIP_VISIBLE_DEVICES=0,1 \
+  bash scripts/debug/qwen3_vl_visual_xor_refinement_sync_2gpus.sh
+```
+
+The 64 RL training rows are deliberately eager-loaded and not shuffled. Every
+consecutive rollout batch contains `00`, `01`, `10`, and `11` in that order,
+and the dataset repeats exactly every 16 updates. Evaluation runs before step
+0 and every eight updates against held-out, permuted-image, and constant-image
+datasets. The wrapper uses batch size 4, eight samples per image, global batch
+32, learning rate `3e-6`, and 50 rollouts by default. It saves no Relax model
+or checkpoint.
+
+This tier should normally show clear held-out improvement within roughly
+10-50 updates. Call it converged only when held-out reward is at least 0.90,
+all four combinations are at least 0.85, valid responses stay at least 0.99,
+both actions remain present, and both controls remain near chance. A rising
+training reward without those held-out/control conditions is not success.
+
+## Run the harder discovery benchmark without checkpoints
 
 The first command is a two-rollout startup and optimizer smoke test:
 
@@ -149,10 +252,12 @@ NUM_ROLLOUT=100 \
 ```
 
 The wrapper forcibly uses synchronous, non-colocated execution with one actor
-GPU and one SGLang GPU. It clears inherited async/colocation settings, passes
+GPU and one SGLang GPU. It clears inherited async/colocation settings, adds the
+same output-format system prompt used during SFT, passes
 `--multimodal-keys '{"image":"image"}'`, disables KL, and sets
-`SAVE_CHECKPOINTS=0`. Relax writes no Megatron checkpoint and no final HF
-export. W&B and the ordinary log remain under `log/`.
+`SAVE_CHECKPOINTS=0`. The XOR user prompt and reward remain unchanged. Relax
+writes no Megatron checkpoint and no final HF export. W&B and the ordinary log
+remain under `log/`.
 
 On ROCm, Relax also replaces Qwen3-VL's Transformer Engine-only vision stack
 with Megatron's local attention, normalization, and tensor-parallel layers.

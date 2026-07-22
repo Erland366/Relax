@@ -341,12 +341,16 @@ configure_run_defaults() {
     NUM_ROLLOUT="${NUM_ROLLOUT:-200}"
     N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-8}"
     MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-1}"
+    USE_STREAMING_DATASET="${USE_STREAMING_DATASET:-1}"
+    ROLLOUT_SHUFFLE="${ROLLOUT_SHUFFLE:-1}"
     SGLANG_SERVER_CONCURRENCY="${SGLANG_SERVER_CONCURRENCY:-512}"
     SEQ_LENGTH="${SEQ_LENGTH:-4096}"
     ROLLOUT_MAX_RESPONSE_LEN="${ROLLOUT_MAX_RESPONSE_LEN:-768}"
     require_nonnegative_integer MAX_STALENESS
     require_boolean_flag USE_BALANCE_DATA
     require_boolean_flag USE_KL_LOSS
+    require_boolean_flag USE_STREAMING_DATASET
+    require_boolean_flag ROLLOUT_SHUFFLE
     require_positive_integer NUM_ROLLOUT
     require_positive_integer NUM_STEPS_PER_ROLLOUT
     require_positive_integer ROLLOUT_BATCH_SIZE
@@ -360,8 +364,23 @@ configure_run_defaults() {
     require_positive_integer ROLLOUT_MAX_RESPONSE_LEN
     require_optional_positive_integer ROLLOUT_MAX_CONTEXT_LEN
     require_optional_positive_integer ROLLOUT_MAX_PROMPT_LEN
+    require_optional_positive_integer EVAL_INTERVAL
+    require_optional_positive_integer EVAL_MAX_RESPONSE_LEN
+    require_optional_positive_integer EVAL_MAX_CONTEXT_LEN
+    require_optional_positive_integer EVAL_MAX_PROMPT_LEN
     require_optional_positive_integer SGLANG_MAX_RUNNING_REQUESTS
     require_optional_positive_integer SGLANG_MAX_TOTAL_TOKENS
+
+    if [ -n "${EVAL_CONFIG:-}" ] || [ -n "${EVAL_INTERVAL:-}" ]; then
+        if [ -z "${EVAL_CONFIG:-}" ] || [ -z "${EVAL_INTERVAL:-}" ]; then
+            echo "EVAL_CONFIG and EVAL_INTERVAL must be set together." >&2
+            exit 2
+        fi
+        if [ ! -f "${EVAL_CONFIG}" ]; then
+            echo "EVAL_CONFIG does not exist: ${EVAL_CONFIG}" >&2
+            exit 2
+        fi
+    fi
 
     if [ -n "${MAX_TOKENS_PER_GPU:-}" ] || [ -n "${LOG_PROBS_MAX_TOKENS_PER_GPU:-}" ]; then
         echo "MAX_TOKENS_PER_GPU and LOG_PROBS_MAX_TOKENS_PER_GPU require dynamic batch size, but this ROCm launcher uses qkv-format=bshd where Relax rejects dynamic batch size. Use MICRO_BATCH_SIZE instead." >&2
@@ -748,13 +767,10 @@ append_rollout_arg() {
 
 build_rollout_args() {
     ROLLOUT_ARGS=(
-        --use-streaming-dataset
-        --streaming-buffer-size 10000
         --prompt-data "${PROMPT_SET}"
         --input-key prompt
         --label-key label
         --apply-chat-template
-        --rollout-shuffle
         --rm-type "${RM_TYPE}"
         --num-rollout "${NUM_ROLLOUT}"
         --rollout-batch-size "${ROLLOUT_BATCH_SIZE}"
@@ -768,16 +784,28 @@ build_rollout_args() {
         --update-weights-interval "${UPDATE_WEIGHTS_INTERVAL:-1}"
         --use-fault-tolerance
     )
+    if [ "${USE_STREAMING_DATASET}" = "1" ]; then
+        ROLLOUT_ARGS+=(--use-streaming-dataset --streaming-buffer-size 10000)
+    fi
+    if [ "${ROLLOUT_SHUFFLE}" = "1" ]; then
+        ROLLOUT_ARGS+=(--rollout-shuffle)
+    fi
     if [ -n "${REWARD_KEY}" ]; then
         ROLLOUT_ARGS+=(--reward-key "${REWARD_KEY}")
     fi
     if [ "${USE_BALANCE_DATA}" = "1" ]; then
         ROLLOUT_ARGS+=(--balance-data)
     fi
+    append_rollout_arg "${SYSTEM_PROMPT:-}" --system-prompt
     append_rollout_arg "${APPLY_CHAT_TEMPLATE_KWARGS:-}" --apply-chat-template-kwargs
     append_rollout_arg "${MULTIMODAL_KEYS:-}" --multimodal-keys
     append_rollout_arg "${ROLLOUT_MAX_CONTEXT_LEN:-}" --rollout-max-context-len
     append_rollout_arg "${ROLLOUT_MAX_PROMPT_LEN:-}" --rollout-max-prompt-len
+    append_rollout_arg "${EVAL_CONFIG:-}" --eval-config
+    append_rollout_arg "${EVAL_INTERVAL:-}" --eval-interval
+    append_rollout_arg "${EVAL_MAX_RESPONSE_LEN:-}" --eval-max-response-len
+    append_rollout_arg "${EVAL_MAX_CONTEXT_LEN:-}" --eval-max-context-len
+    append_rollout_arg "${EVAL_MAX_PROMPT_LEN:-}" --eval-max-prompt-len
 }
 
 build_megatron_args() {
@@ -997,8 +1025,13 @@ log_launch_config() {
     echo "  mode: ${RELAX_EXECUTION_MODE}, max_staleness=${MAX_STALENESS}, balance_data=${USE_BALANCE_DATA}, use_kl_loss=${USE_KL_LOSS}" >&2
     echo "  resources: HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES}, RAY_NUM_GPUS=${RAY_NUM_GPUS}, actor_gpus=${ACTOR_RESOURCE_GPUS}, rollout_gpus=${ROLLOUT_RESOURCE_GPUS}, actor_fwd_gpus=${ACTOR_FWD_RESOURCE_GPUS}, RESOURCE_JSON=${RESOURCE_JSON}" >&2
     echo "  training: TP=${TENSOR_MODEL_PARALLEL_SIZE}, PP=${PIPELINE_MODEL_PARALLEL_SIZE}, CP=${CONTEXT_PARALLEL_SIZE}, micro_batch=${MICRO_BATCH_SIZE}, global_batch=${GLOBAL_BATCH_SIZE}, recompute=${ENABLE_RECOMPUTE}" >&2
-    echo "  rollout: num_rollout=${NUM_ROLLOUT}, steps_per_rollout=${NUM_STEPS_PER_ROLLOUT}, rollout_batch=${ROLLOUT_BATCH_SIZE}, samples_per_prompt=${N_SAMPLES_PER_PROMPT}, temperature=${ROLLOUT_TEMPERATURE}, top_p=${ROLLOUT_TOP_P}, top_k=${ROLLOUT_TOP_K}" >&2
+    echo "  rollout: num_rollout=${NUM_ROLLOUT}, steps_per_rollout=${NUM_STEPS_PER_ROLLOUT}, rollout_batch=${ROLLOUT_BATCH_SIZE}, samples_per_prompt=${N_SAMPLES_PER_PROMPT}, temperature=${ROLLOUT_TEMPERATURE}, top_p=${ROLLOUT_TOP_P}, top_k=${ROLLOUT_TOP_K}, streaming=${USE_STREAMING_DATASET}, shuffle=${ROLLOUT_SHUFFLE}" >&2
     echo "  multimodal_keys: ${MULTIMODAL_KEYS:-disabled}" >&2
+    if [ -n "${EVAL_CONFIG:-}" ]; then
+        echo "  evaluation: config=${EVAL_CONFIG}, interval=${EVAL_INTERVAL}, baseline=enabled" >&2
+    else
+        echo "  evaluation: disabled" >&2
+    fi
     if [ "${SAVE_CHECKPOINTS}" = "1" ]; then
         echo "  checkpointing: enabled, save_dir=${SAVE_DIR}, save_interval=${SAVE_INTERVAL}, format=${CKPT_FORMAT}" >&2
     else

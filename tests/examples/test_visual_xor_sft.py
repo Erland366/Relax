@@ -7,6 +7,7 @@ from examples.visual_xor.train_sft import (
     build_compact_qwen3_vl_config,
     count_parameters_on_meta,
     ensure_loadable_model_was_saved,
+    load_training_model,
     load_sft_dataset,
     validate_metadata_allowlist,
     validate_metadata_only_directory,
@@ -63,6 +64,11 @@ def test_saved_visual_sft_accepts_processor_config_filename(tmp_path):
         (tmp_path / filename).touch()
 
     ensure_loadable_model_was_saved(tmp_path)
+
+
+def test_initial_checkpoint_must_be_a_complete_local_visual_sft(tmp_path):
+    with pytest.raises(RuntimeError, match="did not produce Hugging Face weights"):
+        load_training_model(build_compact_qwen3_vl_config(), seed=42, initial_checkpoint=str(tmp_path))
 
 
 def test_sft_parquet_loads_as_multimodal_prompt_completion_dataset(tmp_path):

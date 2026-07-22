@@ -1,5 +1,8 @@
+import copy
 import hashlib
 import io
+import json
+import math
 import random
 from pathlib import Path
 
@@ -161,7 +164,7 @@ def build_sft_rows(
     return rows
 
 
-def build_xor_rows(*, num_examples: int, seed: int, split: str) -> list[dict]:
+def build_xor_rows(*, num_examples: int, seed: int, split: str, shuffle: bool = True) -> list[dict]:
     if num_examples <= 0 or num_examples % len(_COMBINATIONS) != 0:
         raise ValueError(f"num_examples must be a positive multiple of 4, got {num_examples}")
 
@@ -187,13 +190,198 @@ def build_xor_rows(*, num_examples: int, seed: int, split: str) -> list[dict]:
                 },
             }
         )
-    random.Random(seed ^ 0xC3C3C3C3).shuffle(rows)
+    if shuffle:
+        random.Random(seed ^ 0xC3C3C3C3).shuffle(rows)
     return rows
+
+
+def build_refinement_sft_rows(
+    *,
+    num_examples: int,
+    seed: int,
+    split: str,
+    correct_action_probability: float = 0.7,
+) -> list[dict]:
+    """Build exact-context XOR SFT rows with balanced deterministic label noise."""
+    if num_examples <= 0 or num_examples % len(_COMBINATIONS) != 0:
+        raise ValueError(f"num_examples must be a positive multiple of 4, got {num_examples}")
+    if not 0.0 < correct_action_probability < 1.0:
+        raise ValueError("correct_action_probability must be strictly between 0 and 1")
+
+    examples_per_combination = num_examples // len(_COMBINATIONS)
+    requested_correct = examples_per_combination * correct_action_probability
+    correct_per_combination = round(requested_correct)
+    if not math.isclose(requested_correct, correct_per_combination, abs_tol=1e-9):
+        raise ValueError(
+            "num_examples and correct_action_probability must produce an exact integer number of correct targets "
+            f"per combination, got {requested_correct}"
+        )
+    if correct_per_combination <= 0 or correct_per_combination >= examples_per_combination:
+        raise ValueError(
+            "correct_action_probability must leave both correct and flipped targets within every combination; "
+            f"got {correct_per_combination}/{examples_per_combination} correct targets"
+        )
+
+    correctness_by_combination = []
+    for combination_index in range(len(_COMBINATIONS)):
+        correctness = [True] * correct_per_combination + [False] * (
+            examples_per_combination - correct_per_combination
+        )
+        random.Random(seed ^ (0x9E3779B9 * (combination_index + 1))).shuffle(correctness)
+        correctness_by_combination.append(correctness)
+
+    rows = []
+    for index in range(num_examples):
+        combination_index = index % len(_COMBINATIONS)
+        occurrence_index = index // len(_COMBINATIONS)
+        left_bit, right_bit = _COMBINATIONS[combination_index]
+        render_seed = _render_seed(seed, split, index)
+        combination = f"{left_bit}{right_bit}"
+        preferred_action = "A" if left_bit == right_bit else "B"
+        target_is_correct = correctness_by_combination[combination_index][occurrence_index]
+        target = preferred_action if target_is_correct else ("B" if preferred_action == "A" else "A")
+        rows.append(
+            {
+                "sample_id": _sample_id(split, render_seed),
+                "split": split,
+                "render_seed": render_seed,
+                "left_bit": left_bit,
+                "right_bit": right_bit,
+                "combination": combination,
+                "prompt": XOR_USER_PROMPT,
+                "preferred_action": preferred_action,
+                "target": target,
+                "target_is_correct": target_is_correct,
+                "image": render_visual_xor_png(seed=render_seed, left_bit=left_bit, right_bit=right_bit),
+            }
+        )
+    random.Random(seed ^ 0x6A09E667).shuffle(rows)
+    return rows
+
+
+def build_refinement_control_rows(rows: list[dict], *, control: str) -> list[dict]:
+    """Replace eval images while retaining private labels and metadata for visual controls."""
+    if not rows:
+        raise ValueError("rows must not be empty")
+    if control not in {"permuted", "constant"}:
+        raise ValueError(f"control must be 'permuted' or 'constant', got {control!r}")
+
+    if control == "permuted":
+        replacement_images = [rows[(index + 1) % len(rows)]["image"] for index in range(len(rows))]
+    else:
+        replacement_images = [rows[0]["image"]] * len(rows)
+
+    controlled_rows = []
+    for row, replacement_image in zip(rows, replacement_images, strict=True):
+        controlled = copy.deepcopy(row)
+        controlled["image"] = copy.deepcopy(replacement_image)
+        controlled["metadata"]["visual_control"] = control
+        controlled_rows.append(controlled)
+    return controlled_rows
 
 
 def _write_parquet(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_parquet(path, index=False)
+
+
+def _write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2) + "\n")
+
+
+def write_refinement_dataset_bundle(
+    output_dir: str | Path,
+    *,
+    sft_train_examples: int = 8000,
+    sft_eval_examples: int = 1000,
+    rl_train_examples: int = 64,
+    rl_eval_examples: int = 128,
+    correct_action_probability: float = 0.7,
+    seed: int = 42,
+) -> dict[str, Path]:
+    """Write the easy visual-XOR refinement SFT, RL, held-out, and control datasets."""
+    output_dir = Path(output_dir)
+    paths = {
+        "sft_train": output_dir / "refinement_sft_train.parquet",
+        "sft_eval": output_dir / "refinement_sft_eval.parquet",
+        "rl_train": output_dir / "refinement_rl_train.parquet",
+        "rl_eval": output_dir / "refinement_rl_eval.parquet",
+        "rl_eval_permuted": output_dir / "refinement_rl_eval_permuted.parquet",
+        "rl_eval_constant": output_dir / "refinement_rl_eval_constant.parquet",
+        "eval_config": output_dir / "refinement_eval_config.json",
+    }
+    existing = [path for path in paths.values() if path.exists()]
+    if existing:
+        raise FileExistsError(f"Refusing to overwrite existing visual XOR refinement data: {existing}")
+
+    sft_train_rows = build_refinement_sft_rows(
+        num_examples=sft_train_examples,
+        seed=seed,
+        split="refinement_sft_train",
+        correct_action_probability=correct_action_probability,
+    )
+    sft_eval_rows = build_refinement_sft_rows(
+        num_examples=sft_eval_examples,
+        seed=seed,
+        split="refinement_sft_eval",
+        correct_action_probability=correct_action_probability,
+    )
+    rl_train_rows = build_xor_rows(
+        num_examples=rl_train_examples,
+        seed=seed,
+        split="refinement_rl_train",
+        shuffle=False,
+    )
+    rl_eval_rows = build_xor_rows(
+        num_examples=rl_eval_examples,
+        seed=seed,
+        split="refinement_rl_eval",
+        shuffle=False,
+    )
+    rl_eval_permuted_rows = build_refinement_control_rows(rl_eval_rows, control="permuted")
+    rl_eval_constant_rows = build_refinement_control_rows(rl_eval_rows, control="constant")
+
+    _write_parquet(paths["sft_train"], sft_train_rows)
+    _write_parquet(paths["sft_eval"], sft_eval_rows)
+    _write_parquet(paths["rl_train"], rl_train_rows)
+    _write_parquet(paths["rl_eval"], rl_eval_rows)
+    _write_parquet(paths["rl_eval_permuted"], rl_eval_permuted_rows)
+    _write_parquet(paths["rl_eval_constant"], rl_eval_constant_rows)
+
+    eval_defaults = {
+        "input_key": "prompt",
+        "label_key": "label",
+        "metadata_key": "metadata",
+        "top_p": 1.0,
+        "top_k": -1,
+        "max_response_len": 3,
+    }
+    eval_datasets = [
+        {
+            "name": "visual_xor_heldout",
+            "path": str(paths["rl_eval"].resolve()),
+            "rm_type": "visual_xor",
+            "n_samples_per_eval_prompt": 4,
+            "temperature": 1.0,
+        },
+        {
+            "name": "visual_xor_permuted_control",
+            "path": str(paths["rl_eval_permuted"].resolve()),
+            "rm_type": "visual_xor",
+            "n_samples_per_eval_prompt": 1,
+            "temperature": 0.0,
+        },
+        {
+            "name": "visual_xor_constant_control",
+            "path": str(paths["rl_eval_constant"].resolve()),
+            "rm_type": "visual_xor",
+            "n_samples_per_eval_prompt": 1,
+            "temperature": 0.0,
+        },
+    ]
+    _write_json(paths["eval_config"], {"eval": {"defaults": eval_defaults, "datasets": eval_datasets}})
+    return paths
 
 
 def write_dataset_bundle(
