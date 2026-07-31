@@ -12,6 +12,91 @@ Each entry should include:
 
 ---
 
+## 2026-07-27 - Capture Ray stale-live and Slurm/tmux isolation lessons
+
+**Type:** Retrospective
+**General description:** The approved battlefield follow-up turned two
+operational failures into reusable triage guidance without adding another
+active result skill.
+
+### Details
+
+- Extended `ray-stale-live-state-triage` so distributed actor health requires
+  every expected rank plus fresh completed-step progress. A surviving DP rank
+  is no longer treated as proof that training is alive.
+- Documented the causal chain from actor failure through an uncleared
+  `train_<n>` partition to `MAX_STALENESS` rollout backpressure.
+- Added global ROCm GPU ownership checks for cases where device-wide memory is
+  much larger than the failing rank's PyTorch allocation.
+- Added a troubleshooting entry explaining why the default tmux server can
+  cross Slurm allocations and how to isolate each job with
+  `tmux -L "slurm-${SLURM_JOB_ID}"`.
+- Kept the active skill set lean by leaving visual-XOR benchmark results in the
+  consolidated training report instead of creating a new result skill.
+
+### Key Points
+
+- Ray `RUNNING`, health traffic, and one surviving actor rank are all
+  insufficient health signals.
+- Shell and tmux-server Slurm cgroups must match before a GPU workload starts.
+
+### Links
+
+- Report:
+  `training_reports/2026-07-26-relax-synthetic-rl-battlefield.md`
+- Skill: `ray-stale-live-state-triage`
+- Troubleshooting: `references/troubleshooting.md`
+
+## 2026-07-26 - Retrospective on the synthetic text and visual RL battlefield
+
+**Type:** Retrospective
+**General description:** The ROCm Relax stack now has validated text multitask
+and image-conditioned learning baselines in both synchronous and fully
+asynchronous execution, so the next research phase can focus on async stability
+rather than basic reward or training plumbing.
+
+### Details
+
+- The tied, random-initialized joint EOS/two-action-bandit SFT preserved both
+  intended choices, and a 200-cycle fully-async run solved both objectives:
+  immediate EOS reached 100% and bandit action A reached 100%.
+- The random-initialized 371.4M Qwen3-VL refinement SFT passed held-out,
+  permuted-image, constant-image, and counterfactual gates at a 68.16%
+  held-out XOR baseline.
+- A synchronous visual refinement run improved held-out reward from 0.6582 to
+  0.9492 by step 231 while keeping permuted and constant controls near chance.
+- A clean DP2 fully-async run completed 250 actor cycles and 500 optimizer
+  steps. It passed the full visual convergence gate near step 147, then
+  regressed to 0.8652 held-out reward by the last recorded evaluation. This
+  makes policy-version lag, update geometry, and best-state selection the next
+  controlled questions.
+- The earlier DP2 step-0 RCCL OOM was accompanied by abnormal GPU-wide
+  occupancy and became a stale-live Ray job after actor death. A later clean
+  run proved the same topology fits and trains.
+- Different scheduler/request IDs did not prevent a GPU collision because one
+  default tmux server was rooted in an older Slurm cgroup. Future jobs must use
+  a unique tmux server label such as `tmux -L "slurm-${SLURM_JOB_ID}"`.
+- Standalone SGLang and vLLM startup showed that model loading takes only a few
+  seconds; most of the original 6:40 Relax startup is orchestration, process
+  construction, warmup, Megatron initialization, and weight wiring.
+
+### Key Points
+
+- Basic text reward routing, multimodal reward routing, actor optimization,
+  SGLang weight synchronization, and fully-async DP2 learning are now proven.
+- Held-out combination metrics and anti-shortcut controls—not raw rollout mean
+  reward—define success for visual-XOR.
+- Keep checkpoints disabled for short plumbing smokes, but future async
+  optimization studies need one bounded eval-best artifact because the final
+  policy can be worse than the peak policy.
+- Proposed follow-ups are a staleness/update/LR ablation, fatal actor failure
+  propagation, and Slurm/tmux/GPU preflight checks.
+
+### Links
+
+- Report:
+  `training_reports/2026-07-26-relax-synthetic-rl-battlefield.md`
+
 ## 2026-06-21 - Observation on mini colocate memory-saver diagnostic
 
 **Type:** Observation
@@ -3666,3 +3751,222 @@ valid actions with A rate `0.375`, B rate `0.625`, reward mean `0.375`, reward
 range `[0, 1]`, and actor gradient norm `9.0062`. The optimizer step and
 immediate actor-to-SGLang weight synchronization both completed. The run used
 `SAVE_CHECKPOINTS=0`, exited successfully, and left all GPUs idle.
+
+## 2026-07-28 - Frozen CPU vision execution plan
+
+**Type:** Development and benchmark plan
+
+The Qwen3-VL visual-XOR path now has an opt-in PyTorch CPU service that
+computes the frozen final and DeepStack visual features once and routes the
+same bundle to SGLang and Megatron. The next work is gated deliberately:
+
+1. Propagate immutable feature/revision identities and prove CPU versus native
+   GPU feature parity.
+2. Prove native versus precomputed logits inside SGLang and Megatron, then
+   compare synchronized rollout/training logits.
+3. Complete a two-cycle shared-feature smoke before removing any visual
+   weights from GPU model instances.
+4. Measure native GPU vision, CPU vision with resident GPU weights, and CPU
+   vision with omitted GPU weights.
+5. Tune CPU threads, explicit image batches, and Ray Serve replicas only after
+   correctness and VRAM gates pass.
+
+No persistent database, Prima.cpp/llama.cpp backend, or PP-aware DeepStack
+routing will be added before the PyTorch baseline identifies a measured need.
+The detailed gates and transport thresholds are recorded in
+`docs/draft/frozen_cpu_vision_encoder.md`.
+
+## 2026-07-28 - Frozen CPU vision implementation checkpoint
+
+**Type:** Development and local CPU validation
+
+Implemented and unit-tested:
+
+- immutable content-addressed feature IDs and frozen-vision revisions;
+- final plus three DeepStack feature parity metrics and exact gates;
+- a language-only Hugging Face Qwen3-VL precomputed-feature forward;
+- parameterless, fail-fast omission sentinels for Megatron and SGLang;
+- omission propagation through the real SGLang rollout runtime environment;
+- independent Ray Serve replica count and CPU slots per replica;
+- cache/backend-work service counters;
+- a versioned multiprocessing CPU scaling benchmark; and
+- safe launcher defaults: one replica and GPU omission disabled.
+
+Local evidence:
+
+- the real refinement checkpoint contains 27,084,160 visual parameters
+  (51.66 MiB BF16 per full model instance);
+- one real image produced a `64 x 1024` final stream and three `64 x 1024`
+  DeepStack streams;
+- the feature bundle occupied 524,312 bytes; and
+- the one-image/two-thread warmed benchmark smoke measured approximately
+  0.057 seconds of backend encode time and 0.060 seconds wall time.
+
+The smoke used an artificial demand of 0.01 images/second solely to validate
+the harness. It is not a scaling recommendation. No live GPU parity,
+Ray/SGLang/Megatron two-cycle smoke, overlap result, or VRAM delta is claimed
+without a supplied cluster address and dedicated idle devices.
+
+## 2026-07-30 - Frozen CPU vision Hugging Face parity passes
+
+**Type:** Correctness gate
+
+The eight-image Qwen3-VL CPU-versus-native-GPU parity diagnostic passed on one
+MI210 after two diagnostic compatibility fixes:
+
+- Transformers 5.3 requires `mm_token_type_ids` in `get_rope_index`, even when
+  its value is `None`.
+- Requiring every BF16 feature element to satisfy `rtol=0.01`, `atol=0.01` was
+  brittle across CPU and GPU kernels. The gate now requires at least `99.99%`
+  elementwise agreement, cosine similarity at least `0.999`, and maximum
+  absolute error at most `0.05`, while retaining the response KL, top-token,
+  and A/B probability gates.
+
+Observed results:
+
+- all final and DeepStack cosine similarities exceeded `0.999993`;
+- all streams had maximum absolute error `0.03125`;
+- the lowest elementwise close fraction was approximately `0.999979`;
+- mean full-vocabulary response KL was approximately `1.65e-8`;
+- all eight top tokens matched; and
+- maximum A/B probability delta was below `8e-7`.
+
+Artifact:
+`benchmark_results/cpu_vision/20260730_hf_parity/parity.json`.
+
+This closes the local Hugging Face parity gate. It does not yet prove the live
+Ray/SGLang/Megatron shared-feature path, GPU-weight omission, overlap, or VRAM
+reduction; the two-cycle GPU-resident CPU-vision smoke is next.
+
+Retrospective:
+`training_reports/2026-07-30-qwen3-vl-cpu-gpu-vision-parity.md`.
+
+## 2026-07-31 - Frozen CPU vision live-system retrospective
+
+**Type:** Retrospective and three-mode systems benchmark
+
+**General description:** The frozen Qwen3-VL CPU vision path progressed from
+standalone feature/logit parity through two complete Relax cycles and real GPU
+weight omission, but the final native-versus-precomputed serving comparison
+exposed a live behavioral mismatch that blocks performance optimization.
+
+### What we tried
+
+- Proved standalone Hugging Face CPU-versus-GPU parity on eight fixed images
+  for the final visual projection, all three DeepStack projections, and the
+  full next-token distribution.
+- Ran a fully asynchronous four-MI210 Relax smoke with one CPU vision replica,
+  one Ray CPU, a 1 GiB LRU, two rollouts, two optimizer steps per rollout,
+  actor DP2 on cards 0-1, SGLang on card 2, and actor-forward on card 3.
+- Repeated the same two-cycle workload with GPU visual weights omitted from
+  both SGLang and Megatron model instances.
+- Ran a matched three-mode comparison: native frozen GPU vision, CPU vision
+  with resident GPU weights, and CPU vision with omitted GPU weights. Every
+  mode started from the same idle per-card VRAM baseline and saved no
+  checkpoint.
+- Added cumulative and interval CPU cache/backend counters to the normal Relax
+  metric batches so evaluation and rollout snapshots appear in logs and W&B.
+
+### Key findings
+
+- The standalone representation is sound under the tested checkpoint and
+  software stack: every final/DeepStack cosine exceeded `0.999993`, mean
+  full-vocabulary KL was about `1.65e-8`, all top tokens matched, and maximum
+  A/B probability drift was below `8e-7`.
+- The live shared-feature data path is structurally complete. Evaluation,
+  rollout, transfer queue, Megatron actor-forward, DP2 backward/optimizer,
+  actor-to-SGLang synchronization, and final shutdown all work with final plus
+  three DeepStack streams.
+- GPU visual weight omission also works end to end. The omitted run completed
+  768 evaluation requests, both 64-sample rollouts, four optimizer updates,
+  final synchronization, and clean GPU release.
+- The clean omission comparison is CPU-resident versus CPU-omitted, not native
+  versus omitted. Omission reduced the simultaneous four-card peak from
+  `19.090 GiB` to `18.938 GiB`, a `155.73 MiB` reduction. Summing each card's
+  independently observed peak reduction gives `206.76 MiB`, but those peaks
+  did not occur simultaneously.
+- The evaluation LRU behaved exactly as intended with one replica: 768
+  requests, 128 unique misses/encodes, 640 hits, an `83.33%` hit rate, 128
+  entries, and zero evictions. Each rollout then introduced eight new images,
+  so each interval correctly contained eight misses and no hits.
+- CPU-resident and CPU-omitted wall times were `1006.9 s` and `1011.5 s`,
+  versus `658.8 s` for native GPU vision. On the one-core correctness
+  allocation, the CPU path was about `1.53x` native and weight omission itself
+  produced no throughput improvement.
+- CPU backend encoding consumed only about 53 seconds during baseline
+  evaluation. The larger wall-time gap therefore also contains JSON feature
+  serialization, Ray/Serve transport, SGLang reconstruction/consumption,
+  scheduling, and generation overhead.
+- The decisive unresolved result is behavioral. Native GPU vision scored
+  `0.6816` on held-out visual XOR with a balanced A/B distribution. CPU
+  resident and CPU omitted scored `0.5039` and `0.5000` and were biased toward
+  A (`0.6875` and `0.7148`). The two CPU modes agree closely with one another,
+  so omission is unlikely to be the source of the difference.
+
+### What failed or required correction
+
+- Reserving eight CPUs for the first vision service prevented scheduling on an
+  allocation with only two physical CPU cores. The correctness launcher now
+  reserves one CPU and leaves scaling to an explicitly CPU-rich allocation.
+- The first precomputed SGLang request paired tokenizer-only prompt IDs with a
+  processor-expanded visual grid and failed Qwen3-VL MRoPE construction. The
+  precomputed path must send processor-expanded prompt IDs while raw-image and
+  text-only paths keep their original behavior.
+- Megatron initially received separately numbered DeepStack keys while its
+  wrapper expected one ordered tuple. The wrapper now assembles numbered
+  streams according to `deepstack_visual_indexes` and rejects mixed or missing
+  representations explicitly.
+- Local Hugging Face parity did not imply live SGLang parity. It proved that
+  the CPU encoder can produce equivalent features and logits in isolation,
+  but it did not cover SGLang's processor-expanded IDs, position construction,
+  serialized feature reconstruction, DeepStack injection, or live policy
+  version.
+- The CPU-resident Ray workload succeeded, but the outer VRAM monitor recorded
+  launcher status `127`. Its log contains all optimizer updates,
+  `Main func successfully`, clean Ray shutdown, and Ray's final `Job ...
+  succeeded`, with no matching command-not-found message. Preserve this as an
+  unresolved wrapper-status anomaly rather than rewriting the artifact or
+  labeling the training run failed.
+
+### Recommended order from here
+
+1. Freeze one checkpoint/policy version, image, prompt, processor-expanded
+   token sequence, and sampling configuration.
+2. Inside the live SGLang transformers backend, compare native-image and
+   precomputed-feature full next-token logits, KL, top token, A/B
+   probabilities, position IDs, visual grid, final stream, and all DeepStack
+   stream identities.
+3. Repeat the same fixed-input boundary check inside Megatron actor-forward.
+4. Only after live semantic parity passes, profile binary/shared-memory
+   transport, JSON overhead, CPU threads, dynamic batching, and replica
+   scaling.
+5. When multiple replicas are tested, aggregate per-replica counters and
+   measure duplicate encodes before interpreting hit rate or capacity.
+
+### Open questions
+
+- At which exact SGLang boundary do native and precomputed logits first
+  diverge: prompt IDs, MRoPE positions, reconstructed final features,
+  DeepStack routing, dtype/device conversion, or policy synchronization?
+- Does Megatron actor-forward preserve the same logits when given the exact
+  bundle consumed by SGLang?
+- After parity is restored, what portion of the roughly 53% slowdown is CPU
+  encoding versus JSON serialization, serving transport, or SGLang feature
+  ingestion?
+- Can feature-ID-sticky routing avoid duplicate encodes across multiple
+  independent replica LRUs, or is a shared object/binary transport required?
+- Why did the successful CPU-resident outer launcher return status `127` after
+  Ray reported success?
+
+Reports:
+
+- `training_reports/2026-07-30-qwen3-vl-cpu-gpu-vision-parity.md`
+- `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`
+- `training_reports/2026-07-31-qwen3-vl-vision-three-mode-vram.md`
+
+Artifacts:
+
+- `benchmark_results/cpu_vision/20260730_hf_parity/parity.json`
+- `benchmark_results/cpu_vision/20260731_three_mode_two_cycle/native_gpu_vram.json`
+- `benchmark_results/cpu_vision/20260731_three_mode_two_cycle/cpu_resident_vram.json`
+- `benchmark_results/cpu_vision/20260731_three_mode_two_cycle/cpu_omitted_vram.json`

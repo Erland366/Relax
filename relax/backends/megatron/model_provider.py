@@ -491,6 +491,10 @@ def get_model_provider_func(
             provider.use_transformer_engine_full_layer_spec = False
             provider.use_transformer_engine_op_fuser = False
 
+        omit_gpu_vision_weights = getattr(args, "vision_encoder_omit_gpu_weights", False)
+        if omit_gpu_vision_weights:
+            provider.add_encoder = False
+
         provider.finalize()
 
         # Pickle provider for offline inspection / reproducibility (only on rank 0)
@@ -502,6 +506,15 @@ def get_model_provider_func(
 
         def provide_with_cp_probe(*p_args, **p_kwargs):
             model = original_provide(*p_args, **p_kwargs)
+            if getattr(args, "vision_encoder_backend", "disabled") == "pytorch":
+                from relax.backends.megatron.precomputed_vision import (
+                    OmittedQwen3VLVisionModel,
+                    install_qwen3_vl_precomputed_vision_forward,
+                )
+
+                if omit_gpu_vision_weights:
+                    model.vision_model = OmittedQwen3VLVisionModel()
+                install_qwen3_vl_precomputed_vision_forward(model)
             _maybe_mark_unsplit_forward(args, model)
             _install_cp_probe(model)
             return model

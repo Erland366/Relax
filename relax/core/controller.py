@@ -14,6 +14,7 @@ from ray import serve
 from transfer_queue import GRPOGroupNSampler, SeqlenBalancedSampler
 
 from relax.components.genrm import register_genrm
+from relax.components.vision_encoder import register_vision_encoder
 from relax.core.registry import ALGOS, ROLES, process_role
 from relax.core.service import Service, create_placement_group
 from relax.distributed.checkpoint_service.coordinator.service import create_dcs_deployment
@@ -31,7 +32,7 @@ ACTOR_ROLLOUT_PG_ROLES = [ROLES.actor, ROLES.rollout, "genrm"]
 
 
 def register_extra_roles(config, algo: dict) -> list[str]:
-    return register_genrm(config, algo)
+    return register_genrm(config, algo) + register_vision_encoder(config, algo)
 
 
 def build_data_source_actor_config(config: Namespace, data_source_cls) -> Namespace:

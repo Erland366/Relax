@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "passed": true,
+  "gates": {
+    "capacity_ratio_min": 1.25,
+    "demand_metric": "peak_unique_images_per_second"
+  },
+  "peak_unique_images_per_second": 0.01,
+  "results": [
+    {
+      "backend_encode_seconds": 0.05715615954250097,
+      "emitted_feature_bytes": 524312,
+      "encode_batches": 1,
+      "unique_images": 1,
+      "repeats": 1,
+      "num_replicas": 1,
+      "threads_per_replica": 2,
+      "batch_size": 1,
+      "num_images": 1,
+      "wall_time_seconds": 0.060067481361329556,
+      "total_reserved_cpus": 2,
+      "images_per_second": 16.647942902493384,
+      "capacity_ratio": 1664.7942902493382,
+      "gate_passed": true
+    }
+  ],
+  "recommended_configuration": {
+    "backend_encode_seconds": 0.05715615954250097,
+    "emitted_feature_bytes": 524312,
+    "encode_batches": 1,
+    "unique_images": 1,
+    "repeats": 1,
+    "num_replicas": 1,
+    "threads_per_replica": 2,
+    "batch_size": 1,
+    "num_images": 1,
+    "wall_time_seconds": 0.060067481361329556,
+    "total_reserved_cpus": 2,
+    "images_per_second": 16.647942902493384,
+    "capacity_ratio": 1664.7942902493382,
+    "gate_passed": true
+  }
+}

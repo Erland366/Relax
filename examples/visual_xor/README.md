@@ -228,6 +228,105 @@ all four combinations are at least 0.85, valid responses stay at least 0.99,
 both actions remain present, and both controls remain near chance. A rising
 training reward without those held-out/control conditions is not success.
 
+## Run the experimental frozen CPU vision path
+
+The optional CPU vision service can compute the frozen Qwen3-VL visual tower,
+final projection, and all three DeepStack projections once, cache the result,
+and give the same feature bundle to SGLang and Megatron:
+
+```bash
+cd "$RELAX_ROOT"
+HF_CHECKPOINT="$VISUAL_REFINEMENT_SFT" \
+REFINEMENT_DATA="$VISUAL_REFINEMENT_DATA" \
+HIP_VISIBLE_DEVICES=0,1,2,3 \
+  bash scripts/debug/qwen3_vl_visual_xor_refinement_fully_async_cpu_vision_4gpus.sh
+```
+
+The recipe adds `"vision_encoder":[1,0]` to `RESOURCE_JSON`, reserves one
+logical CPU core per Ray Serve replica by default, freezes both the vision
+tower and its projections, and writes no checkpoint. The one-core default
+keeps this correctness smoke schedulable beside Ray and Serve control actors;
+set `VISION_ENCODER_NUM_CPUS` explicitly for scaling experiments on a
+CPU-rich allocation. It is Qwen3-VL image-only and requires context and
+pipeline parallel sizes of one.
+
+The recipe defaults to one CPU replica and keeps GPU-weight omission disabled.
+First run the fixed-image parity gate:
+
+```bash
+python -m examples.visual_xor.validate_cpu_vision_parity \
+  --checkpoint "$VISUAL_REFINEMENT_SFT" \
+  --dataset "$VISUAL_REFINEMENT_DATA/refinement_rl_eval.parquet" \
+  --output benchmark_results/cpu_vision/parity.json \
+  --device cuda:0 \
+  --num-images 8
+```
+
+Only after that artifact passes should a run set
+`VISION_ENCODER_OMIT_GPU_WEIGHTS=1`. In omission mode, Megatron does not
+construct its visual tower and SGLang replaces the meta-device visual module
+before GPU materialization; raw-image fallbacks fail loudly. The local
+checkpoint's theoretical BF16 parameter reduction is 51.66 MiB per full GPU
+model instance, but actual VRAM must still be measured.
+
+CPU-vision eval and rollout records include cumulative and interval cache
+metrics under `vision_encoder/cache/*` plus backend work and throughput under
+`vision_encoder/backend/*`. They are written to the normal log and W&B run;
+no separate metrics process is required.
+
+Measure the three modes sequentially, from an idle four-GPU baseline, with the
+same workload:
+
+```bash
+python -m examples.visual_xor.monitor_rocm_vram \
+  --output benchmark_results/cpu_vision/native_gpu_vram.json \
+  --label native-gpu -- \
+  env HIP_VISIBLE_DEVICES=0,1,2,3 NUM_ROLLOUT=2 EVAL_INTERVAL=4 \
+    SAVE_CHECKPOINTS=0 \
+    bash scripts/debug/qwen3_vl_visual_xor_refinement_fully_async_4gpus.sh
+
+python -m examples.visual_xor.monitor_rocm_vram \
+  --output benchmark_results/cpu_vision/cpu_resident_vram.json \
+  --label cpu-resident -- \
+  env HIP_VISIBLE_DEVICES=0,1,2,3 NUM_ROLLOUT=2 EVAL_INTERVAL=4 \
+    VISION_ENCODER_OMIT_GPU_WEIGHTS=0 SAVE_CHECKPOINTS=0 \
+    bash scripts/debug/qwen3_vl_visual_xor_refinement_fully_async_cpu_vision_4gpus.sh
+
+python -m examples.visual_xor.monitor_rocm_vram \
+  --output benchmark_results/cpu_vision/cpu_omitted_vram.json \
+  --label cpu-omitted -- \
+  env HIP_VISIBLE_DEVICES=0,1,2,3 NUM_ROLLOUT=2 EVAL_INTERVAL=4 \
+    VISION_ENCODER_OMIT_GPU_WEIGHTS=1 SAVE_CHECKPOINTS=0 \
+    bash scripts/debug/qwen3_vl_visual_xor_refinement_fully_async_cpu_vision_4gpus.sh
+```
+
+The native launcher freezes its GPU-resident visual tower and projector for
+this comparison. Otherwise its gradients and optimizer state would make the
+actor-side VRAM result incomparable with the frozen CPU modes. The monitor
+records baseline, final, per-device peak, peak delta, and simultaneous total
+peak; compare card 0-1 as actor ranks, card 2 as SGLang rollout, and card 3 as
+actor-forward.
+
+The 2026-07-31 four-MI210 comparison completed all three modes. Omitting the
+GPU visual weights reduced the simultaneous four-card peak by 155.73 MiB
+relative to the otherwise identical CPU-resident mode. Its evaluation cache
+served 768 requests with 128 encodes, 640 hits, an 83.33% hit rate, and no
+evictions. Both CPU modes were about 1.53 times the native launcher wall time
+on the one-core vision service, and both remained near chance while native GPU
+vision scored 0.6816 on the held-out set. Therefore the next gate is fixed-
+input live SGLang and Megatron logit parity, not CPU scaling. See
+[the three-mode report](../../training_reports/2026-07-31-qwen3-vl-vision-three-mode-vram.md)
+for the per-device table, run IDs, artifacts, and wrapper-status caveat.
+
+SGLang receives the feature tensor through JSON, which is substantially
+larger than the source PNG. Multiple CPU replicas also have independent
+caches, so the same image can be encoded once per replica. Compare end-to-end
+time, cache metrics, and the provided CPU scaling artifact before treating the
+path as an optimization. See
+[Frozen CPU Vision Encoder](../../docs/draft/frozen_cpu_vision_encoder.md) for
+the exact tensor contract, parity and capacity commands, omission behavior,
+and staged limitations.
+
 ## Run the harder discovery benchmark without checkpoints
 
 The first command is a two-rollout startup and optimizer smoke test:

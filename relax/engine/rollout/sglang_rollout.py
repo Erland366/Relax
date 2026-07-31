@@ -22,6 +22,10 @@ from relax.distributed.ray.rollout import _log_rollout_data
 from relax.engine.filters.base_types import MetricGatherer, call_dynamic_filter
 from relax.engine.rewards import async_rm, batched_async_rm
 from relax.engine.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
+from relax.engine.rollout.precomputed_vision import (
+    prepare_qwen3_vl_precomputed_rollout_inputs,
+    serialize_sglang_precomputed_image_data,
+)
 from relax.utils.async_utils import run
 from relax.utils.data.data import Dataset
 from relax.utils.data.processing_utils import (
@@ -57,6 +61,12 @@ class GenerateState(metaclass=SingletonMeta):
         self.args = args
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
+        self.vision_encoder = None
+        if getattr(args, "vision_encoder_backend", "disabled") == "pytorch":
+            from ray import serve
+
+            self.vision_encoder = serve.get_app_handle("vision_encoder")
+        self.vision_encoder_metrics_previous = None
 
         # Process pool for running HuggingFace processor without GIL contention.
         # Controlled by --mm-processor-pool-size (0 = disabled).
@@ -234,6 +244,80 @@ async def _encode_multimodal_inputs(multimodal_inputs: dict) -> tuple[dict[str, 
     return encoded, monotonic() - t_start
 
 
+async def _run_cpu_vision_encoder(
+    state: GenerateState,
+    multimodal_train_inputs: dict[str, Any],
+):
+    """Encode one image-only processor output through the shared CPU service."""
+    if state.vision_encoder is None:
+        raise RuntimeError("The CPU vision encoder handle is unavailable")
+    if "pixel_values_videos" in multimodal_train_inputs or "video_grid_thw" in multimodal_train_inputs:
+        raise NotImplementedError("The CPU vision encoder does not support video inputs")
+    if "pixel_values" not in multimodal_train_inputs or "image_grid_thw" not in multimodal_train_inputs:
+        raise ValueError(
+            "Qwen3-VL CPU vision requires processor outputs 'pixel_values' and 'image_grid_thw'; "
+            f"got keys {sorted(multimodal_train_inputs)}"
+        )
+    return await state.vision_encoder.encode.remote(
+        pixel_values=multimodal_train_inputs["pixel_values"],
+        image_grid_thw=multimodal_train_inputs["image_grid_thw"],
+    )
+
+
+_VISION_ENCODER_COUNTER_METRICS = {
+    "hits": "cache/hits",
+    "misses": "cache/misses",
+    "evictions": "cache/evictions",
+    "encode_requests_total": "requests",
+    "backend_encode_requests_total": "backend/encode_requests",
+    "backend_encoded_images_total": "backend/encoded_images",
+    "emitted_feature_bytes_total": "backend/emitted_feature_bytes",
+    "backend_encode_seconds_total": "backend/encode_seconds",
+}
+
+
+async def _collect_cpu_vision_metrics(state: GenerateState, *, phase: str) -> dict[str, float | int]:
+    """Snapshot cumulative and interval CPU-vision service metrics."""
+    if state.vision_encoder is None:
+        return {}
+
+    current = await state.vision_encoder.get_metrics.remote()
+    previous = state.vision_encoder_metrics_previous or {}
+    state.vision_encoder_metrics_previous = current.copy()
+
+    metrics: dict[str, float | int] = {
+        "vision_encoder/cache/entries": current["entries"],
+        "vision_encoder/cache/resident_bytes": current["resident_bytes"],
+    }
+    intervals = {}
+    for source_name, metric_name in _VISION_ENCODER_COUNTER_METRICS.items():
+        current_value = current[source_name]
+        interval_value = current_value - previous.get(source_name, 0)
+        metrics[f"vision_encoder/{metric_name}_total"] = current_value
+        metrics[f"vision_encoder/{metric_name}_interval"] = interval_value
+        intervals[source_name] = interval_value
+
+    total_lookups = current["hits"] + current["misses"]
+    interval_lookups = intervals["hits"] + intervals["misses"]
+    metrics["vision_encoder/cache/hit_rate_total"] = current["hits"] / total_lookups if total_lookups else 0.0
+    metrics["vision_encoder/cache/hit_rate_interval"] = (
+        intervals["hits"] / interval_lookups if interval_lookups else 0.0
+    )
+
+    interval_backend_seconds = intervals["backend_encode_seconds_total"]
+    interval_backend_requests = intervals["backend_encode_requests_total"]
+    metrics["vision_encoder/backend/images_per_second_interval"] = (
+        intervals["backend_encoded_images_total"] / interval_backend_seconds
+        if interval_backend_seconds
+        else 0.0
+    )
+    metrics["vision_encoder/backend/seconds_per_request_interval"] = (
+        interval_backend_seconds / interval_backend_requests if interval_backend_requests else 0.0
+    )
+    logger.info("CPU vision metrics %s: %s", phase, metrics)
+    return metrics
+
+
 async def generate(
     args: Namespace, sample: Sample, sampling_params: dict[str, Any], evaluation: bool = False
 ) -> Sample:
@@ -259,12 +343,34 @@ async def generate(
     _has_media = sample.multimodal_inputs is not None and any(
         sample.multimodal_inputs.get(k) for k in ("images", "videos", "audio")
     )
-    if state.processor and _has_media:
+    precomputed_processor_prompt_ids = getattr(sample, "_precomputed_processor_prompt_ids", None)
+    if precomputed_processor_prompt_ids is not None:
+        processor_prompt_ids = precomputed_processor_prompt_ids
+        sample.multimodal_train_inputs = sample._precomputed_actor_inputs
+        precomputed_sglang_image_data = sample._precomputed_sglang_image_data
+        _t_image_processor = sample._precomputed_image_processor_elapsed
+        del sample._precomputed_processor_prompt_ids
+        del sample._precomputed_actor_inputs
+        del sample._precomputed_sglang_image_data
+        del sample._precomputed_image_processor_elapsed
+    elif state.processor and _has_media:
         processor_prompt_ids, sample.multimodal_train_inputs, _t_image_processor = await _run_image_processor(
             state, args, sample.prompt, sample.multimodal_inputs
         )
+        precomputed_sglang_image_data = None
+        if state.vision_encoder is not None:
+            features = await _run_cpu_vision_encoder(state, sample.multimodal_train_inputs)
+            prepared_payload, sample.multimodal_train_inputs = prepare_qwen3_vl_precomputed_rollout_inputs(
+                payload={},
+                multimodal_train_inputs=sample.multimodal_train_inputs,
+                features=features,
+            )
+            precomputed_sglang_image_data = serialize_sglang_precomputed_image_data(
+                prepared_payload["image_data"][0]
+            )
     else:
         processor_prompt_ids = tokenizer_prompt_ids
+        precomputed_sglang_image_data = None
 
     if len(sample.response) > 0:
         sampling_params["max_new_tokens"] -= len(sample.tokens) - len(processor_prompt_ids)
@@ -286,7 +392,10 @@ async def generate(
         payload["return_routed_experts"] = True
 
     _t_mm_encode: float | None = None
-    if _has_media:
+    if precomputed_sglang_image_data is not None:
+        payload["image_data"] = [precomputed_sglang_image_data]
+        _t_mm_encode = 0.0
+    elif _has_media:
         # Use pre-encoded data from group-level de-dup if available; otherwise encode inline.
         pre_encoded = getattr(sample, "_pre_encoded_mm", None)
         if pre_encoded is not None:
@@ -303,12 +412,15 @@ async def generate(
     if len(sample.response) > 0:
         payload["input_ids"] = sample.rollout_tokens
     else:
-        payload["input_ids"] = tokenizer_prompt_ids
+        sglang_prompt_ids = (
+            processor_prompt_ids if precomputed_sglang_image_data is not None else tokenizer_prompt_ids
+        )
+        payload["input_ids"] = sglang_prompt_ids
         # Initialize sample.tokens for the first turn
         if not sample.tokens:
             sample.tokens = processor_prompt_ids
         if not sample.rollout_tokens:
-            sample.rollout_tokens = tokenizer_prompt_ids
+            sample.rollout_tokens = sglang_prompt_ids
 
     # Use session_id for consistent hashing routing if router uses consistent_hashing policy
     headers = None
@@ -544,7 +656,33 @@ async def generate_and_rm_group(
     # data_source), encode once and attach the result to every sample so that
     # generate() picks up the pre-encoded data instead of re-encoding per sample.
     first_mm = getattr(group[0], "multimodal_inputs", None)
-    if first_mm is not None and all(getattr(s, "multimodal_inputs", None) is first_mm for s in group[1:]):
+    shared_multimodal_input = first_mm is not None and all(
+        getattr(s, "multimodal_inputs", None) is first_mm for s in group[1:]
+    )
+    if (
+        state.vision_encoder is not None
+        and shared_multimodal_input
+        and all(sample.prompt == group[0].prompt for sample in group[1:])
+    ):
+        processor_prompt_ids, multimodal_train_inputs, t_processor = await _run_image_processor(
+            state,
+            args,
+            group[0].prompt,
+            first_mm,
+        )
+        features = await _run_cpu_vision_encoder(state, multimodal_train_inputs)
+        prepared_payload, actor_inputs = prepare_qwen3_vl_precomputed_rollout_inputs(
+            payload={},
+            multimodal_train_inputs=multimodal_train_inputs,
+            features=features,
+        )
+        sglang_image_data = serialize_sglang_precomputed_image_data(prepared_payload["image_data"][0])
+        for sample in group:
+            sample._precomputed_processor_prompt_ids = processor_prompt_ids
+            sample._precomputed_actor_inputs = actor_inputs
+            sample._precomputed_sglang_image_data = sglang_image_data
+            sample._precomputed_image_processor_elapsed = t_processor
+    elif shared_multimodal_input:
         encoded_mm, t_enc = await _encode_multimodal_inputs(first_mm)
         for sample in group:
             sample._pre_encoded_mm = encoded_mm
@@ -859,6 +997,7 @@ async def generate_rollout_async(
 
     all_samples = [sample for group in data for sample in (group if isinstance(group, list) else [group])]
     timing_metrics = _aggregate_rollout_timing(all_samples, get_samples_times)
+    timing_metrics.update(await _collect_cpu_vision_metrics(state, phase=f"rollout_{rollout_id}"))
 
     global CURRENT_ROLLOUT_BATCH
     if CURRENT_ROLLOUT_BATCH:
@@ -906,7 +1045,8 @@ async def eval_rollout(args: Namespace, rollout_id: int) -> tuple[dict[str, dict
         results = {}
         for r in results_list:
             results.update(r)
-        return RolloutFnEvalOutput(data=results), []
+        metrics = await _collect_cpu_vision_metrics(state, phase=f"eval_{rollout_id}")
+        return RolloutFnEvalOutput(data=results, metrics=metrics), []
     finally:
         state.evaluating -= 1
 

@@ -37,6 +37,10 @@ def build_service_runtime_env(role: str, config: Namespace, runtime_env: Optiona
 
     if role == "rollout" and getattr(config, "sglang_model_impl", "").lower() == "transformers":
         service_runtime_env["env_vars"]["RELAX_SGLANG_BLOCK_MEGATRON_IMPORTS"] = "1"
+    if role == "rollout" and getattr(config, "vision_encoder_backend", "disabled") == "pytorch":
+        service_runtime_env["env_vars"]["RELAX_SGLANG_QWEN3_VL_PRECOMPUTED_VISION"] = "1"
+        if getattr(config, "vision_encoder_omit_gpu_weights", False):
+            service_runtime_env["env_vars"]["RELAX_SGLANG_QWEN3_VL_OMIT_GPU_WEIGHTS"] = "1"
 
     return service_runtime_env
 
@@ -100,12 +104,18 @@ class Service:
         """
         service_config = build_service_config(self.role, self.config)
         service_runtime_env = build_service_runtime_env(self.role, self.config, self.runtime_env)
+        ray_actor_options = {"runtime_env": service_runtime_env}
+        deployment_options = {}
+        if self.role == "vision_encoder":
+            ray_actor_options["num_cpus"] = self.config.vision_encoder_num_cpus
+            deployment_options["num_replicas"] = self.config.vision_encoder_num_replicas
+        deployment_options["ray_actor_options"] = ray_actor_options
         if self.data_source is not None:
-            self.service = self.cls.options(ray_actor_options={"runtime_env": service_runtime_env}).bind(
+            self.service = self.cls.options(**deployment_options).bind(
                 self.healthy, pgs, service_config, data_source=self.data_source, runtime_env=service_runtime_env
             )
         else:
-            self.service = self.cls.options(ray_actor_options={"runtime_env": service_runtime_env}).bind(
+            self.service = self.cls.options(**deployment_options).bind(
                 self.healthy, pgs, self.num_gpus, service_config, self.role, runtime_env=service_runtime_env
             )
         logger.info(f"[{self.role}] Deploying service...")

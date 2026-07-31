@@ -1,6 +1,6 @@
 ---
 name: model-integration
-description: Guide for integrating a new model into the Relax training pipeline. Use when adding a new model architecture, writing Megatron-to-HF weight converters, implementing custom TP all-gather/chunk logic, debugging weight sync issues, or adapting models for colocate or fully-async mode. Covers Megatron backend (bridge and raw modes) and FSDP backend.
+description: Guide for integrating a model into Relax. Use when adding an architecture, writing Megatron-to-HF converters, implementing TP gather/chunk logic, debugging weight sync, adapting colocate or fully-async execution, or routing precomputed multimodal features through rollout and training. Covers Megatron bridge/raw modes, FSDP, and live multimodal parity gates.
 ---
 
 # Model Integration Guide
@@ -214,11 +214,68 @@ config = get_hf_config(args.hf_checkpoint)  # .text_config.xxx
 convert_to_global_name=args.megatron_to_hf_mode == "raw"
 ```
 
+## Precomputed Multimodal Feature Parity
+
+When offloading a frozen vision/audio encoder or injecting precomputed
+features, validate the following gates in order. Stop at the first failure;
+do not use a later end-to-end success to waive an earlier semantic mismatch.
+
+```text
+structural contract
+  -> standalone representation parity
+  -> standalone language-logit parity
+  -> live rollout-backend parity
+  -> live training-backend parity
+  -> end-to-end behavioral parity
+  -> resident-versus-omitted VRAM
+  -> throughput and scaling
+```
+
+1. **Structural contract:** compare feature revision/ID, stream names and
+   order, shapes, grid metadata, dtype, and expected language-layer injection
+   indexes. For Qwen3-VL, check the final projected stream and every projected
+   DeepStack stream independently.
+2. **Standalone representation parity:** compare native and precomputed
+   features with cosine, absolute-error distribution, finite-value checks, and
+   elementwise-close fraction. Do not require bitwise identity across CPU and
+   GPU BF16 kernels.
+3. **Standalone language-logit parity:** hold prompt, processor output, model
+   revision, and tokens fixed; compare full next-token logits/KL, top tokens,
+   and task-action probabilities.
+4. **Live rollout parity:** repeat the fixed-input comparison inside SGLang or
+   the selected rollout backend. Record processor-expanded prompt IDs,
+   position IDs, grid metadata, reconstructed feature dtype/device, all
+   multimodal streams, and policy version.
+5. **Live training parity:** feed the exact same immutable bundle and token
+   sequence to actor-forward/training and compare logits before relying on
+   importance sampling or policy synchronization diagnostics.
+6. **End-to-end behavior:** compare held-out task accuracy, action
+   distribution, validity, and controls. A completed rollout/optimizer smoke
+   proves plumbing, not semantic parity.
+7. **Memory isolation:** compare the same precomputed-feature path first with
+   GPU encoder weights resident and then omitted. Do not attribute the full
+   native-versus-offloaded VRAM difference to omitted parameters.
+8. **Performance:** tune transport, CPU threads, batching, routing, and replica
+   count only after every semantic gate passes. Track total requests separately
+   from backend encode work, and aggregate counters across replicas.
+
+Qwen3-VL precomputed requests must use processor-expanded prompt IDs that
+match the visual grid. Preserve numbered DeepStack streams in index order or
+assemble them into the exact ordered container expected by the language-model
+wrapper; reject mixed or missing representations instead of falling back.
+
+Evidence and measured examples:
+
+- `training_reports/2026-07-30-qwen3-vl-cpu-gpu-vision-parity.md`
+- `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`
+- `training_reports/2026-07-31-qwen3-vl-vision-three-mode-vram.md`
+
 ## Validation Checklist
 
 1. **转换器覆盖率** (raw 模式)：遍历所有参数名，确认无 `ValueError`
 2. **all_gather/chunk 对称性**：构造随机 tensor → 分片 → all_gather → chunk → 验证一致
 3. **端到端**：小规模跑 1-2 iter，检查 log 无 `Unknown parameter name`，Rollout 引擎成功加载权重
+4. **多模态预计算路径**：按上述 parity ladder 逐级验证，不以端到端 smoke 代替固定输入 live-logit parity
 
 ## File Reference Map
 

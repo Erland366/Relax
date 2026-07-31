@@ -96,6 +96,48 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=("Max number of actor checkpoints to keep."),
             )
+            parser.add_argument(
+                "--vision-encoder-backend",
+                choices=["disabled", "pytorch"],
+                default="disabled",
+                help=(
+                    "Optional frozen Qwen3-VL image encoder service. 'pytorch' runs the visual tower on CPU; "
+                    "'disabled' preserves the existing in-model vision path."
+                ),
+            )
+            parser.add_argument(
+                "--vision-encoder-omit-gpu-weights",
+                action="store_true",
+                default=False,
+                help=(
+                    "Do not construct the frozen Qwen3-VL visual tower in Megatron or materialize it in "
+                    "SGLang. Requires --vision-encoder-backend=pytorch and precomputed visual features."
+                ),
+            )
+            parser.add_argument(
+                "--vision-encoder-num-cpus",
+                type=int,
+                default=8,
+                help="Logical CPU cores reserved by Ray Serve for the frozen vision encoder.",
+            )
+            parser.add_argument(
+                "--vision-encoder-num-replicas",
+                type=int,
+                default=1,
+                help="Number of Ray Serve replicas for the frozen CPU vision encoder.",
+            )
+            parser.add_argument(
+                "--vision-encoder-cache-max-bytes",
+                type=int,
+                default=4 * 1024**3,
+                help="Maximum resident bytes for the CPU vision feature LRU cache.",
+            )
+            parser.add_argument(
+                "--vision-encoder-max-batch-size",
+                type=int,
+                default=8,
+                help="Maximum number of images accepted by one CPU vision encoder request.",
+            )
 
             return parser
 
@@ -2139,6 +2181,10 @@ def slime_validate_args(args):
 
     if args.max_staleness < 0:
         raise ValueError("--max-staleness must be >= 0.")
+
+    from relax.components.vision_encoder import validate_vision_encoder_config
+
+    validate_vision_encoder_config(args)
 
     if args.partial_rollout and args.use_rollout_routing_replay:
         raise ValueError(

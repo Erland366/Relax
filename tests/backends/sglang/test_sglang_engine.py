@@ -198,6 +198,88 @@ def test_get_server_args_installs_sgl_kernel_stub_before_import(monkeypatch):
     assert calls == ["install", "import"]
 
 
+def test_precomputed_vision_startup_patch_also_installs_gpu_vision_omission(monkeypatch):
+    import relax.backends.sglang.precomputed_vision as precomputed_vision
+    import relax.backends.sglang.sglang_engine as sglang_engine
+
+    calls = []
+
+    class FakeQwen3VLModel:
+        pass
+
+    class FakeTransformersBase:
+        pass
+
+    qwen_modeling_module = types.ModuleType("transformers.models.qwen3_vl.modeling_qwen3_vl")
+    qwen_modeling_module.Qwen3VLModel = FakeQwen3VLModel
+    sglang_transformers_module = types.ModuleType("sglang.srt.models.transformers")
+    sglang_transformers_module.TransformersBase = FakeTransformersBase
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers.models.qwen3_vl.modeling_qwen3_vl",
+        qwen_modeling_module,
+    )
+    monkeypatch.setitem(sys.modules, "sglang.srt.models.transformers", sglang_transformers_module)
+    monkeypatch.setattr(
+        precomputed_vision,
+        "install_qwen3_vl_precomputed_vision_patch",
+        lambda: calls.append(("precomputed",)),
+    )
+
+    def record_omission_patch(*, qwen3_vl_model_cls, transformers_base_cls, enabled):
+        calls.append(("omit", qwen3_vl_model_cls, transformers_base_cls, enabled))
+
+    monkeypatch.setattr(
+        precomputed_vision,
+        "patch_qwen3_vl_transformers_for_omitted_vision",
+        record_omission_patch,
+    )
+    monkeypatch.setenv("RELAX_SGLANG_QWEN3_VL_PRECOMPUTED_VISION", "1")
+    monkeypatch.setenv("RELAX_SGLANG_QWEN3_VL_OMIT_GPU_WEIGHTS", "1")
+
+    sglang_engine._maybe_install_precomputed_vision_patch()
+
+    assert calls == [
+        ("precomputed",),
+        ("omit", FakeQwen3VLModel, FakeTransformersBase, True),
+    ]
+
+
+def test_precomputed_vision_startup_patch_does_not_import_omission_classes_when_disabled(monkeypatch):
+    import relax.backends.sglang.precomputed_vision as precomputed_vision
+    import relax.backends.sglang.sglang_engine as sglang_engine
+
+    calls = []
+    blocked_imports = {
+        "transformers.models.qwen3_vl.modeling_qwen3_vl",
+        "sglang.srt.models.transformers",
+    }
+    original_import = builtins.__import__
+
+    def fail_if_omission_class_is_imported(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in blocked_imports:
+            raise AssertionError(f"omission-only class imported while omission is disabled: {name}")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(
+        precomputed_vision,
+        "install_qwen3_vl_precomputed_vision_patch",
+        lambda: calls.append("precomputed"),
+    )
+    monkeypatch.setattr(
+        precomputed_vision,
+        "patch_qwen3_vl_transformers_for_omitted_vision",
+        lambda **kwargs: calls.append("omit"),
+    )
+    monkeypatch.setattr(builtins, "__import__", fail_if_omission_class_is_imported)
+    monkeypatch.setenv("RELAX_SGLANG_QWEN3_VL_PRECOMPUTED_VISION", "1")
+    monkeypatch.delenv("RELAX_SGLANG_QWEN3_VL_OMIT_GPU_WEIGHTS", raising=False)
+
+    sglang_engine._maybe_install_precomputed_vision_patch()
+
+    assert calls == ["precomputed"]
+
+
 def _install_fake_sglang_memory_pool(monkeypatch):
     sglang_module = types.ModuleType("sglang")
     sglang_module.__path__ = []

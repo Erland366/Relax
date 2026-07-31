@@ -37,6 +37,45 @@ def test_build_service_runtime_env_preserves_empty_runtime_env():
     assert result == {"env_vars": {}}
 
 
+def test_build_service_runtime_env_enables_precomputed_vision_only_for_rollout():
+    config = Namespace(sglang_model_impl="sglang", vision_encoder_backend="pytorch")
+
+    rollout_result = build_service_runtime_env("rollout", config, None)
+    actor_result = build_service_runtime_env("actor", config, None)
+
+    assert rollout_result["env_vars"]["RELAX_SGLANG_QWEN3_VL_PRECOMPUTED_VISION"] == "1"
+    assert "RELAX_SGLANG_QWEN3_VL_PRECOMPUTED_VISION" not in actor_result["env_vars"]
+
+
+def test_build_service_runtime_env_enables_gpu_vision_omission_only_for_cpu_vision_rollout():
+    enabled_config = Namespace(
+        sglang_model_impl="transformers",
+        vision_encoder_backend="pytorch",
+        vision_encoder_omit_gpu_weights=True,
+    )
+    resident_config = Namespace(
+        sglang_model_impl="transformers",
+        vision_encoder_backend="pytorch",
+        vision_encoder_omit_gpu_weights=False,
+    )
+    disabled_config = Namespace(
+        sglang_model_impl="transformers",
+        vision_encoder_backend="disabled",
+        vision_encoder_omit_gpu_weights=True,
+    )
+
+    enabled_rollout = build_service_runtime_env("rollout", enabled_config, None)
+    resident_rollout = build_service_runtime_env("rollout", resident_config, None)
+    disabled_rollout = build_service_runtime_env("rollout", disabled_config, None)
+    enabled_actor = build_service_runtime_env("actor", enabled_config, None)
+
+    omission_env_var = "RELAX_SGLANG_QWEN3_VL_OMIT_GPU_WEIGHTS"
+    assert enabled_rollout["env_vars"][omission_env_var] == "1"
+    assert omission_env_var not in resident_rollout["env_vars"]
+    assert omission_env_var not in disabled_rollout["env_vars"]
+    assert omission_env_var not in enabled_actor["env_vars"]
+
+
 def test_build_service_config_normalizes_enum_values_for_rollout():
     config = Namespace(attention_backend=_FakeMegatronEnum.auto, plain_value="keep")
 

@@ -58,6 +58,110 @@ This file documents error patterns encountered and their solutions.
 | W&B primary run is system-only after an actor dies at step 0 | Logs show `POST /metrics/log_metrics_batch 200` and rollout metrics, but W&B still has only system charts; later the actor reports `ActorDiedError` or Ray `SYSTEM_ERROR` before any `Reported ... metrics for step 0` line | MetricsService accepted the metrics but buffered them until `flush_metrics()` at the end of the actor train step; the actor crash prevented `/metrics/report_step` from running | For namespaced step metrics ending in `/step`, report immediately after `log_metrics_batch` so W&B receives rollout/train metrics even if a later actor failure prevents the normal end-of-step flush. When payloads already contain `train/step` or `rollout/step`, log to W&B without forcing the global `step=` argument so same-step batches are not dropped |
 | Four-GPU AMD launcher still starts a two-GPU or single-rank actor topology | Ray starts with fewer GPUs than expected, rollout placement waits for resources, or a 4-GPU command still logs `RESOURCE_JSON={"actor": [1, 1], "rollout": [1, 1]}` | The older `amd_qwen3_4b_2gpu_e2e.sh` launcher hardcoded Ray as two GPUs, `--num-gpus-per-node 2`, and one rollout GPU; the current Qwen3 path also needs two actor GPUs for TP2 GPU optimizer state | Use the environment-driven launcher topology: set `HIP_VISIBLE_DEVICES=0,1,2,3 RAY_NUM_GPUS=4 NUM_GPUS_PER_NODE=4 ACTOR_RESOURCE_GPUS=2 ROLLOUT_RESOURCE_GPUS=2 TENSOR_MODEL_PARALLEL_SIZE=2 GPU_LABEL=4gpu-tp2`. This keeps CPU optimizer offload disabled while fitting GPU optimizer state |
 | Step-0 `dapo` reward stalls inside the Ray reward-worker pool | The run reaches `Actor training step 0/200` and rollout generation, but the Megatron actor only logs `start to get rollout_id: 0 data from transfer queue for train with mcore.` and then dies much later with `ActorDiedError`, while `RolloutManager` only logs `RewardExecutor: created 16 RewardWorker actors` before a long silent gap | `dapo` is a small local string/regex reward, but it was still being dispatched through the generic `RewardWorker` actor pool. On the MI210 step-0 path, that turned a cheap per-sample reward into extra Ray actor RPCs and left rollout blocked before it could transfer `train_0` to the actor | Keep `dapo` on a local in-process path using `asyncio.to_thread` and reserve the Ray reward-worker pool for the heavier/thread-unsafe reward types. Revalidate from a clean Ray cluster so the 5-minute timeout window no longer wedges at `RewardExecutor: created ... RewardWorker actors` |
+| Qwen3-VL precomputed features fail MRoPE construction | SGLang receives a short tokenizer prompt but a visual grid/features produced from a longer processor-expanded sequence, then fails while building multimodal rotary positions | The precomputed path bypasses SGLang's raw-image processor but still sends tokenizer-only IDs, so prompt positions no longer match the expanded visual placeholder span | Send processor-expanded prompt IDs with precomputed image features and keep tokenizer-only IDs for raw-image/text paths; verify the prompt length, visual grid, and feature-token count together |
+| Megatron precomputed Qwen3-VL DeepStack streams are missing | Evaluation and rollout complete, but actor-forward fails because the batch contains `deepstack_visual_embeds_0..N` while the model wrapper expects one ordered `deepstack_visual_embeds` container | The transport preserves streams as numbered fields, but the Megatron model-instance boundary does not assemble them according to `deepstack_visual_indexes` | Assemble numbered streams in configured index order before the original model forward; reject missing indexes and mixed numbered/tuple inputs explicitly |
+
+## Qwen3-VL precomputed features fail MRoPE construction
+
+**Added:** 2026-07-31
+**Domain:** research
+
+### Symptom
+
+The CPU or otherwise precomputed visual feature request reaches SGLang, but
+Qwen3-VL fails while constructing multimodal rotary positions. Diagnostics
+show that tokenizer and processor prompt lengths differ, for example:
+
+```text
+tokenizer prompt IDs:          51
+processor-expanded prompt IDs: 88
+precomputed feature grid:      matches the 88-token representation
+```
+
+### Cause
+
+The raw-image SGLang path expands the visual placeholder internally. The
+precomputed path bypasses that processor work, but it was still sending the
+short tokenizer-only prompt IDs. The supplied visual grid and features
+therefore described a different token layout from the one used to construct
+MRoPE positions.
+
+### Solution
+
+1. Preserve the processor-expanded prompt IDs when producing the precomputed
+   feature bundle.
+2. Send those expanded IDs as SGLang `input_ids` and preserve them in the
+   rollout token sequence whenever precomputed visual data is present.
+3. Keep tokenizer-only prompt IDs for raw-image and text-only requests so this
+   fix does not change their established processing path.
+4. Before generation, verify prompt length, `image_grid_thw`, and the number of
+   projected visual tokens as one structural contract.
+
+### Prevention
+
+Include processor-expanded prompt IDs, grid metadata, feature identity, and
+position-ID construction in every fixed-input live parity artifact. Do not
+treat precomputed features as an image-payload replacement without preserving
+the processor's token expansion.
+
+### Related
+
+- Skill: `model-integration`
+- Two-cycle report:
+  `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`
+- Retrospective: `references/experiment-log.md`
+
+## Megatron precomputed Qwen3-VL DeepStack streams are missing
+
+**Added:** 2026-07-31
+**Domain:** research
+
+### Symptom
+
+SGLang evaluation and rollout complete, but Megatron actor-forward fails after
+the transfer queue produces fields such as:
+
+```text
+deepstack_visual_embeds_0
+deepstack_visual_embeds_1
+deepstack_visual_embeds_2
+```
+
+The model-instance wrapper instead expects one ordered
+`deepstack_visual_embeds` tuple or equivalent container.
+
+### Cause
+
+The transport intentionally preserves each DeepStack stream as a numbered
+field, but the Megatron model boundary did not reassemble those fields into
+the ordered representation expected by Qwen3-VL. Passing the final projection
+alone is insufficient because DeepStack injects intermediate visual features
+at selected language layers.
+
+### Solution
+
+1. Read the model's configured `deepstack_visual_indexes`.
+2. Require one numbered field for every configured index.
+3. Assemble the fields in that exact order before calling the original model
+   forward.
+4. Remove the numbered transport fields after assembly.
+5. Fail loudly when indexes are missing or when numbered fields and a
+   preassembled tuple are both present.
+
+### Prevention
+
+Treat final and DeepStack features as one versioned structural contract. Test
+stream names, count, order, shapes, and injection indexes independently, then
+compare fixed-input actor-forward logits. A successful rollout alone does not
+prove that Megatron consumed the intermediate streams correctly.
+
+### Related
+
+- Skill: `model-integration`
+- Two-cycle report:
+  `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`
+- Parity report:
+  `training_reports/2026-07-30-qwen3-vl-cpu-gpu-vision-parity.md`
 
 ## Qwen3 mock overnight judged healthy before first checkpoint
 
@@ -983,6 +1087,96 @@ Do not treat `ray stop --force` alone as proof of a clean retry state on this st
 ### Related
 
 - Launcher: `amd_qwen3_4b_2gpu_e2e.sh`
+- Experiment log: `references/experiment-log.md`
+
+## Default tmux server crosses Slurm GPU allocation cgroups
+
+**Added:** 2026-07-27
+**Domain:** research
+
+### Symptom
+
+Two Slurm jobs on the same node have different job IDs and disjoint GPU GRES
+assignments, but workloads from separate projects still contend for the same
+logical GPUs. GPU inspection shows an unexpected process from another project:
+
+```bash
+fuser -v /dev/kfd
+rocm-smi --showpids --showmemuse --showuse
+```
+
+The shell appears to belong to the new request, but the tmux server and its
+child processes belong to an older Slurm cgroup:
+
+```bash
+cat /proc/$$/cgroup
+
+TMUX_SERVER_PID="$(tmux display-message -p '#{pid}')"
+cat "/proc/${TMUX_SERVER_PID}/cgroup"
+```
+
+In the observed case, Slurm allocated physical GPU indices `3-5,7` to job
+`94808` and `0-2,6` to job `97042`. Both Relax and a `deploy_bbq` vLLM process
+nevertheless ran under `job_94808`, while job `97042` reserved four GPUs but
+had no useful workload in its cgroup.
+
+### Cause
+
+The default tmux socket is shared by the same Unix user on the same host. A new
+tmux session name does not create a new tmux server. When a client from a later
+Slurm allocation attaches to the existing default server, new panes inherit
+the server's original environment, Slurm cgroup, and GPU device permissions;
+they do not inherit the attaching client's allocation.
+
+Different request IDs and different tmux session names therefore do not
+provide allocation isolation.
+
+### Solution
+
+1. Stop the incorrectly placed GPU workload gracefully. Do not kill the shared
+   tmux server while it still owns unrelated active panes.
+2. Return to the original shell that belongs to the intended Slurm allocation
+   and verify:
+
+   ```bash
+   echo "SLURM_JOB_ID=${SLURM_JOB_ID}"
+   echo "SLURM_STEP_GPUS=${SLURM_STEP_GPUS}"
+   cat /proc/$$/cgroup
+   ```
+
+3. Create a tmux server with a Slurm-job-specific socket label:
+
+   ```bash
+   tmux -L "slurm-${SLURM_JOB_ID}" new -s main
+   ```
+
+4. Always attach through the same label:
+
+   ```bash
+   tmux -L "slurm-${SLURM_JOB_ID}" attach -t main
+   ```
+
+5. Before launching the workload, verify that the tmux server cgroup contains
+   the expected job ID:
+
+   ```bash
+   TMUX_SERVER_PID="$(tmux -L "slurm-${SLURM_JOB_ID}" display-message -p '#{pid}')"
+   cat "/proc/${TMUX_SERVER_PID}/cgroup"
+   ```
+
+### Prevention
+
+Use one tmux server socket per Slurm allocation, not merely one session name.
+Treat a mismatch between `SLURM_JOB_ID`, the shell cgroup, and the tmux server
+cgroup as a hard preflight failure. Also inspect `/dev/kfd` owners before every
+multi-GPU launch so a cross-project allocation leak is found before model or
+RCCL initialization.
+
+### Related
+
+- Retrospective:
+  `training_reports/2026-07-26-relax-synthetic-rl-battlefield.md`
+- Skill: `ray-stale-live-state-triage`
 - Experiment log: `references/experiment-log.md`
 
 ## Sequential CPU optimizer stepping moves the ROCm crash boundary

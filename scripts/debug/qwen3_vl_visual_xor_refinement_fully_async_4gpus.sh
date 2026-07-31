@@ -24,10 +24,10 @@ if [ ! -f "${EVAL_CONFIG}" ]; then
     exit 2
 fi
 
-export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0,1}"
+export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0,1,2,3}"
 IFS=',' read -ra VISUAL_XOR_GPU_IDS <<< "${HIP_VISIBLE_DEVICES}"
-if [ "${#VISUAL_XOR_GPU_IDS[@]}" -ne 2 ]; then
-    echo "HIP_VISIBLE_DEVICES must contain exactly two GPU IDs, got ${HIP_VISIBLE_DEVICES}" >&2
+if [ "${#VISUAL_XOR_GPU_IDS[@]}" -ne 4 ]; then
+    echo "HIP_VISIBLE_DEVICES must contain exactly 4 GPU IDs, got ${HIP_VISIBLE_DEVICES}" >&2
     exit 2
 fi
 export RELAX_HIP_VISIBLE_DEVICES_OVERRIDE="${HIP_VISIBLE_DEVICES}"
@@ -35,15 +35,17 @@ unset ROCR_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES FULLY_ASYNC HYBRID
 
 # Keep the refinement benchmark deterministic: one actor GPU, one rollout GPU,
 # no stale policy, and no ambient async/colocation overrides.
-export RELAX_EXECUTION_MODE=sync
+export RELAX_EXECUTION_MODE=fully_async
 export USE_COLLOCATE=0
-export MAX_STALENESS=0
-export RAY_NUM_GPUS=2
-export NUM_GPUS_PER_NODE=2
-export ACTOR_RESOURCE_GPUS=1
-export ACTOR_FWD_RESOURCE_GPUS=0
+export MAX_STALENESS="${MAX_STALENESS:-4}"
+export RAY_NUM_GPUS=4
+export NUM_GPUS_PER_NODE=4
+export RAY_NUM_CPUS="${RAY_NUM_CPUS:-16}"
+export ACTOR_RESOURCE_GPUS=2
+export ACTOR_FWD_RESOURCE_GPUS=1
 export ROLLOUT_RESOURCE_GPUS=1
-export RESOURCE_JSON='{"actor":[1,1],"rollout":[1,1]}'
+export TRUE_ON_POLICY_MODE=FALSE
+export RESOURCE_JSON='{"actor":[1,2],"rollout":[1,1],"actor_fwd":[1,1],"advantages":[1,0]}'
 export TENSOR_MODEL_PARALLEL_SIZE=1
 export PIPELINE_MODEL_PARALLEL_SIZE=1
 export CONTEXT_PARALLEL_SIZE=1
@@ -55,6 +57,9 @@ export SGLANG_PIPELINE_PARALLEL_SIZE=1
 export SGLANG_DATA_PARALLEL_SIZE=1
 export SGLANG_EXPERT_PARALLEL_SIZE=1
 export SGLANG_ENABLE_DP_ATTENTION=0
+# Keep the native baseline equivalent to the CPU-vision modes: compute vision
+# on the GPU, but do not train the frozen tower or projector.
+export FREEZE_VISION_MODEL=1
 
 RUN_TAG="$(date -u +%Y%m%d_%H%M%S)"
 DEFAULT_ASSET_DIR="$(cd -- "${ROOT_DIR}/.." && pwd)/relax_assets"
@@ -62,7 +67,7 @@ export ASSET_DIR="${ASSET_DIR:-${DEFAULT_ASSET_DIR}}"
 export CONDA_ENV_NAME="${CONDA_ENV_NAME:-relaxrl_rocm_after_fix}"
 export MODEL_CONFIG_NAME=qwen3-vl-0.37B
 export MODEL_ASSET_NAME=Qwen3-VL-0.37B-Visual-XOR-Refinement-SFT
-export MODEL_LOG_NAME=qwen3-vl-0.37b-visual-xor-refinement
+export MODEL_LOG_NAME=qwen3-vl-0.37b-visual-xor-refinement-native-gpu
 export SYSTEM_PROMPT="Answer with exactly one uppercase character: A or B. Do not explain."
 export APPLY_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 export MULTIMODAL_KEYS='{"image":"image"}'
@@ -70,11 +75,11 @@ export MULTIMODAL_KEYS='{"image":"image"}'
 export RM_TYPE=visual_xor
 export REWARD_KEY=score
 export USE_KL_LOSS=0
-export USE_BALANCE_DATA=1
+export USE_BALANCE_DATA=0
 export LR="${LR:-3e-6}"
-export NUM_ROLLOUT="${NUM_ROLLOUT:-50}"
-export NUM_STEPS_PER_ROLLOUT=1
-export ROLLOUT_BATCH_SIZE=4
+export NUM_ROLLOUT="${NUM_ROLLOUT:-250}"
+export NUM_STEPS_PER_ROLLOUT=2
+export ROLLOUT_BATCH_SIZE=8
 export N_SAMPLES_PER_PROMPT=8
 export GLOBAL_BATCH_SIZE=32
 export MICRO_BATCH_SIZE=1
@@ -92,7 +97,7 @@ export ROLLOUT_SHUFFLE=0
 
 # Evaluate the held-out images and two anti-shortcut controls before training,
 # halfway through each 16-step data cycle, and at every cycle boundary.
-export EVAL_INTERVAL="${EVAL_INTERVAL:-8}"
+export EVAL_INTERVAL="${EVAL_INTERVAL:-4}"
 export EVAL_MAX_CONTEXT_LEN=512
 export EVAL_MAX_PROMPT_LEN=511
 export EVAL_MAX_RESPONSE_LEN=3
@@ -108,11 +113,11 @@ export SGLANG_MEM_FRACTION_STATIC=0.4
 export SAVE_CHECKPOINTS=0
 unset SAVE_DIR SAVE_INTERVAL CKPT_FORMAT NO_SAVE_OPTIM NO_SAVE_RNG LOAD_DIR
 
-export RUN_LOG="${ROOT_DIR}/log/visual-xor-refinement-${RUN_TAG}.log"
+export RUN_LOG="${ROOT_DIR}/log/visual-xor-refinement-native-gpu-${RUN_TAG}.log"
 export WANDB_MODE="${WANDB_MODE:-online}"
 export WANDB_ENTITY="${WANDB_ENTITY:-}"
 export WANDB_PROJECT=relax-amd-visual-xor-refinement
-export WANDB_GROUP="visual-xor-refinement-sync-${RUN_TAG}"
+export WANDB_GROUP="visual-xor-refinement-native-gpu-async-${RUN_TAG}"
 export WANDB_DIR="${WANDB_DIR:-${ROOT_DIR}/log/wandb}"
 
 bash scripts/training/multimodal/amd_qwen3_4b_2gpu_e2e.sh

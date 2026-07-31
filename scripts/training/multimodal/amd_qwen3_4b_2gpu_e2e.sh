@@ -225,6 +225,20 @@ configure_megatron_parallelism() {
     fi
 }
 
+configure_vision_encoder() {
+    VISION_ENCODER_NUM_REPLICAS="${VISION_ENCODER_NUM_REPLICAS:-1}"
+    VISION_ENCODER_OMIT_GPU_WEIGHTS="${VISION_ENCODER_OMIT_GPU_WEIGHTS:-0}"
+    FREEZE_VISION_MODEL="${FREEZE_VISION_MODEL:-0}"
+
+    if [ "${VISION_ENCODER_BACKEND:-disabled}" != "disabled" ]; then
+        FREEZE_VISION_MODEL=1
+    fi
+
+    require_positive_integer VISION_ENCODER_NUM_REPLICAS
+    require_boolean_flag VISION_ENCODER_OMIT_GPU_WEIGHTS
+    require_boolean_flag FREEZE_VISION_MODEL
+}
+
 configure_runtime_environment() {
     GPU_LABEL="${GPU_LABEL:-${RAY_NUM_GPUS}gpu}"
     case "${RELAX_EXECUTION_MODE}" in
@@ -570,6 +584,9 @@ load_model_config() {
         MODEL_CONFIG_PATH="${MODEL_CONFIG_PATH}.sh"
     fi
     source "${MODEL_CONFIG_PATH}"
+    if [ "${FREEZE_VISION_MODEL}" = "1" ]; then
+        MODEL_ARGS+=(--freeze-vision-model --freeze-vision-projection)
+    fi
 }
 
 start_ray_head() {
@@ -1007,6 +1024,11 @@ build_rocm_compat_args() {
 }
 
 build_training_args() {
+    VISION_ENCODER_ARGS=()
+    if [ "${VISION_ENCODER_OMIT_GPU_WEIGHTS}" = "1" ]; then
+        VISION_ENCODER_ARGS+=(--vision-encoder-omit-gpu-weights)
+    fi
+
     build_checkpoint_args
     build_rollout_args
     build_megatron_args
@@ -1040,6 +1062,7 @@ log_launch_config() {
     echo "  transfer_queue: num_data_storage_units=${NUM_DATA_STORAGE_UNITS}" >&2
     echo "  sequence: seq_length=${SEQ_LENGTH}, rollout_max_response_len=${ROLLOUT_MAX_RESPONSE_LEN}, rollout_max_context_len=${ROLLOUT_MAX_CONTEXT_LEN:-unset}, rollout_max_prompt_len=${ROLLOUT_MAX_PROMPT_LEN:-unset}" >&2
     echo "  sglang: gpus_per_engine=${ROLLOUT_NUM_GPUS_PER_ENGINE}, pp=${SGLANG_PIPELINE_PARALLEL_SIZE}, dp=${SGLANG_DATA_PARALLEL_SIZE}, ep=${SGLANG_EXPERT_PARALLEL_SIZE}, attention_backend=${SGLANG_ATTENTION_BACKEND}, server_concurrency=${SGLANG_SERVER_CONCURRENCY}, max_running_requests=${SGLANG_MAX_RUNNING_REQUESTS:-unset}, max_total_tokens=${SGLANG_MAX_TOTAL_TOKENS:-unset}" >&2
+    echo "  vision_encoder: backend=${VISION_ENCODER_BACKEND:-disabled}, num_cpus=${VISION_ENCODER_NUM_CPUS:-8}, replicas=${VISION_ENCODER_NUM_REPLICAS}, cache_max_bytes=${VISION_ENCODER_CACHE_MAX_BYTES:-4294967296}, max_batch_size=${VISION_ENCODER_MAX_BATCH_SIZE:-8}, omit_gpu_weights=${VISION_ENCODER_OMIT_GPU_WEIGHTS}, freeze_gpu_model=${FREEZE_VISION_MODEL}" >&2
 }
 
 submit_training_job() {
@@ -1053,6 +1076,12 @@ submit_training_job() {
         -- python3 -m relax.entrypoints.train \
         --resource "${RESOURCE_JSON}" \
         --num-data-storage-units "${NUM_DATA_STORAGE_UNITS}" \
+        --vision-encoder-backend "${VISION_ENCODER_BACKEND:-disabled}" \
+        --vision-encoder-num-cpus "${VISION_ENCODER_NUM_CPUS:-8}" \
+        --vision-encoder-num-replicas "${VISION_ENCODER_NUM_REPLICAS}" \
+        --vision-encoder-cache-max-bytes "${VISION_ENCODER_CACHE_MAX_BYTES:-4294967296}" \
+        --vision-encoder-max-batch-size "${VISION_ENCODER_MAX_BATCH_SIZE:-8}" \
+        "${VISION_ENCODER_ARGS[@]}" \
         "${MODEL_ARGS[@]}" \
         "${CKPT_ARGS[@]}" \
         "${ROLLOUT_ARGS[@]}" \
@@ -1077,6 +1106,7 @@ main() {
     configure_megatron_parallelism
     configure_runtime_environment
     configure_run_defaults
+    configure_vision_encoder
     load_model_config
     append_no_proxy
 
