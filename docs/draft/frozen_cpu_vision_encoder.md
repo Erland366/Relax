@@ -24,7 +24,8 @@ raw image
        -> final projected visual embeddings
        -> three ordered DeepStack embedding streams
        -> byte-bounded, revisioned LRU cache
-  -> SGLang precomputed_embedding request
+  -> one SGLang precomputed_embedding request per eligible prompt group
+       -> native SGLang n-way decode branches
   -> Megatron precomputed visual forward boundary
 ```
 
@@ -51,8 +52,12 @@ actor payload.
 
 SGLang receives the same final and DeepStack streams concatenated in its
 Qwen3-VL precomputed-embedding layout. Relax installs a gated compatibility
-patch in SGLang processes so the embeddings are not mistaken for raw visual
-features and `image_grid_thw` remains available for MRoPE.
+patch in SGLang processes. During prefill, the adapter splits the packed
+streams, scatters the final embeddings into processor-expanded image-token
+positions, and passes the ordered DeepStack streams, visual mask, and MRoPE
+positions directly to the Qwen3-VL language model. Native-image and decode
+requests retain SGLang's normal path. A batch mixing native and precomputed
+items fails explicitly.
 
 ## Resource and cache configuration
 
@@ -96,7 +101,9 @@ The correctness recipe defaults to one reserved CPU core per encoder replica
 so the service remains schedulable beside Ray and Serve control actors on
 CPU-constrained GPU allocations. Override `VISION_ENCODER_NUM_CPUS` only for a
 measured scaling run on a CPU-rich allocation. No model checkpoints are
-written by that recipe. W&B and the ordinary run log remain enabled.
+written by that recipe. W&B and the ordinary run log remain enabled. Set
+`ENABLE_EVAL=0` for a training-only profiling run; the default `1` preserves
+the established evaluation configs and intervals.
 
 ## Correctness and parity gates
 
@@ -132,6 +139,27 @@ use `--dump-details` together with
 `train_rollout_logprob_abs_diff`, the corresponding probability difference,
 and the TIS mismatch metrics. Do not describe those sampled-token diagnostics
 as an exact full-vocabulary KL.
+
+The dedicated live SGLang gate compares native and precomputed requests inside
+one resident-weight server. It requests the exact next-token log-probabilities
+for A and B, flushes the cache between paths, writes every raw result, and
+fails if the generated token, text, score, margin, or normalized action
+probability crosses its gate:
+
+```bash
+HIP_VISIBLE_DEVICES=0 \
+python -m examples.visual_xor.validate_sglang_cpu_vision_parity \
+  --checkpoint "$HF_CHECKPOINT" \
+  --dataset "$REFINEMENT_DATA/refinement_rl_eval.parquet" \
+  --output benchmark_results/cpu_vision/sglang_live_parity.json \
+  --num-images 8 \
+  --host 127.0.0.1 \
+  --port 31000 \
+  --base-gpu-id 0
+```
+
+Run it with the same SGLang Python and ROCm `sgl_kernel` paths as the Relax
+launcher. It installs no packages and terminates its server before returning.
 
 Every CPU feature bundle carries an immutable content-addressed `feature_id`
 and `vision_revision`. They are retained in the SGLang payload and parity
@@ -224,6 +252,19 @@ vision_encoder/backend/emitted_feature_bytes_total, emitted_feature_bytes_interv
 vision_encoder/backend/encode_seconds_total, encode_seconds_interval
 vision_encoder/backend/images_per_second_interval
 vision_encoder/backend/seconds_per_request_interval
+
+perf_detail/rollout/vision_service_round_trip_time/{count,total,mean,p50,p95,max}
+perf_detail/rollout/precomputed_prepare_time/{count,total,mean,p50,p95,max}
+perf_detail/rollout/precomputed_to_list_time/{count,total,mean,p50,p95,max}
+perf_detail/rollout/http_request_build_time/{count,total,mean,p50,p95,max}
+perf_detail/rollout/http_response_wait_time/{count,total,mean,p50,p95,max}
+perf_detail/rollout/http_response_read_time/{count,total,mean,p50,p95,max}
+perf_detail/rollout/http_response_decode_time/{count,total,mean,p50,p95,max}
+perf_detail/rollout/precomputed_feature_bytes/{count,total,mean,p50,p95,max}
+perf_detail/rollout/http_request_body_bytes/{count,total,mean,p50,p95,max}
+perf_detail/rollout/http_response_body_bytes/{count,total,mean,p50,p95,max}
+perf_detail/rollout/sglang_generation_requests/{count,total,mean,p50,p95,max}
+perf_detail/rollout/sglang_parallel_samples/{count,total,mean,p50,p95,max}
 ```
 
 Cache hits increment total requests but do not increment backend work or
@@ -231,6 +272,20 @@ backend time. These counters are per replica, not a deployment-wide aggregate.
 The current correctness launcher uses one replica, so its snapshots are also
 deployment totals. Aggregate replica snapshots explicitly before interpreting
 a multi-replica experiment.
+
+The client-side CPU-service round trip includes Ray/Serve scheduling and
+feature-result transport, while the service's backend encode counter measures
+only actual visual execution on cache misses. Shared feature preparation and
+packed BF16 serialization are counted once per prompt group. HTTP request
+construction measures the actual JSON body construction performed by `httpx`
+and reports its exact byte length without serializing the payload a second
+time. `http_response_wait` still combines server queueing, reconstruction/H2D,
+prefill, and decode; those require separate server-side instrumentation if this
+combined boundary dominates.
+
+The historical metric name `precomputed_to_list_time` remains for W&B series
+continuity. It now measures contiguous-BF16/base64 packing, not conversion to
+nested Python lists.
 
 ## Execution plan
 
@@ -323,33 +378,48 @@ not by implementation difficulty.
    Measure this cache-stampede case separately from cross-replica duplication.
    If it occurs under the real rollout concurrency, add a per-feature in-flight
    future so one encode serves all waiters.
-3. **Binary feature transport.** The current SGLang request converts roughly
-   512 KiB of BF16 tensors per image into Python lists and JSON. Measure
-   packing, serialization, transfer, deserialization, and temporary RSS
-   separately. Replace JSON with a binary, shared-memory, or Ray object
-   reference path when serialization and transfer exceed 10% of rollout wall
-   time or duplicate payload bytes exceed twice the unique feature bytes.
-4. **Request batching is not configured batching.**
+3. **Grouped SGLang parallel sampling before a registry.** For eligible fresh
+   CPU-precomputed Qwen3-VL groups, send one JSON feature with
+   `sampling_params.n=N_SAMPLES_PER_PROMPT` and map the ordered response list
+   back to Relax samples. Keep deterministic, partial, resumed, custom,
+   Slime, routing-replay, and multi-engine non-round-robin cases on scalar
+   requests with an explicit logged reason. A non-round-robin policy is safe
+   when exactly one engine exists because there is no cross-engine routing
+   decision. Measure request count and bytes again before adding a new storage
+   layer.
+4. **Stateless packed transport before stateful storage.** Encode each
+   contiguous BF16 bundle as base64 in the existing JSON envelope, preserve its
+   dtype, shape, feature ID, vision revision, and grid, and reconstruct it
+   before SGLang's base processor reads `feature`. Require bit-exact BF16 wire
+   round trips and live native-versus-precomputed parity. Keep legacy nested
+   payloads readable during migration, and do not inspect native media objects
+   as dictionaries.
+5. **Binary registry only if cross-request duplication remains material.**
+   Measure packing, serialization, transfer, deserialization, reconstruction/
+   H2D, and temporary RSS again after packed transport. Use a bounded
+   engine-local binary/shared-memory registry only if the remaining repeated
+   traffic justifies ownership, routing, eviction, and missing-ID recovery.
+6. **Request batching is not configured batching.**
    `VISION_ENCODER_MAX_BATCH_SIZE` only rejects oversized requests; it does not
    coalesce independent requests. Measure queue delay and batch-size-one
    capacity first. Add bounded dynamic batching only if the larger-batch
    benchmark materially improves throughput without violating rollout latency.
-5. **Backpressure and in-flight memory.** Cache capacity does not include JSON
+7. **Backpressure and in-flight memory.** Cache capacity does not include JSON
    copies, Ray object copies, pinned staging buffers, GPU copies, or queued
    requests. Record peak process RSS and in-flight feature bytes, then bound
    admission or queue depth if the rollout producer can outrun the encoder or
    either consumer.
-6. **CPU allocation and oversubscription.** Ray reserves
+8. **CPU allocation and oversubscription.** Ray reserves
    `VISION_ENCODER_NUM_CPUS` per replica and the backend uses that value for
    PyTorch CPU threads. Benchmark total node throughput while actor, rollout,
    Ray Serve, and transfer services are active; isolated encoder throughput is
    not enough. Add replicas or threads only while end-to-end throughput scales
    and other services retain their latency budget.
-7. **Overlap proof.** Produce a common timeline containing queue, encode,
+9. **Overlap proof.** Produce a common timeline containing queue, encode,
    serialization, transfer, H2D, SGLang prefill, actor-forward, and actor
    training intervals. A fast isolated encoder is useful only if the CPU work
    overlaps GPU work and reduces or preserves end-to-end step time.
-8. **Cold start and recovery.** Measure model load, first encode, warm encode,
+10. **Cold start and recovery.** Measure model load, first encode, warm encode,
    cache rebuild after replica restart, and retry behavior. A content-addressed
    request may be retried safely, but the capacity plan must include the cold
    cache period.
@@ -436,15 +506,16 @@ or duplicate payloads exceed twice the unique feature bytes.
 ## Current performance boundary
 
 Resident CPU-vision mode bypasses GPU visual computation while keeping the
-visual modules resident. Omission mode can now avoid constructing or
-materializing those modules, but it remains opt-in until the parity gate
-passes on the target node.
+visual modules resident. Omission mode avoids constructing or materializing
+those modules. It remains opt-in and should be enabled only after both local
+HF and live SGLang parity pass on the target node.
 
-The SGLang router currently transports precomputed tensors as JSON lists.
-That is larger than the original PNG and can make this experimental path
-slower even when CPU encoding itself is fast. Measure request serialization,
-SGLang prefill time, actor time, cache hit rate, and end-to-end throughput
-before calling the design a performance win.
+The SGLang router now transports contiguous BF16 bytes as base64 inside the
+existing JSON envelope. This avoids nested numeric JSON but still retransmits
+one feature per distinct HTTP request and retains base64's 4/3 expansion.
+Measure request serialization, reconstruction/H2D, SGLang prefill time, actor
+time, cache hit rate, and end-to-end throughput before calling the design a
+general performance win.
 
 The local CPU smoke on 2026-07-28 successfully loaded the real refinement
 checkpoint, encoded one image, and wrote a scaling artifact. With one replica,
@@ -468,13 +539,76 @@ The GPU-resident live Ray/SGLang/Megatron two-cycle smoke passed on four MI210s
 on 2026-07-30. Both 64-sample rollouts completed, actor-forward consumed the
 final and all three numbered DeepStack streams, the DP2 actor completed four
 successful optimizer updates, final weights reached actor-forward and
-SGLang, and the job exited successfully without writing a checkpoint. The
-complete timeline, metrics, and two integration bugs found during bring-up are
-recorded in
+SGLang, and the job exited successfully without writing a checkpoint. A
+later audit found that this historical SGLang build received but ignored the
+precomputed embedding tensor, so this run is transport/Megatron evidence, not
+SGLang semantic evidence. The complete timeline and correction are recorded
+in
 `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`.
 
-This is a correctness result, not a performance result. Warm request latency
-showed qualitative cache reuse, but the run did not collect
-`VisionEncoder.get_metrics()` before shutdown. Exact cache behavior, overlap,
-GPU VRAM comparison, fixed-input SGLang/Megatron logit parity, and the
-GPU-weight-omission repeat remain open gates.
+On 2026-07-31, the corrected SGLang adapter passed the eight-image live gate:
+all generated tokens matched, maximum A/B log-probability delta was
+`1.430511474609375e-06`, and maximum action-margin delta was
+`1.043081283569336e-07`. A one-rollout omitted-weight Relax run then scored
+`0.69921875` held out, completed actor-forward and two optimizer steps, and
+kept Megatron/SGLang sampled-token log-probability differences below `5e-7`.
+Its baseline cache served 768 requests with 128 encodes and 640 hits. The
+evidence and scope limits are recorded in
+`training_reports/2026-07-31-qwen3-vl-live-precomputed-deepstack-parity.md`.
+
+This is now a correctness result for single-image PP1/CP1. The corrected
+three-mode repeat on 2026-08-01 measured JSON feature
+transport directly: a 524,312-byte raw feature expanded to a 2.907 MB request,
+the 768-request evaluation sent 2.233 GB, and a 64-sample rollout sent about
+185 MB for eight unique features. The CPU backend needed only 49-54 seconds to
+encode the 128 unique evaluation images.
+
+The 2026-08-03 live SGLang gate then proved the smaller first transport step:
+one precomputed `n=8` request was 3,179,557 bytes versus 25,436,392 bytes for
+eight scalar-equivalent requests, an 87.50% reduction. All eight greedy
+outputs matched the scalar request and maximum A/B log-probability delta was
+`2.98e-7`. Relax therefore groups only fresh homogeneous CPU-precomputed
+Qwen3-VL samples. Deterministic inference remains scalar because native
+SGLang parallel sampling does not assign distinct branch seeds.
+
+The matched two-rollout run passed on 2026-08-03. Each 64-sample rollout used
+eight SGLang requests, reducing mean request traffic from 185.40 MB to 23.25
+MB and mean rollout time from 21.51 seconds to 5.82 seconds. This is an 87.46%
+traffic reduction and 3.70x rollout speedup. Per-device VRAM peaks were
+unchanged, as expected for a transport optimization.
+
+On 2026-08-04, evaluation grouping was decoupled from `group_rm`. The 128
+held-out prompts now each use one `n=4` request, while deterministic controls
+remain scalar, cutting nested-list evaluation from 768 requests and 2.233 GB
+to 384 requests and 1.117 GB. Stateless packed BF16 then reduced the same
+evaluation to 268.9 MB. The live native-versus-packed gate matched every token
+with maximum A/B log-probability delta `1.43e-6`; the matched two-rollout run
+sent 5.60 MB per 64 samples and completed all four optimizer updates. Defer a
+general registry until the remaining cross-request traffic is measured as the
+next bottleneck. CPU replica scaling still comes after that boundary. See
+`training_reports/2026-08-04-qwen3-vl-packed-cpu-vision-transport.md` and
+`training_reports/2026-08-03-qwen3-vl-sglang-parallel-sampling.md`.
+
+On 2026-08-06, Relax extended the narrow grouped request contract to native
+processor-backed image-only groups and ran matched 20-cycle native and
+CPU-omitted jobs with evaluation disabled. The CPU cache was limited to one
+byte, producing 160 misses, 160 evictions, and zero hits. Even under that
+worst-case cache condition, the CPU backend encoded each eight-image rollout
+batch in 1.904 seconds on average, every rollout interval overlapped actor
+work, and steady actor data wait averaged only 0.238 seconds. CPU rollout wall
+was 4.789 seconds versus 3.263 seconds native, but removing frozen visual work
+reduced actor compute by 13.68%, complete actor-cycle time by 9.67%, and the
+simultaneous four-card peak by 738.03 MiB. Packed feature transport remained
+383.5 times native request bytes without pacing the actor.
+
+The native `n=8` probe matched all 64 generated tokens and texts but failed
+the strict branch-score gate: maximum action-log-probability, margin, and
+probability deltas were `0.03938`, `0.06250`, and `0.01457`. Preserve that
+failure. The native run is a performance counterfactual, not strict scalar
+logit-parity evidence. See
+`training_reports/2026-08-06-qwen3-vl-cpu-vision-steady-state-overlap.md`.
+
+CPU capacity under a workload that actually starves the actor, replica-level
+cache routing, video, multi-image requests, context/pipeline parallelism, and
+chunked multimodal prefill remain open. A binary feature registry is deferred
+until remaining transport is observed to pace a consumer.

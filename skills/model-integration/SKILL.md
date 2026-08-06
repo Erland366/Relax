@@ -1,6 +1,6 @@
 ---
 name: model-integration
-description: Guide for integrating a model into Relax. Use when adding an architecture, writing Megatron-to-HF converters, implementing TP gather/chunk logic, debugging weight sync, adapting colocate or fully-async execution, or routing precomputed multimodal features through rollout and training. Covers Megatron bridge/raw modes, FSDP, and live multimodal parity gates.
+description: Guide for integrating a model into Relax. Use when adding an architecture, writing Megatron-to-HF converters, implementing TP gather/chunk logic, debugging weight sync, adapting colocate or fully-async execution, routing precomputed multimodal features, or profiling their cache and transport path. Covers Megatron bridge/raw modes, FSDP, and live multimodal parity gates.
 ---
 
 # Model Integration Guide
@@ -220,6 +220,17 @@ When offloading a frozen vision/audio encoder or injecting precomputed
 features, validate the following gates in order. Stop at the first failure;
 do not use a later end-to-end success to waive an earlier semantic mismatch.
 
+For every live consumer, distinguish these states explicitly:
+
+```text
+payload produced -> transported -> parsed -> injected into model -> logits match
+```
+
+The first three states are structural evidence only. Cache hits, valid feature
+IDs, successful request parsing, GPU-weight omission, or a completed RL cycle
+do not prove that the consumer passed the supplied representation into its
+language-model forward.
+
 ```text
 structural contract
   -> standalone representation parity
@@ -245,7 +256,9 @@ structural contract
 4. **Live rollout parity:** repeat the fixed-input comparison inside SGLang or
    the selected rollout backend. Record processor-expanded prompt IDs,
    position IDs, grid metadata, reconstructed feature dtype/device, all
-   multimodal streams, and policy version.
+   multimodal streams, and policy version. Verify the actual language-model
+   call consumes those tensors; observing them in a parsed request object is
+   not sufficient.
 5. **Live training parity:** feed the exact same immutable bundle and token
    sequence to actor-forward/training and compare logits before relying on
    importance sampling or policy synchronization diagnostics.
@@ -259,16 +272,122 @@ structural contract
    count only after every semantic gate passes. Track total requests separately
    from backend encode work, and aggregate counters across replicas.
 
+### Performance gate for cached precomputed features
+
+Treat each downstream reuse boundary separately. A CPU encoder cache hit proves
+only that encoder execution was avoided; it does not prove reuse of
+serialization, transport, reconstruction, H2D, or prefill.
+
+Before scaling CPU threads or replicas, record:
+
+- unique feature count, service requests, backend encodes, hits, and evictions;
+- raw unique-feature bytes and serialized/on-wire request bytes;
+- conversion, request-build, service-round-trip, and response-wait timing; and
+- generation requests per unique feature, including `n_samples_per_prompt`.
+
+Compute JSON expansion (`mean request bytes / mean raw feature bytes`) and
+effective amplification (`total request bytes / unique raw feature bytes`). If
+request construction or repeated transport dominates backend encode work, fix
+transport first.
+
+Before adding a registry, test whether the rollout engine can branch multiple
+samples from one multimodal request. For SGLang, `sampling_params.n` can remove
+within-prompt retransmission while preserving one parsed precomputed bundle.
+Gate it on exact ordered response cardinality, scalar-equivalent log-probs,
+request bytes, and the framework's seed semantics. Keep deterministic mode on
+scalar requests unless the engine proves distinct per-branch seeds; also keep
+partial/resumed/custom generations scalar until their abort and continuation
+contracts are proven. With multiple engines, keep non-round-robin routing
+scalar so grouping does not erase per-sample routing decisions; any routing
+policy is safe when exactly one engine exists. Count grouped HTTP timing and
+bytes once, not once per returned sample.
+
+Before adding mutable server state, benchmark a compact lossless inline
+representation. For BF16 features, send contiguous bytes plus explicit dtype
+and shape in the existing request envelope; base64 is acceptable as the
+stateless first gate. Require an exact BF16 bit round trip and repeat the live
+native-versus-precomputed logit gate. Decode before the rollout backend's base
+multimodal processor reads `feature`, remove transport-only fields afterward,
+and guard the decoder so native PIL/media objects retain their established
+path. Preserve a legacy reader only when migration compatibility is explicit.
+
+If repeated transport across distinct requests remains material afterward,
+prefer one explicit bounded engine-local registry keyed by `feature_id` and
+`vision_revision`: upload each immutable bundle once through binary or shared
+memory, then use ID-only generation requests. Fail on missing IDs, revision or
+shape mismatches, wrong-engine routing, and eviction; never silently recompute
+raw vision. Instrument upload, registry hit/miss, fetch, reconstruction/H2D,
+prefill, and eviction before comparing throughput again.
+
+For fully asynchronous VRAM comparisons, retain per-role device peaks and
+phase context. One simultaneous cluster maximum is schedule-sensitive; isolate
+omission with repeated runs or synchronized phase-specific probes.
+
+The corrected Qwen3-VL example exposed the pattern: a 524,312-byte feature
+became a 2.907 MB JSON request, 768 evaluation requests sent 2.233 GB, and the
+CPU backend spent only 49-54 seconds encoding 128 unique images. See the
+2026-08-01 performance report; do not treat these model-specific values as
+universal thresholds.
+
+The 2026-08-04 follow-up grouped stochastic evaluation independently of reward
+grouping and replaced nested numeric JSON with inline BF16 base64. Under the
+same omitted-weight workload, evaluation fell from 1.117 GB grouped nested
+traffic to 268.9 MB packed traffic, and each 64-sample rollout sent 5.60 MB.
+Live native-versus-packed tokens matched with maximum A/B log-probability delta
+`1.43e-6`; all four optimizer updates passed. See the packed-transport report
+before proposing a feature registry.
+
 Qwen3-VL precomputed requests must use processor-expanded prompt IDs that
 match the visual grid. Preserve numbered DeepStack streams in index order or
 assemble them into the exact ordered container expected by the language-model
 wrapper; reject mixed or missing representations instead of falling back.
+
+SGLang's generic transformers wrapper historically parsed
+`item.precomputed_embeddings` while its ordinary multimodal forward gathered
+only raw `item.feature` values. The corrected Qwen3-VL path uses an explicit
+all-precomputed prefill adapter: it validates and splits the packed final plus
+DeepStack streams, scatters the final stream into image-token positions, and
+passes the visual-position mask and ordered DeepStack streams to the language
+model. Native-image requests and decode keep their original path, while mixed
+native/precomputed prefill fails explicitly.
+
+### Qwen3-VL live regression probe
+
+Run the fixed-image native-versus-precomputed comparison inside one real
+SGLang transformers server before benchmarking the CPU path:
+
+```bash
+python -m examples.visual_xor.validate_sglang_cpu_vision_parity \
+  --checkpoint "$VISUAL_REFINEMENT_SFT" \
+  --dataset "$VISUAL_REFINEMENT_DATA/refinement_rl_eval.parquet" \
+  --output benchmark_results/cpu_vision/sglang_live_parity.json \
+  --num-images 8 \
+  --host 127.0.0.1 \
+  --port 31000 \
+  --base-gpu-id 0
+```
+
+Use the same SGLang Python environment and ROCm `sgl_kernel` paths as the
+Relax launcher. The validated 2026-07-31 run matched generated tokens and
+decoded text on all eight images. Its maximum A/B log-probability delta was
+`1.430511474609375e-06`, maximum action-margin delta was
+`1.043081283569336e-07`, and maximum normalized action-probability delta was
+`1.7429432036530912e-08`.
+
+The follow-up omitted-weight Relax run kept rollout-versus-Megatron
+sampled-token log-probability mean absolute differences below `5e-7` at both
+optimizer updates. This is a live actual-sample cross-backend gate, not a
+within-Megatron native-versus-precomputed full-vocabulary comparison.
 
 Evidence and measured examples:
 
 - `training_reports/2026-07-30-qwen3-vl-cpu-gpu-vision-parity.md`
 - `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`
 - `training_reports/2026-07-31-qwen3-vl-vision-three-mode-vram.md`
+- `training_reports/2026-07-31-qwen3-vl-live-precomputed-deepstack-parity.md`
+- `training_reports/2026-08-01-qwen3-vl-corrected-three-mode-performance.md`
+- `training_reports/2026-08-03-qwen3-vl-sglang-parallel-sampling.md`
+- `training_reports/2026-08-04-qwen3-vl-packed-cpu-vision-transport.md`
 
 ## Validation Checklist
 

@@ -1,0 +1,53 @@
+{
+  "baseline_total_used_bytes": 52543488,
+  "command": [
+    "env",
+    "HIP_VISIBLE_DEVICES=0,1,2,3",
+    "NUM_ROLLOUT=2",
+    "EVAL_INTERVAL=4",
+    "SAVE_CHECKPOINTS=0",
+    "bash",
+    "scripts/debug/qwen3_vl_visual_xor_refinement_fully_async_4gpus.sh"
+  ],
+  "devices": {
+    "card0": {
+      "baseline_used_bytes": 13135872,
+      "final_used_bytes": 13135872,
+      "peak_delta_bytes": 3160973312,
+      "peak_used_bytes": 3174109184,
+      "total_bytes": 68702699520
+    },
+    "card1": {
+      "baseline_used_bytes": 13135872,
+      "final_used_bytes": 13135872,
+      "peak_delta_bytes": 2696433664,
+      "peak_used_bytes": 2709569536,
+      "total_bytes": 68702699520
+    },
+    "card2": {
+      "baseline_used_bytes": 13135872,
+      "final_used_bytes": 13135872,
+      "peak_delta_bytes": 8351199232,
+      "peak_used_bytes": 8364335104,
+      "total_bytes": 68702699520
+    },
+    "card3": {
+      "baseline_used_bytes": 13135872,
+      "final_used_bytes": 13135872,
+      "peak_delta_bytes": 7791824896,
+      "peak_used_bytes": 7804960768,
+      "total_bytes": 68702699520
+    }
+  },
+  "duration_seconds": 704.3958343788981,
+  "exit_code": 0,
+  "final_total_used_bytes": 52543488,
+  "finished_at": "2026-08-01T14:23:41.990443+00:00",
+  "label": "native-gpu-corrected",
+  "peak_simultaneous_total_delta_bytes": 21641023488,
+  "peak_simultaneous_total_used_bytes": 21693566976,
+  "sample_count": 823,
+  "sample_interval_seconds": 0.5,
+  "schema_version": 1,
+  "started_at": "2026-08-01T14:11:57.594604+00:00"
+}

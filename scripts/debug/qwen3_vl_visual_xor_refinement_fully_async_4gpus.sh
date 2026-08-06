@@ -7,8 +7,17 @@ cd "${ROOT_DIR}"
 
 export REFINEMENT_DATA="${REFINEMENT_DATA:-/vast/users/qirong.ho/erland/Python_project/SFT_training/visual_xor_refinement_data}"
 export PROMPT_SET="${PROMPT_SET:-${REFINEMENT_DATA}/refinement_rl_train.parquet}"
-export EVAL_CONFIG="${EVAL_CONFIG:-${REFINEMENT_DATA}/refinement_eval_config.json}"
 export HF_CHECKPOINT="${HF_CHECKPOINT:-/vast/users/qirong.ho/erland/Python_project/SFT_training/qwen3-vl-0.37b-visual-xor-refinement-sft}"
+
+ENABLE_EVAL="${ENABLE_EVAL:-1}"
+if [ "${ENABLE_EVAL}" = "1" ]; then
+    export EVAL_CONFIG="${EVAL_CONFIG:-${REFINEMENT_DATA}/refinement_eval_config.json}"
+elif [ "${ENABLE_EVAL}" = "0" ]; then
+    unset EVAL_CONFIG EVAL_INTERVAL EVAL_MAX_CONTEXT_LEN EVAL_MAX_PROMPT_LEN EVAL_MAX_RESPONSE_LEN
+else
+    echo "ENABLE_EVAL must be 0 or 1, got ${ENABLE_EVAL}" >&2
+    exit 2
+fi
 
 if [ ! -f "${HF_CHECKPOINT}/config.json" ]; then
     echo "HF_CHECKPOINT does not contain config.json: ${HF_CHECKPOINT}" >&2
@@ -19,7 +28,7 @@ if [ ! -f "${PROMPT_SET}" ]; then
     echo "PROMPT_SET does not exist: ${PROMPT_SET}" >&2
     exit 2
 fi
-if [ ! -f "${EVAL_CONFIG}" ]; then
+if [ "${ENABLE_EVAL}" = "1" ] && [ ! -f "${EVAL_CONFIG}" ]; then
     echo "EVAL_CONFIG does not exist: ${EVAL_CONFIG}" >&2
     exit 2
 fi
@@ -97,10 +106,12 @@ export ROLLOUT_SHUFFLE=0
 
 # Evaluate the held-out images and two anti-shortcut controls before training,
 # halfway through each 16-step data cycle, and at every cycle boundary.
-export EVAL_INTERVAL="${EVAL_INTERVAL:-4}"
-export EVAL_MAX_CONTEXT_LEN=512
-export EVAL_MAX_PROMPT_LEN=511
-export EVAL_MAX_RESPONSE_LEN=3
+if [ "${ENABLE_EVAL}" = "1" ]; then
+    export EVAL_INTERVAL="${EVAL_INTERVAL:-4}"
+    export EVAL_MAX_CONTEXT_LEN=512
+    export EVAL_MAX_PROMPT_LEN=511
+    export EVAL_MAX_RESPONSE_LEN=3
+fi
 
 export ROLLOUT_TEMPERATURE=1.0
 export ROLLOUT_TOP_P=1.0

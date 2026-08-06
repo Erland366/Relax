@@ -3970,3 +3970,615 @@ Artifacts:
 - `benchmark_results/cpu_vision/20260731_three_mode_two_cycle/native_gpu_vram.json`
 - `benchmark_results/cpu_vision/20260731_three_mode_two_cycle/cpu_resident_vram.json`
 - `benchmark_results/cpu_vision/20260731_three_mode_two_cycle/cpu_omitted_vram.json`
+
+## 2026-07-31 - Frozen CPU vision live semantic-parity closure
+
+**Type:** Corrective retrospective and correctness gate
+
+**General description:** A deterministic live-backend investigation found
+that SGLang parsed and transported the CPU feature bundle but did not consume
+it in the Qwen3-VL language-model forward; the corrected final-plus-DeepStack
+adapter now matches native GPU vision for the tested single-image PP1/CP1
+path.
+
+### What we tried
+
+- Preserved the earlier Hugging Face eight-image representation and
+  full-vocabulary logit parity as the standalone boundary check.
+- Traced the real generic-transformers SGLang multimodal forward after the
+  three-mode benchmark showed chance-level CPU behavior despite successful
+  Relax cycles.
+- Added an explicit all-precomputed Qwen3-VL prefill adapter that validates
+  the packed feature width, separates the final projection from all three
+  DeepStack projections, scatters the final stream into image-token
+  positions, and supplies both the visual mask and DeepStack streams to the
+  language model.
+- Added a deterministic live SGLang probe that evaluates eight fixed images
+  through native GPU vision and CPU-precomputed vision in the same server and
+  compares generated tokens, decoded text, A/B log probabilities, action
+  margins, and normalized action probabilities.
+- Repeated an omitted-GPU-weight Relax workload through evaluation, rollout,
+  Megatron actor-forward, two optimizer updates, weight synchronization, and
+  shutdown while collecting CPU cache counters and rollout-versus-training
+  sampled-token log probabilities.
+
+### Key findings
+
+- The root cause was semantic consumption, not encoding or transport:
+  SGLang's wrapper read raw `item.feature` inputs for visual execution but
+  ignored `item.precomputed_embeddings`. A valid serialized payload and a
+  successful RL cycle therefore did not prove that rollout used the CPU
+  representation.
+- DeepStack is part of the Qwen3-VL representation contract. Injecting only
+  the final projected visual stream is insufficient; the three configured
+  intermediate streams must reach their selected language layers in order.
+- The deterministic live SGLang gate passed all eight images: generated-token
+  and decoded-text match rates were `1.0`; maximum A/B log-probability delta
+  was `1.430511474609375e-06`; maximum action-margin delta was
+  `1.043081283569336e-07`; and maximum normalized action-probability delta was
+  `1.7429432036530912e-08`.
+- The corrected omitted-weight Relax run recovered native-like behavior:
+  held-out reward `0.69921875`, valid-action rate `1.0`, and action-A rate
+  `0.453125`, versus the historical broken-consumer result of `0.5000` reward
+  and `0.7148` action-A rate. Because these are stochastic evaluations, the
+  deterministic probe—not the reward difference—is the parity proof.
+- SGLang rollout and Megatron actor-forward agreed on sampled-token log
+  probabilities within `5e-7` mean absolute error at both optimizer updates.
+  This closes the actual-sample cross-backend gate, but it is not a separate
+  within-Megatron native-versus-precomputed full-vocabulary comparison.
+- The CPU cache counters were internally consistent: 768 requests over 128
+  unique images produced 640 hits, 128 misses/encodes, an `83.33%` hit rate,
+  zero evictions, and 67,111,936 resident feature bytes.
+- Correctness must be established at every consumer boundary before measuring
+  performance. The earlier three-mode timing numbers describe the historical
+  broken-consumer implementation and must be rerun before making a scaling or
+  throughput recommendation for the corrected path.
+
+### What failed or required correction
+
+- The original two-cycle smoke was over-interpreted as proof that SGLang
+  consumed shared features. It remains valid evidence for CPU encoding,
+  caching, transport, Megatron consumption/training, synchronization, and
+  shutdown only.
+- Stochastic task reward and action distribution exposed the mismatch but
+  could not locate it. The fixed-input native-versus-precomputed live-logit
+  comparison was the decisive diagnostic.
+- Treating payload parsing, feature IDs, cache hits, or successful GPU-weight
+  omission as semantic proof was insufficient. A backend can carry all of
+  that metadata while silently following its ordinary embedding path.
+- The historical native/CPU wall-time comparison cannot be used to select CPU
+  thread count, replica count, batching, or transport until all three modes
+  are rerun with the corrected SGLang consumer.
+
+### Open questions
+
+- What is the corrected native-versus-CPU-resident-versus-CPU-omitted
+  throughput and latency under an equal workload?
+- How much of the CPU-path overhead comes from JSON tensor serialization,
+  Ray/Serve transport, feature reconstruction, scheduling, and CPU encoding?
+- Does binary or shared-memory transport materially improve the path before
+  CPU replica scaling is attempted?
+- How should feature-ID-sticky routing or a shared cache avoid duplicate
+  encoding when multiple CPU replicas are introduced?
+- Do the same contracts hold for multiple images, video, chunked multimodal
+  prefill, context parallelism, pipeline parallelism greater than one, and
+  mixed native/precomputed scheduling?
+- Is a within-Megatron fixed-input full-vocabulary native-versus-precomputed
+  comparison worth adding beyond the passing sampled-token cross-backend gate?
+
+Reports:
+
+- `training_reports/2026-07-31-qwen3-vl-live-precomputed-deepstack-parity.md`
+- `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`
+- `training_reports/2026-07-31-qwen3-vl-vision-three-mode-vram.md`
+
+Artifacts:
+
+- `benchmark_results/cpu_vision/20260731_sglang_live_parity/parity.json`
+- `benchmark_results/cpu_vision/20260730_hf_parity/parity.json`
+- `log/visual-xor-refinement-cpu-omitted-20260731_115759.log`
+
+## 2026-08-01 - Corrected CPU vision performance boundary
+
+**Type:** Experiment and decision
+**General description:** The corrected native, CPU-resident, and CPU-omitted
+Qwen3-VL workloads all passed. Stage instrumentation located the first
+performance bottleneck in repeated JSON feature transport rather than CPU
+encoding.
+
+### Key findings
+
+- All three matched fully asynchronous runs completed baseline evaluation,
+  two rollouts, four optimizer updates, final synchronization, and clean
+  shutdown without checkpoints.
+- Held-out rewards were `0.7090` native, `0.6816` CPU resident, and `0.7031`
+  CPU omitted. Both corrected CPU modes retained native-like behavior.
+- The CPU LRU served 640 of 768 evaluation requests from cache and encoded
+  only 128 unique images. Actual backend encode time was 49-54 seconds.
+- One raw feature was 524,312 bytes, while one JSON generation request
+  averaged 2.907 MB. Evaluation transported 2.233 GB; each 64-sample rollout
+  transported about 185 MB for only eight unique features.
+- CPU evaluation request construction alone averaged 0.37 seconds per
+  request. Mean response wait was about 4.0-4.1 seconds versus 1.12 seconds
+  native. Tensor-to-list conversion averaged only 21-24 milliseconds.
+- CPU modes took 1.455x and 1.487x native wall time. Omitting weights changed
+  CPU-resident wall time by only 2.2%, confirming that it is a memory feature.
+- Omission reduced every per-device peak by 26-60 MiB, totaling 190.61 MiB
+  across independent device peaks. The asynchronous simultaneous maximum
+  reversed ordering across repeats, so it is schedule-sensitive and not a
+  clean isolated weight-memory statistic.
+
+### Decision
+
+- Do not scale CPU replicas yet.
+- Add a bounded SGLang-side feature registry keyed by `feature_id` and
+  `vision_revision`, upload each feature once through binary or shared memory,
+  and use ID-only repeated generation requests.
+- Instrument registry upload, hits/misses, fetch, H2D/reconstruction, prefill,
+  and eviction. Rerun the matched comparison before CPU scaling.
+
+Report:
+
+- `training_reports/2026-08-01-qwen3-vl-corrected-three-mode-performance.md`
+
+## 2026-08-03 - Qwen3-VL SGLang parallel sampling
+
+**Type:** Implementation, experiment, and decision
+**General description:** Relax now sends one CPU-precomputed final-plus-
+DeepStack feature bundle to SGLang for eight stochastic branches instead of
+retransmitting it once per sample. Standalone parity and a fully asynchronous
+two-rollout CPU-omitted run passed.
+
+### Key findings
+
+- The live `n=8` parity gate matched all eight ordered outputs. Maximum A/B
+  log-probability delta was `2.98e-7`, and request bytes fell from 25,436,392
+  for eight scalar-equivalent requests to 3,179,557 for one grouped request.
+- The first integration attempt remained scalar because Relax used a
+  cache-aware router. That run was stopped after rollout 0 and excluded.
+- A red test proved the eligibility bug. Grouping now accepts any routing
+  policy when exactly one SGLang engine exists; multi-engine non-round-robin
+  routing remains scalar.
+- In the accepted run, each 64-sample rollout used eight SGLang requests.
+  Mean request traffic fell from 185.40 MB to 23.25 MB, an 87.46% reduction.
+- Mean rollout time fell from 21.51 seconds to 5.82 seconds: 72.97% lower and
+  3.699x faster.
+- Both rollouts, actor-forward, four successful optimizer updates, final
+  rollout and actor-forward weight synchronization, and clean shutdown
+  completed. Checkpoint saving remained disabled.
+- Grouped and previous scalar CPU-omitted per-device VRAM peaks were
+  effectively identical. This is a transport optimization, not an additional
+  weight-memory optimization.
+- Baseline evaluation remained scalar and sent 2.233 GB across 768 requests.
+  The remaining transport problem is cross-request reuse rather than the
+  within-prompt `N_SAMPLES_PER_PROMPT=8` amplification.
+
+### Decision
+
+- Keep native SGLang parallel sampling for narrowly eligible fresh,
+  homogeneous, stochastic CPU-precomputed Qwen3-VL groups.
+- Keep deterministic, partial, resumed, custom, Slime, routing-replay, and
+  multi-engine non-round-robin cases on the scalar path with an explicit
+  reason.
+- Defer a general SGLang feature registry for training rollouts. If registry
+  or binary transport is pursued, require evidence from repeated distinct
+  requests such as scalar evaluation.
+- Do not scale CPU vision replicas until the remaining cross-request boundary
+  is measured and addressed.
+
+Report:
+
+- `training_reports/2026-08-03-qwen3-vl-sglang-parallel-sampling.md`
+
+Artifacts:
+
+- `benchmark_results/cpu_vision/20260803_sglang_parallel_n8/probe.json`
+- `benchmark_results/cpu_vision/20260803_sglang_parallel_n8/cpu_omitted_two_rollout_vram.json`
+
+Accepted run:
+
+- Ray job `raysubmit_GLUEF5ZUBeq5S13S`
+- W&B run `lr67sp9v`
+- `log/visual-xor-refinement-cpu-omitted-20260803_174541.log`
+
+Artifacts:
+
+- `benchmark_results/cpu_vision/20260801_corrected_three_mode/native_gpu_vram_retry1.json`
+- `benchmark_results/cpu_vision/20260801_corrected_three_mode/cpu_resident_vram.json`
+- `benchmark_results/cpu_vision/20260801_corrected_three_mode/cpu_omitted_vram.json`
+
+## 2026-08-01 - Retrospective on corrected CPU vision performance
+
+**Type:** Retrospective
+**General description:** Once live SGLang semantic parity was established, a
+matched three-mode rerun separated CPU encoding, cache behavior, feature
+conversion, transport, serving latency, and asynchronous GPU-memory peaks.
+
+### What we tried
+
+- Reran native GPU vision, CPU-precomputed vision with resident GPU visual
+  weights, and CPU-precomputed vision with GPU visual weights omitted under
+  the same fully asynchronous two-rollout workload.
+- Kept the actor DP2, rollout GPU, actor-forward GPU, rollout sampling,
+  evaluation, optimizer, and no-checkpoint configuration matched.
+- Added per-stage count, total, mean, p50, p95, and maximum timing metrics,
+  plus exact raw-feature and HTTP body sizes.
+- Counted prompt-shared CPU feature work once while retaining per-generation
+  HTTP metrics.
+- Measured both independent per-device peaks and the simultaneous four-device
+  maximum from a common idle baseline.
+
+### Key findings
+
+- Correctness and performance gates must remain ordered. The earlier smoke
+  proved production and transport of CPU features but not live SGLang
+  consumption; the corrected live-logit gate had to pass before rerunning
+  performance experiments.
+- The corrected CPU modes scored `0.6816` and `0.7031` held out versus
+  `0.7090` native, with valid-action rate `1.0`. Omission preserved behavior.
+- The CPU LRU behaved correctly: 128 unique evaluation images produced 128
+  encodes, 640 hits, no evictions, and only 49-54 seconds of backend work.
+- A cache hit at the CPU service did not eliminate downstream work. Every
+  generation request still converted and transmitted the full feature.
+- One 524,312-byte raw feature became a 2.907 MB JSON request. The 768-request
+  evaluation transported 2.233 GB, and a 64-sample rollout transported about
+  185 MB for eight unique features totaling only 4.19 MB.
+- CPU request construction averaged about 0.37 seconds and mean response wait
+  about 4.0-4.1 seconds, while tensor-to-list conversion averaged only 21-24
+  milliseconds. The first optimization boundary is repeated JSON transport,
+  not CPU replica count.
+- Omitting visual weights reduced every independent per-device peak by 26-60
+  MiB. The simultaneous maximum reversed ordering across asynchronous repeats,
+  proving that a single cluster-wide maximum is not an isolated weight-memory
+  statistic.
+
+### What failed or required correction
+
+- Treating a successful end-to-end RL cycle as proof that SGLang consumed the
+  intended representation was incorrect. Structural payload evidence and
+  task reward could expose a problem but could not prove semantic equivalence.
+- The first native benchmark attempt inherited an unrelated `engram-vit`
+  virtual environment. It failed before Ray startup and was excluded; the
+  sanitized Relax-environment retry is the accepted native baseline.
+- The initial performance intuition focused too early on CPU parallelism.
+  Backend encode counters showed that increasing encoder replicas would leave
+  the dominant serialization and repeated-transfer costs intact.
+- Summing concurrent-request duration totals as wall time would be incorrect.
+  These totals measure accumulated work/latency; matched wall-clock duration
+  and per-request distributions remain separate evidence.
+- Interpreting one fully asynchronous simultaneous VRAM maximum as clean
+  omission savings was unstable. Role-local per-device peaks were repeatable;
+  overlap timing was not.
+
+### Open questions
+
+- What is the smallest explicit SGLang-side registry contract that supports
+  final plus DeepStack streams without introducing a second hidden cache path?
+- Should the first transport prototype use a binary upload endpoint, Ray
+  object-store handoff, or same-node shared memory?
+- How should registry ownership, revision validation, bounded LRU eviction,
+  and shutdown cleanup work across SGLang process boundaries?
+- Which server-side metrics cleanly separate registry fetch, reconstruction,
+  H2D, prefill, and decode from router queueing?
+- After ID-only repeated requests are working, how much of the remaining gap
+  responds to CPU thread count, encoder batching, or multiple replicas?
+- For multiple SGLang engines, should features use sticky routing or explicit
+  replication, and how is a missing registration retried without silently
+  falling back to raw vision?
+- How should repeated synchronized phase-specific probes quantify aggregate
+  omission VRAM independently of fully asynchronous allocation overlap?
+
+### Reusable lessons
+
+- Use this validation order for precomputed multimodal work:
+  representation parity, standalone logits, live rollout logits, live
+  training consumption, behavior, memory isolation, then performance.
+- A cache must be evaluated at every downstream boundary. Cache hits do not
+  imply serialization, transport, reconstruction, or H2D reuse.
+- Record raw bytes and on-wire bytes together. Timing alone would not have
+  revealed the 5.5x JSON expansion or repeated-sample amplification.
+- Prefer a bounded engine-local feature registry over a general database for
+  the first transport proof. Make missing IDs, revision mismatches, shape
+  mismatches, and eviction explicit failures.
+- In fully asynchronous experiments, preserve role-local memory peaks and
+  phase timing; do not over-interpret one simultaneous maximum.
+
+Report:
+
+- `training_reports/2026-08-01-qwen3-vl-corrected-three-mode-performance.md`
+
+## 2026-08-04 - Retrospective on SGLang parallel sampling for CPU vision
+
+**Type:** Retrospective
+**General description:** The smallest transport optimization—one native
+SGLang branch request per prompt—removed the eight-sample retransmission from
+training rollouts without changing model semantics or GPU-memory ownership.
+
+### What we tried
+
+- Started from the corrected three-mode evidence that a 524,312-byte CPU
+  feature expanded into an approximately 2.907 MB JSON generation request and
+  was retransmitted once per generated sample.
+- Added an isolated live SGLang `n=8` gate that compared one grouped request
+  with eight scalar-equivalent requests for ordered outputs, text, A/B
+  log-probabilities, action margin, action probability, and exact body bytes.
+- Added narrowly gated Relax grouping for fresh homogeneous stochastic
+  CPU-precomputed Qwen3-VL samples, with exact response cardinality and ordered
+  mapping back to the original samples.
+- Ran a foreground startup gate, then a fully asynchronous CPU-omitted
+  workload containing baseline evaluation, two 64-sample rollouts, actor-
+  forward, four optimizer updates, final weight synchronization, and VRAM
+  monitoring.
+- Preserved the scalar path for unsupported generation and routing contracts
+  rather than widening native branching speculatively.
+
+### Key findings
+
+- Standalone parity passed: all eight outputs matched, maximum A/B
+  log-probability delta was `2.98e-7`, and request traffic fell from
+  25,436,392 bytes to 3,179,557 bytes, an 87.50% reduction.
+- The accepted Relax run used eight SGLang requests for each 64-sample
+  rollout. Mean traffic fell from 185.40 MB to 23.25 MB, an 87.46% reduction,
+  and mean rollout time fell from 21.51 seconds to 5.82 seconds, a 3.699x
+  speedup.
+- Both rollouts, actor-forward, all four optimizer updates, final rollout and
+  actor-forward synchronization, and clean shutdown passed. Grouping changed
+  the request boundary without changing the training-consumer boundary.
+- Grouped and scalar CPU-omitted per-device VRAM peaks were effectively
+  identical. Native branching is a transport optimization, not a GPU-weight
+  or activation-memory optimization.
+- One SGLang engine makes the router policy name irrelevant to grouping
+  safety: there is no alternative engine to select. With multiple engines,
+  non-round-robin routing must remain scalar until grouped routing semantics
+  are explicitly designed and tested.
+- Baseline evaluation still used 768 scalar requests and sent 2.233 GB.
+  Native branching closed within-prompt amplification but not repeated
+  transport across distinct requests.
+
+### What failed or required correction
+
+- The first Relax attempt required `round_robin` even though the workload had
+  one engine. The active router was `cache_aware`, so the run silently retained
+  the scalar path. Its rollout-0 metrics exposed the mistake; the run was
+  stopped and excluded. A red test then established the correct topology-based
+  eligibility rule.
+- The earlier performance decision jumped directly from repeated JSON
+  transport to a feature registry. That was too large a first step for
+  `N_SAMPLES_PER_PROMPT=8`; native SGLang branching removed the dominant
+  training-rollout duplication with a smaller contract.
+- Whole-run duration cannot establish the 3.699x speedup because startup and
+  scalar evaluation varied between runs. The defensible comparison is the
+  same-day scalar rollout against the two grouped rollout measurements.
+- A lower simultaneous fully asynchronous VRAM peak cannot be attributed to
+  grouping. Per-device peaks remained stable while role overlap changed.
+- One verification command inherited the unrelated `engram-vit` pytest
+  executable despite Conda activation. Calling the Relax environment's Python
+  directly with `python -m pytest` produced the valid 23-test passing result.
+
+### Open questions
+
+- For scalar evaluation, is evaluation-side fanout sufficient, or does
+  repeated cross-request reuse justify a bounded binary/engine-local feature
+  registry keyed by `feature_id` and `vision_revision`?
+- How should grouped requests route with multiple SGLang engines: prompt-
+  sticky ownership, explicit replication, or a different request contract?
+- Can a future SGLang interface provide distinct per-branch seeds so
+  deterministic Relax generation can use native branching without changing
+  reproducibility?
+- After cross-request transport is addressed, do server reconstruction/H2D,
+  prefill, CPU thread count, dynamic encoder batching, or replica count become
+  the next measurable boundary?
+- Does the same grouping contract preserve parity for multiple images, video,
+  chunked multimodal prefill, context parallelism, or pipeline parallelism?
+
+### Reusable lessons
+
+- Optimize repeated multimodal transport in increasing order of contract
+  size: native within-request branching, then measured cross-request reuse,
+  then a bounded registry or binary/shared-memory transport if still needed.
+- Derive eligibility from actual topology and semantic contracts, not a router
+  policy label. One engine and multiple engines have different safety proofs.
+- Count request construction, timing, and bytes once per grouped HTTP request;
+  keep tokens, log-probabilities, rewards, and finish metadata per returned
+  sample.
+- Require exact ordered response cardinality. A malformed or reordered branch
+  list must fail loudly rather than partially populating training samples.
+- Separate semantic parity, training consumption, transport performance, and
+  VRAM conclusions. Passing one does not imply the others.
+- Use phase-local same-day measurements for performance attribution; preserve
+  whole-run duration and asynchronous simultaneous peaks as context rather
+  than isolated causal evidence.
+
+Report:
+
+- `training_reports/2026-08-03-qwen3-vl-sglang-parallel-sampling.md`
+
+Existing reusable skill:
+
+- `model-integration` now records the branch-before-registry order, scalar
+  fallback boundaries, single-engine routing exception, and request-versus-
+  sample metric accounting. No additional result skill is needed yet.
+
+## 2026-08-04: grouped evaluation and packed BF16 CPU-vision transport
+
+**General description:** Separate generation fanout from reward semantics and
+replace nested numeric feature payloads with lossless stateless BF16 transport
+before introducing a distributed feature registry.
+
+### Context
+
+- The 2026-08-03 work removed repeated feature transmission across the eight
+  stochastic branches of each training prompt, but baseline evaluation still
+  used the scalar path because evaluation grouping was coupled to `group_rm`.
+- Even after grouping, one raw 524,312-byte BF16 feature was represented as
+  millions of bytes of nested numeric JSON. The next decision was whether to
+  add a stateful SGLang feature registry or first improve the inline wire
+  representation.
+
+### What changed
+
+- Evaluation now always forms one per-prompt generation group independently of
+  reward grouping. `group_rm=false` retains per-sample reward calculation; it
+  no longer disables SGLang `n>1` generation.
+- Branches share the original immutable multimodal object so the existing
+  grouped-sampling eligibility proof remains valid. Deterministic `n=1`
+  controls stay scalar.
+- Precomputed final-plus-DeepStack tensors are serialized as contiguous BF16
+  bytes with explicit dtype and shape, then base64-encoded inside the existing
+  JSON request envelope. Grid, feature ID, and vision revision remain explicit.
+- SGLang reconstructs the BF16 tensor before its base multimodal processor
+  reads `feature`, validates the exact byte count, and removes transport-only
+  fields. Legacy nested-list input remains readable; native media bypasses the
+  decoder.
+
+### Evidence
+
+- The accepted grouped nested-list run used 384 evaluation HTTP requests for
+  768 samples: 128 `n=4` held-out requests and 256 scalar control requests. It
+  sent 1,117,116,704 bytes, exactly half the request count and traffic of the
+  earlier scalar evaluation.
+- A real-feature serialization benchmark measured 3,017,467 bytes for nested
+  JSON and 700,301 bytes for inline BF16 base64. Median encode/body-build/decode
+  times fell from 7.507/66.816/7.659 ms to 0.522/15.068/0.971 ms.
+- A hypothetical binary upload plus ID requests projected 67.57 MB for grouped
+  evaluation versus 268.92 MB inline, but requires ownership, routing,
+  eviction, revision, and missing-ID contracts. Inline BF16 was therefore the
+  smallest justified change.
+- The live eight-image native-versus-packed SGLang gate matched every token and
+  text. Maximum A/B log-probability delta was `1.430511474609375e-06`; maximum
+  action-margin delta was `1.043081283569336e-07`.
+- The live `n=8` packed gate returned 64/64 matching outputs. Eight grouped
+  requests sent 5,602,616 bytes instead of 44,820,416 scalar-equivalent bytes.
+- Ray job `raysubmit_c3YzyTcrTuidT6us` and W&B run `kjp5zomx` completed the
+  matched CPU-omitted two-rollout workload. Evaluation sent 268,913,280 bytes,
+  75.93% below grouped nested JSON and 87.96% below the original scalar nested
+  path. Each 64-sample rollout sent 5,602,384 bytes across eight requests.
+- Rollout rewards were `0.6875` and `0.671875`, valid-action rate was `1.0`, and
+  all four optimizer updates succeeded with gradient norms `1.0058`, `1.3580`,
+  `4.9491`, and `1.3629`. Actor-forward and final synchronization completed.
+- Per-card VRAM peaks remained effectively identical to grouped nested
+  transport. Final memory returned exactly to baseline, Ray stopped, and no
+  checkpoint was written.
+
+### What failed or required correction
+
+- The first packed live request failed with `KeyError: feature`. Decoding in a
+  later collector was too late because SGLang's base processor had already
+  indexed the legacy field. The fix moved reconstruction to the early
+  `process_and_combine_mm_data` seam.
+- The next live parity attempt failed on native PNG input with
+  `AttributeError: PngImageFile has no attribute get`. The compatibility hook
+  had assumed every multimodal item was a dictionary. An explicit mapping
+  guard restored the native path.
+- The historical W&B key `precomputed_to_list_time` is now semantically stale.
+  It remains only to preserve dashboard continuity and is documented as packed
+  serialization time.
+- The first local transport benchmark used a temporary packed-format label
+  instead of production's existing `precomputed_embedding` label. The live
+  path was correct, but the benchmark was aligned and regenerated so its byte
+  counts describe the exact production envelope.
+- Lower response-wait or whole-run time cannot be attributed solely to packing
+  in a fully asynchronous run. Exact request bytes and client construction/
+  serialization timing are the defensible transport measurements.
+
+### Reusable lessons
+
+- Keep reward grouping and generation grouping as separate contracts. Reward
+  semantics must not accidentally disable an inference-engine optimization.
+- Optimize multimodal transport in ascending contract size: native branching,
+  compact stateless inline bytes, then a bounded stateful registry only if the
+  remaining cross-request traffic is still material.
+- Lossless wire-format tests are necessary but not sufficient. The decoder must
+  run at the consumer's actual read seam, native media must retain its path, and
+  live logits must still pass.
+- A feature registry is not just a smaller payload. It introduces engine
+  ownership, routing affinity or replication, eviction, revision consistency,
+  missing-ID recovery, and lifecycle cleanup.
+- Packing is a host/on-wire optimization. Do not claim GPU-memory savings when
+  per-device peaks are unchanged.
+- Performance microbenchmarks must instantiate the production wire schema;
+  semantically equivalent candidate labels are not sufficient evidence for
+  exact request-size claims.
+
+### Remaining questions
+
+- Is the remaining 268.9 MB evaluation traffic or SGLang reconstruction/H2D
+  now material enough to justify binary upload plus ID-only requests?
+- How would feature ownership work with multiple SGLang engines: prompt-sticky
+  routing, explicit replication, or a shared object transport?
+- Do multiple images, video, PP/CP greater than one, or chunked multimodal
+  prefill preserve the same final-plus-DeepStack contract?
+- After transport is no longer dominant, do CPU threads, dynamic batching,
+  replica count, or overlap become the next measured bottleneck?
+
+Report:
+
+- `training_reports/2026-08-04-qwen3-vl-packed-cpu-vision-transport.md`
+
+Existing reusable skill:
+
+- `model-integration` now records packed-inline-before-registry ordering, the
+  early decoder seam, native-media guard, and exact BF16/live-parity gates. No
+  additional result skill is needed yet.
+
+## 2026-08-06: CPU vision steady-state overlap and matched native counterfactual
+
+**General description:** Test whether one frozen CPU vision replica can stay
+ahead of fully asynchronous RL training before replacing the remaining packed
+JSON feature transport.
+
+### What changed
+
+- Native processor-backed image-only groups now share one processor pass and
+  raw-media encoding and use one SGLang `n=N` request under the same narrow
+  fresh-group safety contract as CPU-precomputed sampling.
+- Both fully asynchronous refinement launchers accept `ENABLE_EVAL=0` for an
+  explicit training-only profiling run; the default preserves evaluation.
+- `examples.visual_xor.analyze_overlap_timeline` pairs rollout and Megatron
+  optimizer intervals and writes unmatched-event and overlap evidence.
+
+### Evidence
+
+- The strict native `n=8` probe returned 64/64 matching tokens/texts but failed
+  its scalar-score gate: maximum action-log-probability, margin, and
+  probability deltas were `0.03938`, `0.06250`, and `0.01457`. The threshold
+  remained unchanged and the native training run is qualified as a
+  performance counterfactual.
+- The CPU-omitted run forced `VISION_ENCODER_CACHE_MAX_BYTES=1`: 160 misses,
+  160 evictions, zero hits, and 160 real encodes. Mean backend time was 1.904
+  seconds per eight images and steady rollout wall was 4.789 seconds.
+- All 20 CPU rollout intervals and 40 optimizer intervals were complete; all
+  105 rollout seconds overlapped actor optimizer work. Steady actor data wait
+  averaged 0.238 seconds, only 0.88% of its 26.829-second cycle.
+- Native rollout wall averaged 3.263 seconds, but its actor compute and complete
+  cycle averaged 15.674 and 29.700 seconds. CPU omission reduced those by
+  13.68% and 9.67% respectively.
+- CPU requests used 5,602,384 bytes per rollout versus 14,609 bytes native, a
+  383.5x expansion, but both producers filled the same staleness window and
+  neither starved the actor.
+- Simultaneous peak VRAM fell from 20.562 to 19.841 GiB. The reductions were
+  108.09/77.39 MiB on the actor ranks, 498.22 MiB on SGLang, and 76.27 MiB on
+  actor-forward.
+- Ray jobs `raysubmit_fahWwVRtsD5QD6An` and
+  `raysubmit_Eu9kS3dHqyZJ37rX` both completed 20 rollout cycles, 40 optimizer
+  updates, final synchronization, idle-memory recovery, and clean shutdown.
+
+### Decision
+
+- Keep stateless packed transport and omission mode for the next scale test.
+  Do not add a registry or CPU replicas until increased rollout demand makes
+  actor wait rise or prevents the producer from reaching staleness
+  backpressure.
+- Profile the 12-13 second per-cycle weight propagation phase independently;
+  it now occupies nearly as much time as actor compute.
+- Investigate native grouped branch-logit drift before treating it as a strict
+  correctness baseline. Do not weaken the gate.
+
+Report and artifacts:
+
+- `training_reports/2026-08-06-qwen3-vl-cpu-vision-steady-state-overlap.md`
+- `benchmark_results/cpu_vision/20260806_native_grouped_n8/probe.json`
+- `benchmark_results/cpu_vision/20260806_overlap_cpu_omitted_nocache/`
+- `benchmark_results/cpu_vision/20260806_overlap_native_grouped/`
+- `log/visual-xor-refinement-cpu-omitted-20260806_081340.log`
+- `log/visual-xor-refinement-native-gpu-20260806_083125.log`

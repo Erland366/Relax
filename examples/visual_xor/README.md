@@ -251,7 +251,11 @@ CPU-rich allocation. It is Qwen3-VL image-only and requires context and
 pipeline parallel sizes of one.
 
 The recipe defaults to one CPU replica and keeps GPU-weight omission disabled.
-First run the fixed-image parity gate:
+Set `ENABLE_EVAL=0` on either fully asynchronous refinement launcher for a
+training-only profiling run. This explicitly removes every evaluation config
+and interval; `ENABLE_EVAL=1` remains the default and preserves the established
+held-out and control evaluation behavior. First run the fixed-image parity
+gate:
 
 ```bash
 python -m examples.visual_xor.validate_cpu_vision_parity \
@@ -269,10 +273,123 @@ before GPU materialization; raw-image fallbacks fail loudly. The local
 checkpoint's theoretical BF16 parameter reduction is 51.66 MiB per full GPU
 model instance, but actual VRAM must still be measured.
 
+The local Hugging Face gate does not exercise SGLang. Run the live gate on one
+visible GPU, with the same SGLang Python and ROCm `sgl_kernel` paths used by
+the Relax launcher:
+
+```bash
+HIP_VISIBLE_DEVICES=0 \
+python -m examples.visual_xor.validate_sglang_cpu_vision_parity \
+  --checkpoint "$VISUAL_REFINEMENT_SFT" \
+  --dataset "$VISUAL_REFINEMENT_DATA/refinement_rl_eval.parquet" \
+  --output benchmark_results/cpu_vision/sglang_live_parity.json \
+  --num-images 8 \
+  --parallel-samples 8 \
+  --host 127.0.0.1 \
+  --port 31000 \
+  --base-gpu-id 0
+```
+
+This uses one SGLang server with resident visual weights, sends each fixed
+image through native GPU vision and CPU-precomputed vision, flushes the cache
+between paths, and compares the generated token plus exact A/B next-token
+log-probabilities. With `--parallel-samples 8`, it also tests one precomputed
+request and one native raw-image request returning eight ordered outputs and
+records their scalar-equivalent versus actual request bytes. The precomputed
+grouped gate is strictly score-matched. Native grouped branches must pass their
+own score, margin, and probability gates; matching generated tokens alone is
+not a pass. The command installs nothing and shuts down the server before
+writing the artifact.
+
+Compare the stateless nested and packed wire representations locally before
+proposing a stateful registry:
+
+```bash
+python -m examples.visual_xor.benchmark_precomputed_transport \
+  --repetitions 5 \
+  --output benchmark_results/cpu_vision/serialization.json
+```
+
+This benchmark starts neither Ray nor SGLang. It uses the production packed
+format and also reports the projected binary-upload-plus-ID traffic so the
+additional registry complexity can be judged against measured remaining
+bytes.
+
 CPU-vision eval and rollout records include cumulative and interval cache
 metrics under `vision_encoder/cache/*` plus backend work and throughput under
 `vision_encoder/backend/*`. They are written to the normal log and W&B run;
-no separate metrics process is required.
+no separate metrics process is required. The same records include aggregated
+count, total, mean, p50, p95, and maximum measurements for CPU-service round
+trip, feature preparation, packed serialization, HTTP request construction,
+response wait/read/decode, request/response bytes, and the original rollout
+generation phases under `perf_detail/rollout/*`. Shared CPU feature work is
+recorded once per prompt group rather than once per sampled response.
+The historical metric key `precomputed_to_list_time` is retained for W&B
+dashboard continuity even though it now measures packed BF16 serialization.
+
+`http_response_wait` includes server queuing, feature reconstruction/H2D,
+SGLang prefill, and decoding; it does not claim to separate those server-side
+phases. Compare it with CPU backend, service round-trip, request-build, and
+feature-conversion metrics before deciding whether the next experiment should
+change CPU capacity or transport.
+
+The corrected 2026-08-01 comparison identified transport as the current
+boundary. Each raw feature was 524,312 bytes, but its JSON generation request
+averaged 2.907 MB. Baseline evaluation sent 2.233 GB across 768 requests, and
+a 64-sample rollout sent about 185 MB for only eight unique features. Actual
+CPU encoding took 49-54 seconds for the 128 unique evaluation images; the
+other 640 requests were cache hits.
+
+Relax now uses SGLang native parallel sampling for a narrow eligible group:
+CPU-precomputed Qwen3-VL or processor-backed native image-only Qwen3-VL,
+multiple fresh pending samples, one shared prompt and media object, round-robin
+routing (or any routing policy when exactly one SGLang engine exists),
+stochastic inference, the built-in generator, and no partial rollout, routing
+replay, or Slime middleware. Native grouping runs the processor and raw-media
+encoding once per prompt group while retaining tokenizer prompt IDs for
+SGLang and processor-expanded IDs/features for Megatron. One
+request carries `sampling_params.n=N_SAMPLES_PER_PROMPT`, and Relax maps the
+ordered scalar responses back to the original samples. Request timing and
+bytes are counted once, while each sample retains its own output tokens,
+log-probabilities, reward, finish metadata, and Megatron visual inputs.
+Unsupported groups use the established scalar path and log the reason once.
+Deterministic mode stays scalar because SGLang does not provide distinct
+per-branch seeds for `n>1`.
+
+The 2026-08-03 live `n=8` gate and matched run first reduced each 64-sample
+rollout from 64 SGLang requests to eight. Evaluation dispatch is now also
+independent of `group_rm`: the 128 stochastic held-out prompts use one `n=4`
+request each, while the deterministic controls remain scalar. That reduced the
+nested-list evaluation from 768 requests and 2.233 GB to 384 requests and
+1.117 GB without changing per-sample reward semantics.
+
+Relax then replaced nested numeric features with contiguous BF16 bytes encoded
+as base64 inside the same JSON envelope. The packed live parity gate matched
+all eight native-GPU outputs; maximum A/B log-probability delta remained
+`1.43e-6`. In the matched two-rollout run, evaluation traffic fell again to
+268.9 MB (75.93% below grouped nested JSON, 87.96% below the original scalar
+path). Each 64-sample rollout sent 5.60 MB, both rollouts and all four optimizer
+updates passed, and final GPU memory returned to baseline. This stateless
+representation is the current transport contract. A binary/ID registry remains
+deferred until the remaining cross-request traffic is proven to be the next
+bottleneck; do not scale CPU replicas yet. See
+[the packed-transport report](../../training_reports/2026-08-04-qwen3-vl-packed-cpu-vision-transport.md),
+[the parallel-sampling report](../../training_reports/2026-08-03-qwen3-vl-sglang-parallel-sampling.md)
+and [the corrected performance report](../../training_reports/2026-08-01-qwen3-vl-corrected-three-mode-performance.md).
+
+The 2026-08-06 matched steady-state experiment then disabled evaluation and
+forced the CPU cache to evict every feature. The one-replica CPU producer still
+completed each steady 64-sample rollout in 4.79 seconds and filled the
+staleness window, while the actor cycle averaged 26.83 seconds and waited only
+0.238 seconds for data. Relative to native grouped GPU vision, omission reduced
+actor compute by 13.68%, complete actor-cycle time by 9.67%, and simultaneous
+four-card peak VRAM by 738.03 MiB. The 5.60 MB packed request was 383.5 times
+the native raw-image request, but transport did not pace this training run.
+Defer a registry and CPU replica scaling until a larger workload actually
+starves the actor. The native grouped performance run is qualified because its
+64/64 generated tokens matched scalar native, but its strict branch-score gate
+did not pass. See
+[the steady-state overlap report](../../training_reports/2026-08-06-qwen3-vl-cpu-vision-steady-state-overlap.md).
 
 Measure the three modes sequentially, from an idle four-GPU baseline, with the
 same workload:
@@ -307,16 +424,21 @@ records baseline, final, per-device peak, peak delta, and simultaneous total
 peak; compare card 0-1 as actor ranks, card 2 as SGLang rollout, and card 3 as
 actor-forward.
 
-The 2026-07-31 four-MI210 comparison completed all three modes. Omitting the
+The first 2026-07-31 four-MI210 comparison completed all three modes. Omitting the
 GPU visual weights reduced the simultaneous four-card peak by 155.73 MiB
 relative to the otherwise identical CPU-resident mode. Its evaluation cache
 served 768 requests with 128 encodes, 640 hits, an 83.33% hit rate, and no
 evictions. Both CPU modes were about 1.53 times the native launcher wall time
-on the one-core vision service, and both remained near chance while native GPU
-vision scored 0.6816 on the held-out set. Therefore the next gate is fixed-
-input live SGLang and Megatron logit parity, not CPU scaling. See
+on the one-core vision service. Both originally remained near chance because
+SGLang's generic transformers wrapper did not consume its parsed precomputed
+embedding field. After the DeepStack adapter fix, an omitted-weight run scored
+`0.69921875` held out and the deterministic eight-image SGLang gate matched
+every token with maximum action-margin delta `1.043081283569336e-07`.
+Megatron/SGLang sampled-token differences stayed below `5e-7`. See
 [the three-mode report](../../training_reports/2026-07-31-qwen3-vl-vision-three-mode-vram.md)
-for the per-device table, run IDs, artifacts, and wrapper-status caveat.
+for the historical per-device table and
+[the live parity report](../../training_reports/2026-07-31-qwen3-vl-live-precomputed-deepstack-parity.md)
+for the corrected semantic evidence.
 
 SGLang receives the feature tensor through JSON, which is substantially
 larger than the source PNG. Multiple CPU replicas also have independent

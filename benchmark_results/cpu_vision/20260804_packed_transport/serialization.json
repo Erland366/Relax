@@ -1,0 +1,40 @@
+{
+  "feature": {
+    "dtype": "torch.bfloat16",
+    "raw_bytes": 524312,
+    "shape": [
+      64,
+      4096
+    ]
+  },
+  "per_request": {
+    "inline_bf16_base64_json": {
+      "body_bytes": 700301,
+      "feature_decode_seconds_median": 0.0009709903970360756,
+      "feature_encode_seconds_median": 0.0005222000181674957,
+      "http_body_build_seconds_median": 0.015068060718476772
+    },
+    "nested_float_json": {
+      "body_bytes": 3017467,
+      "feature_decode_seconds_median": 0.0076591856777668,
+      "feature_encode_seconds_median": 0.007507335394620895,
+      "http_body_build_seconds_median": 0.06681597605347633
+    },
+    "registry_binary_upload": {
+      "body_bytes": 524457
+    },
+    "registry_id_json": {
+      "body_bytes": 1155
+    }
+  },
+  "projected_grouped_evaluation": {
+    "binary_upload_plus_id_bytes": 67574016,
+    "generation_requests": 384,
+    "inline_bf16_base64_json_bytes": 268915584,
+    "inline_reduction_fraction": 0.7679175944591937,
+    "nested_float_json_bytes": 1158707328,
+    "registry_reduction_fraction": 0.9416815494585359,
+    "unique_features": 128
+  },
+  "repetitions": 5
+}

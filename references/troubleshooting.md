@@ -60,6 +60,8 @@ This file documents error patterns encountered and their solutions.
 | Step-0 `dapo` reward stalls inside the Ray reward-worker pool | The run reaches `Actor training step 0/200` and rollout generation, but the Megatron actor only logs `start to get rollout_id: 0 data from transfer queue for train with mcore.` and then dies much later with `ActorDiedError`, while `RolloutManager` only logs `RewardExecutor: created 16 RewardWorker actors` before a long silent gap | `dapo` is a small local string/regex reward, but it was still being dispatched through the generic `RewardWorker` actor pool. On the MI210 step-0 path, that turned a cheap per-sample reward into extra Ray actor RPCs and left rollout blocked before it could transfer `train_0` to the actor | Keep `dapo` on a local in-process path using `asyncio.to_thread` and reserve the Ray reward-worker pool for the heavier/thread-unsafe reward types. Revalidate from a clean Ray cluster so the 5-minute timeout window no longer wedges at `RewardExecutor: created ... RewardWorker actors` |
 | Qwen3-VL precomputed features fail MRoPE construction | SGLang receives a short tokenizer prompt but a visual grid/features produced from a longer processor-expanded sequence, then fails while building multimodal rotary positions | The precomputed path bypasses SGLang's raw-image processor but still sends tokenizer-only IDs, so prompt positions no longer match the expanded visual placeholder span | Send processor-expanded prompt IDs with precomputed image features and keep tokenizer-only IDs for raw-image/text paths; verify the prompt length, visual grid, and feature-token count together |
 | Megatron precomputed Qwen3-VL DeepStack streams are missing | Evaluation and rollout complete, but actor-forward fails because the batch contains `deepstack_visual_embeds_0..N` while the model wrapper expects one ordered `deepstack_visual_embeds` container | The transport preserves streams as numbered fields, but the Megatron model-instance boundary does not assemble them according to `deepstack_visual_indexes` | Assemble numbered streams in configured index order before the original model forward; reject missing indexes and mixed numbered/tuple inputs explicitly |
+| SGLang parses but ignores precomputed multimodal embeddings | CPU feature encoding, caching, transport, rollout, and training all complete, yet live CPU behavior remains at chance or develops an action bias despite standalone native/precomputed logit parity | SGLang's generic transformers multimodal wrapper parses `item.precomputed_embeddings`, but its normal forward only gathers raw `item.feature` values and never injects the precomputed final and DeepStack streams into the language model | Add an explicit all-precomputed prefill adapter at the language-model boundary, preserve the native/decode paths, reject mixed representations, and require deterministic live native-versus-precomputed logit parity before performance testing |
+| CPU vision cache hits but rollout remains slow | CPU cache hit rate is high and backend encode work is modest, yet rollout/evaluation is much slower than native and SGLang may log transient router send warnings | The CPU cache avoids encoder execution only; scalar branching and nested numeric JSON can still multiply downstream feature transport | Measure raw/on-wire bytes and timing; group eligible branches, use stateless packed BF16, and consider a bounded binary/ID registry only if remaining cross-request traffic still dominates |
 
 ## Qwen3-VL precomputed features fail MRoPE construction
 
@@ -162,6 +164,163 @@ prove that Megatron consumed the intermediate streams correctly.
   `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`
 - Parity report:
   `training_reports/2026-07-30-qwen3-vl-cpu-gpu-vision-parity.md`
+
+## SGLang parses but ignores precomputed multimodal embeddings
+
+**Added:** 2026-07-31
+**Domain:** research
+
+### Symptom
+
+The precomputed-feature path appears healthy at every structural level:
+
+- CPU features are encoded and cached;
+- feature IDs, grids, final embeddings, and DeepStack streams are serialized;
+- SGLang accepts the requests;
+- rollout, transfer queue, Megatron actor-forward, optimizer updates, and
+  weight synchronization complete; and
+- GPU visual weights can be omitted without a runtime error.
+
+Despite this, a task with a passing standalone native-versus-precomputed logit
+comparison falls to chance or develops a large action bias only in live
+SGLang. In the Qwen3-VL visual-XOR case, the historical CPU-omitted evaluation
+scored `0.5000` with action-A rate `0.7148`, while native GPU vision scored
+`0.6816` with action-A rate `0.4980`.
+
+### Cause
+
+Parsing and transporting a multimodal field does not prove semantic
+consumption. SGLang's generic transformers multimodal wrapper parsed
+`item.precomputed_embeddings`, but its normal visual forward collected only
+raw `item.feature` inputs. The language model therefore never received the
+precomputed final projection or the three Qwen3-VL DeepStack streams.
+
+The surrounding Relax workload could still succeed because the payload,
+cache, transfer queue, actor-forward path, and optimizer were structurally
+valid. The failure existed specifically at the rollout backend's
+language-model boundary.
+
+### Solution
+
+1. Detect an all-precomputed Qwen3-VL prefill batch before entering the normal
+   raw-visual forward.
+2. Validate the packed feature width against one final projection plus every
+   configured DeepStack projection.
+3. Split the packed representation into the final and ordered DeepStack
+   streams.
+4. Scatter the final visual embeddings into the processor-expanded image-token
+   positions.
+5. Call the language model with the matching visual-position mask and ordered
+   `deepstack_visual_embeds`.
+6. Preserve the established native-image and decode paths, and fail explicitly
+   for mixed native/precomputed batches rather than selecting one silently.
+7. Run the fixed-input live parity probe before interpreting stochastic reward
+   or starting performance benchmarks.
+
+For the corrected eight-image SGLang gate, generated tokens and decoded text
+matched on all images. Maximum A/B log-probability delta was
+`1.430511474609375e-06`, and maximum action-margin delta was
+`1.043081283569336e-07`.
+
+### Prevention
+
+Treat these as separate gates for every rollout and training consumer:
+
+```text
+payload produced -> transported -> parsed -> injected into model -> logits match
+```
+
+Do not infer the last two gates from cache hits, request success, model-weight
+omission, or a completed RL cycle. Freeze the checkpoint, prompt,
+processor-expanded token sequence, image, sampling configuration, and policy
+version; then compare native and precomputed outputs inside the actual live
+backend.
+
+### Related
+
+- Skill: `model-integration`
+- Live parity report:
+  `training_reports/2026-07-31-qwen3-vl-live-precomputed-deepstack-parity.md`
+- Corrected two-cycle report:
+  `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`
+- Deterministic artifact:
+  `benchmark_results/cpu_vision/20260731_sglang_live_parity/parity.json`
+- Retrospective: `references/experiment-log.md`
+
+## CPU vision cache hits but rollout remains slow
+
+**Added:** 2026-08-03
+**Domain:** research
+
+### Symptom
+
+The frozen CPU vision service reports a high hit rate and relatively little
+backend encode time, but precomputed-feature evaluation or rollout remains
+substantially slower than native GPU vision. SGLang may also emit intermittent
+router messages such as:
+
+```text
+Failed to send typed request ... route=/generate
+```
+
+Requests can still finish successfully without client retries, so this message
+alone does not prove that the SGLang worker died.
+
+### Cause
+
+The CPU cache avoids vision-encoder execution only. Scalar generation can
+still retransmit one feature per sampled branch, while nested numeric JSON can
+expand the raw BF16 tensor several times before the router reconstructs it and
+moves it to the GPU. `n_samples_per_prompt` multiplies that downstream work
+even when all samples share one feature.
+
+In the corrected Qwen3-VL measurement, one 524,312-byte feature expanded to a
+2.907 MB request. The 768-request evaluation sent 2.233 GB even though the CPU
+backend encoded only 128 unique images in 49-54 seconds. These values identify
+the observed case; measure the active model rather than assuming the same
+sizes.
+
+### Solution
+
+1. Compare service requests, unique features, backend encodes, hits, and
+   evictions. Do not infer downstream reuse from the cache hit rate.
+2. Record raw unique-feature bytes, exact request-body bytes, request-build
+   time, service round trip, response wait, and requests per unique feature.
+3. Confirm whether router warnings correspond to failed client requests or
+   retries before treating them as a dead worker.
+4. If repeated transport dominates encode work, do not scale CPU replicas.
+5. Group eligible stochastic branches into one SGLang request with
+   `sampling_params.n`, independently of reward-grouping semantics. Keep
+   deterministic or unsupported generation scalar and require exact ordered
+   response cardinality.
+6. Replace nested numeric features with stateless contiguous BF16 bytes in the
+   existing JSON envelope. Validate dtype, shape, exact byte count, BF16 bit
+   identity, the early SGLang processor seam, native-media bypass, and live
+   native-versus-precomputed parity.
+7. Re-measure cross-request traffic. Only if it remains material, register each
+   immutable feature once in a bounded SGLang-side registry using `feature_id`
+   plus `vision_revision`, binary or shared-memory upload, and ID-only repeated
+   generation requests.
+8. A registry must fail explicitly on missing IDs, revision/shape mismatches,
+   wrong-engine routing, and eviction. Rerun native, resident, and omitted modes
+   under the same workload.
+
+### Prevention
+
+Treat encoder caching, within-request branching, representation packing,
+cross-request transport reuse, reconstruction, H2D, and prefill as separate
+gates. Include raw and on-wire byte metrics in every precomputed-feature
+performance benchmark, and apply CPU scaling only after repeated feature
+transport has been removed or shown not to dominate.
+
+### Related
+
+- Skill: `model-integration`
+- Performance report:
+  `training_reports/2026-08-01-qwen3-vl-corrected-three-mode-performance.md`
+- Packed-transport report:
+  `training_reports/2026-08-04-qwen3-vl-packed-cpu-vision-transport.md`
+- Retrospective: `references/experiment-log.md`
 
 ## Qwen3 mock overnight judged healthy before first checkpoint
 

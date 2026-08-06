@@ -1,0 +1,48 @@
+{
+  "baseline_total_used_bytes": 52543488,
+  "command": [
+    "bash",
+    "scripts/debug/qwen3_vl_visual_xor_refinement_fully_async_cpu_vision_4gpus.sh"
+  ],
+  "devices": {
+    "card0": {
+      "baseline_used_bytes": 13135872,
+      "final_used_bytes": 13135872,
+      "peak_delta_bytes": 3047407616,
+      "peak_used_bytes": 3060543488,
+      "total_bytes": 68702699520
+    },
+    "card1": {
+      "baseline_used_bytes": 13135872,
+      "final_used_bytes": 13135872,
+      "peak_delta_bytes": 2596052992,
+      "peak_used_bytes": 2609188864,
+      "total_bytes": 68702699520
+    },
+    "card2": {
+      "baseline_used_bytes": 13135872,
+      "final_used_bytes": 13135872,
+      "peak_delta_bytes": 7747379200,
+      "peak_used_bytes": 7760515072,
+      "total_bytes": 68702699520
+    },
+    "card3": {
+      "baseline_used_bytes": 13135872,
+      "final_used_bytes": 13135872,
+      "peak_delta_bytes": 7701913600,
+      "peak_used_bytes": 7715049472,
+      "total_bytes": 68702699520
+    }
+  },
+  "duration_seconds": 771.6211932292208,
+  "exit_code": 0,
+  "final_total_used_bytes": 52543488,
+  "finished_at": "2026-08-03T17:58:32.381018+00:00",
+  "label": "cpu-omitted-parallel-n8",
+  "peak_simultaneous_total_delta_bytes": 20170870784,
+  "peak_simultaneous_total_used_bytes": 20223414272,
+  "sample_count": 333,
+  "sample_interval_seconds": 2.0,
+  "schema_version": 1,
+  "started_at": "2026-08-03T17:45:40.759821+00:00"
+}

@@ -7,6 +7,7 @@ import uuid
 from argparse import Namespace
 from collections.abc import Callable
 from contextlib import contextmanager
+from math import ceil
 from time import monotonic
 from typing import Any
 
@@ -264,6 +265,38 @@ async def _run_cpu_vision_encoder(
     )
 
 
+async def _prepare_cpu_vision_rollout_inputs(
+    state: GenerateState,
+    multimodal_train_inputs: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, float], dict[str, int]]:
+    """Build one shared CPU-vision bundle and record client-side stage costs."""
+    vision_service_started_at = monotonic()
+    features = await _run_cpu_vision_encoder(state, multimodal_train_inputs)
+    vision_service_elapsed = monotonic() - vision_service_started_at
+
+    prepare_started_at = monotonic()
+    prepared_payload, actor_inputs = prepare_qwen3_vl_precomputed_rollout_inputs(
+        payload={},
+        multimodal_train_inputs=multimodal_train_inputs,
+        features=features,
+    )
+    prepare_elapsed = monotonic() - prepare_started_at
+
+    to_list_started_at = monotonic()
+    sglang_image_data = serialize_sglang_precomputed_image_data(prepared_payload["image_data"][0])
+    to_list_elapsed = monotonic() - to_list_started_at
+    return (
+        sglang_image_data,
+        actor_inputs,
+        {
+            "vision_service_round_trip": vision_service_elapsed,
+            "precomputed_prepare": prepare_elapsed,
+            "precomputed_to_list": to_list_elapsed,
+        },
+        {"precomputed_feature_bytes": features.nbytes},
+    )
+
+
 _VISION_ENCODER_COUNTER_METRICS = {
     "hits": "cache/hits",
     "misses": "cache/misses",
@@ -307,15 +340,107 @@ async def _collect_cpu_vision_metrics(state: GenerateState, *, phase: str) -> di
     interval_backend_seconds = intervals["backend_encode_seconds_total"]
     interval_backend_requests = intervals["backend_encode_requests_total"]
     metrics["vision_encoder/backend/images_per_second_interval"] = (
-        intervals["backend_encoded_images_total"] / interval_backend_seconds
-        if interval_backend_seconds
-        else 0.0
+        intervals["backend_encoded_images_total"] / interval_backend_seconds if interval_backend_seconds else 0.0
     )
     metrics["vision_encoder/backend/seconds_per_request_interval"] = (
         interval_backend_seconds / interval_backend_requests if interval_backend_requests else 0.0
     )
     logger.info("CPU vision metrics %s: %s", phase, metrics)
     return metrics
+
+
+async def _apply_sglang_output(
+    args: Namespace,
+    state: GenerateState,
+    sample: Sample,
+    output: dict[str, Any],
+    *,
+    timing: dict[str, float] | None = None,
+    sizes: dict[str, int] | None = None,
+) -> Sample:
+    """Apply one scalar SGLang response to one Relax sample."""
+    post_generate_started_at = monotonic()
+    if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
+        from relax.engine.router.middleware.radix_tree_middleware import postprocess_sample_with_radix_tree
+
+        sample = await postprocess_sample_with_radix_tree(args, sample, output)
+    else:
+        if "output_token_logprobs" in output["meta_info"]:
+            new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+            new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
+        else:
+            new_response_tokens = state.tokenizer.encode(output["text"], add_special_tokens=False)
+            new_response_log_probs = []
+
+        while hasattr(state.tokenizer, "image_token_id") and state.tokenizer.image_token_id in new_response_tokens:
+            index = new_response_tokens.index(state.tokenizer.image_token_id)
+            new_response_tokens[index] = state.tokenizer.pad_token_id
+            logger.warning(
+                "Image token found in output tokens, replaced with pad_token_id. Consider updating the model's stop condition to stop at image_token_id if you want to avoid this."
+            )
+
+        while hasattr(state.tokenizer, "audio_token_id") and state.tokenizer.audio_token_id in new_response_tokens:
+            index = new_response_tokens.index(state.tokenizer.audio_token_id)
+            new_response_tokens[index] = state.tokenizer.pad_token_id
+            logger.warning(
+                "Audio token found in output tokens, replaced with pad_token_id. Consider updating the model's stop condition to stop at audio_token_id if you want to avoid this."
+            )
+
+        while hasattr(state.tokenizer, "video_token_id") and state.tokenizer.video_token_id in new_response_tokens:
+            index = new_response_tokens.index(state.tokenizer.video_token_id)
+            new_response_tokens[index] = state.tokenizer.pad_token_id
+            logger.warning(
+                "Video token found in output tokens, replaced with pad_token_id. Consider updating the model's stop condition to stop at video_token_id if you want to avoid this."
+            )
+
+        # K2.x tokenizers don't expose image_token_id but reserve <|media_pad|>
+        # for vision input slots. A hallucinated <|media_pad|> in the response
+        # inflates num_placeholders past sum(feature_lengths) in the bridge,
+        # forcing dynamic expansion -> broadcast -> 233 GiB OOM. Replace in-place
+        # so positional accounting matches sglang's per-token logprobs.
+        if state.processor is not None:
+            from relax.utils.data.processing_utils import sanitize_kimi_k25_response_tokens
+
+            sanitized = sanitize_kimi_k25_response_tokens(state.processor, new_response_tokens)
+            if sanitized is not new_response_tokens:
+                replaced = sum(1 for a, b in zip(new_response_tokens, sanitized, strict=True) if a != b)
+                if replaced:
+                    logger.warning(
+                        f"K2.x: replaced {replaced} stray <|media_pad|> token(s) in rollout response with pad_token_id."
+                    )
+                new_response_tokens = sanitized
+
+        sample.tokens = sample.tokens + new_response_tokens
+        sample.rollout_tokens = sample.rollout_tokens + new_response_tokens
+        sample.response_length += len(new_response_tokens)
+        sample.response += output["text"]
+
+        if sample.loss_mask is not None:
+            assert args.partial_rollout and args.mask_offpolicy_in_partial_rollout
+            sample.loss_mask += [1] * len(new_response_tokens)
+
+        if sample.rollout_log_probs is None:
+            sample.rollout_log_probs = []
+        sample.rollout_log_probs += new_response_log_probs
+
+    if "routed_experts" in output["meta_info"]:
+        sample.rollout_routed_experts = np.frombuffer(
+            pybase64.b64decode(output["meta_info"]["routed_experts"].encode("ascii")),
+            dtype=np.int32,
+        ).reshape(
+            len(sample.tokens) - 1,
+            args.num_layers,
+            args.moe_router_topk,
+        )
+
+    sample.update_from_meta_info(args, output["meta_info"])
+    sample.metadata["_timing"] = {
+        **(timing or {}),
+        "post_generate": monotonic() - post_generate_started_at,
+    }
+    if sizes:
+        sample.metadata["_sizes"] = sizes
+    return sample
 
 
 async def generate(
@@ -335,6 +460,8 @@ async def generate(
     tokenizer_prompt_ids = state.tokenizer.encode(sample.prompt, add_special_tokens=False)
 
     _t_image_processor: float | None = None
+    _precomputed_timing: dict[str, float] = {}
+    _precomputed_sizes: dict[str, int] = {}
     # K2.x ships a multimodal AutoProcessor even for text-only fine-tunes; the
     # data loader always populates multimodal_inputs with empty-list placeholders
     # in that case, so check for actual media content before routing through the
@@ -349,24 +476,30 @@ async def generate(
         sample.multimodal_train_inputs = sample._precomputed_actor_inputs
         precomputed_sglang_image_data = sample._precomputed_sglang_image_data
         _t_image_processor = sample._precomputed_image_processor_elapsed
+        _precomputed_timing = getattr(sample, "_precomputed_shared_timing", {})
+        _precomputed_sizes = getattr(sample, "_precomputed_shared_sizes", {})
         del sample._precomputed_processor_prompt_ids
         del sample._precomputed_actor_inputs
         del sample._precomputed_sglang_image_data
         del sample._precomputed_image_processor_elapsed
+        if hasattr(sample, "_precomputed_shared_timing"):
+            del sample._precomputed_shared_timing
+        if hasattr(sample, "_precomputed_shared_sizes"):
+            del sample._precomputed_shared_sizes
     elif state.processor and _has_media:
         processor_prompt_ids, sample.multimodal_train_inputs, _t_image_processor = await _run_image_processor(
             state, args, sample.prompt, sample.multimodal_inputs
         )
         precomputed_sglang_image_data = None
         if state.vision_encoder is not None:
-            features = await _run_cpu_vision_encoder(state, sample.multimodal_train_inputs)
-            prepared_payload, sample.multimodal_train_inputs = prepare_qwen3_vl_precomputed_rollout_inputs(
-                payload={},
-                multimodal_train_inputs=sample.multimodal_train_inputs,
-                features=features,
-            )
-            precomputed_sglang_image_data = serialize_sglang_precomputed_image_data(
-                prepared_payload["image_data"][0]
+            (
+                precomputed_sglang_image_data,
+                sample.multimodal_train_inputs,
+                _precomputed_timing,
+                _precomputed_sizes,
+            ) = await _prepare_cpu_vision_rollout_inputs(
+                state,
+                sample.multimodal_train_inputs,
             )
     else:
         processor_prompt_ids = tokenizer_prompt_ids
@@ -412,9 +545,7 @@ async def generate(
     if len(sample.response) > 0:
         payload["input_ids"] = sample.rollout_tokens
     else:
-        sglang_prompt_ids = (
-            processor_prompt_ids if precomputed_sglang_image_data is not None else tokenizer_prompt_ids
-        )
+        sglang_prompt_ids = processor_prompt_ids if precomputed_sglang_image_data is not None else tokenizer_prompt_ids
         payload["input_ids"] = sglang_prompt_ids
         # Initialize sample.tokens for the first turn
         if not sample.tokens:
@@ -427,97 +558,38 @@ async def generate(
     if args.sglang_router_policy == "consistent_hashing" and sample.session_id:
         headers = {"X-SMG-Routing-Key": sample.session_id}
 
+    request_metrics: dict[str, float | int] = {}
     _t_generate_start = monotonic()
-    output = await post(url, payload, headers=headers)
+    output = await post(url, payload, headers=headers, request_metrics=request_metrics)
     _t_generate = monotonic() - _t_generate_start
 
-    _t_post_generate_start = monotonic()
-    if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
-        from relax.engine.router.middleware.radix_tree_middleware import postprocess_sample_with_radix_tree
-
-        sample = await postprocess_sample_with_radix_tree(args, sample, output)
-    else:
-        if "output_token_logprobs" in output["meta_info"]:
-            new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
-            new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
-        else:
-            new_response_tokens = state.tokenizer.encode(output["text"], add_special_tokens=False)
-            new_response_log_probs = []
-
-        while hasattr(state.tokenizer, "image_token_id") and state.tokenizer.image_token_id in new_response_tokens:
-            index = new_response_tokens.index(state.tokenizer.image_token_id)
-            new_response_tokens[index] = state.tokenizer.pad_token_id
-            logger.warning(
-                "Image token found in output tokens, replaced with pad_token_id. Consider updating the model's stop condition to stop at image_token_id if you want to avoid this."
-            )
-
-        while hasattr(state.tokenizer, "audio_token_id") and state.tokenizer.audio_token_id in new_response_tokens:
-            index = new_response_tokens.index(state.tokenizer.audio_token_id)
-            new_response_tokens[index] = state.tokenizer.pad_token_id
-            logger.warning(
-                "Audio token found in output tokens, replaced with pad_token_id. Consider updating the model's stop condition to stop at audio_token_id if you want to avoid this."
-            )
-
-        while hasattr(state.tokenizer, "video_token_id") and state.tokenizer.video_token_id in new_response_tokens:
-            index = new_response_tokens.index(state.tokenizer.video_token_id)
-            new_response_tokens[index] = state.tokenizer.pad_token_id
-            logger.warning(
-                "Video token found in output tokens, replaced with pad_token_id. Consider updating the model's stop condition to stop at video_token_id if you want to avoid this."
-            )
-
-        # K2.x tokenizers don't expose image_token_id but reserve <|media_pad|>
-        # for vision input slots. A hallucinated <|media_pad|> in the response
-        # inflates num_placeholders past sum(feature_lengths) in the bridge,
-        # forcing dynamic expansion → broadcast → 233 GiB OOM. Replace in-place
-        # so positional accounting matches sglang's per-token logprobs.
-        if state.processor is not None:
-            from relax.utils.data.processing_utils import sanitize_kimi_k25_response_tokens
-
-            sanitized = sanitize_kimi_k25_response_tokens(state.processor, new_response_tokens)
-            if sanitized is not new_response_tokens:
-                replaced = sum(1 for a, b in zip(new_response_tokens, sanitized, strict=True) if a != b)
-                if replaced:
-                    logger.warning(
-                        f"K2.x: replaced {replaced} stray <|media_pad|> token(s) in rollout response with pad_token_id."
-                    )
-                new_response_tokens = sanitized
-
-        # Update sample with tokens directly - avoiding re-tokenization
-        sample.tokens = sample.tokens + new_response_tokens
-        sample.rollout_tokens = sample.rollout_tokens + new_response_tokens
-        sample.response_length += len(new_response_tokens)
-        sample.response += output["text"]
-
-        # When partial rollout and masking off policy is enabled, update the loss mask
-        if sample.loss_mask is not None:
-            assert args.partial_rollout and args.mask_offpolicy_in_partial_rollout
-            sample.loss_mask += [1] * len(new_response_tokens)
-
-        if sample.rollout_log_probs is None:
-            sample.rollout_log_probs = []
-        sample.rollout_log_probs += new_response_log_probs
-
-    if "routed_experts" in output["meta_info"]:
-        sample.rollout_routed_experts = np.frombuffer(
-            pybase64.b64decode(output["meta_info"]["routed_experts"].encode("ascii")),
-            dtype=np.int32,
-        ).reshape(
-            len(sample.tokens) - 1,
-            args.num_layers,
-            args.moe_router_topk,
-        )
-
-    sample.update_from_meta_info(args, output["meta_info"])
-    _t_post_generate = monotonic() - _t_post_generate_start
-
-    _timing: dict[str, float] = {"generate": _t_generate, "post_generate": _t_post_generate}
+    _timing: dict[str, float] = {"generate": _t_generate}
+    _timing.update(_precomputed_timing)
+    _timing.update(
+        {
+            "http_request_build": float(request_metrics["request_build_seconds"]),
+            "http_response_wait": float(request_metrics["response_wait_seconds"]),
+            "http_response_read": float(request_metrics["response_read_seconds"]),
+            "http_response_decode": float(request_metrics["response_decode_seconds"]),
+        }
+    )
     if _t_image_processor is not None:
         _timing["image_processor"] = _t_image_processor
     if _t_mm_encode is not None:
         _timing["mm_encode"] = _t_mm_encode
-    sample.metadata["_timing"] = _timing
-
-    return sample
+    return await _apply_sglang_output(
+        args,
+        state,
+        sample,
+        output,
+        timing=_timing,
+        sizes={
+            **_precomputed_sizes,
+            "http_attempts": int(request_metrics["attempts"]),
+            "http_request_body_bytes": int(request_metrics["request_body_bytes"]),
+            "http_response_body_bytes": int(request_metrics["response_body_bytes"]),
+        },
+    )
 
 
 async def generate_and_rm(
@@ -619,22 +691,189 @@ def _collect_timing_from_samples(samples: list[Sample]) -> dict[str, list[float]
     return collected
 
 
-def _aggregate_rollout_timing(all_samples: list[Sample], get_samples_times: list[float]) -> dict[str, float]:
-    timing_data = _collect_timing_from_samples(all_samples)
-    metrics: dict[str, float] = {}
-
-    for phase in ("image_processor", "mm_encode", "generate", "post_generate"):
-        values = timing_data.get(phase, [])
-        if not values:
+def _collect_sizes_from_samples(samples: list[Sample]) -> dict[str, list[int]]:
+    """Extract per-request and per-shared-bundle size values from sample metadata."""
+    collected: dict[str, list[int]] = {}
+    for sample in samples:
+        sizes = sample.metadata.get("_sizes")
+        if not sizes:
             continue
-        metrics[f"perf_detail/rollout/{phase}_time/mean"] = sum(values) / len(values)
-        metrics[f"perf_detail/rollout/{phase}_time/max"] = max(values)
+        for key, value in sizes.items():
+            collected.setdefault(key, []).append(value)
+    return collected
+
+
+def _percentile(values: list[float] | list[int], percentile: float) -> float | int:
+    ordered = sorted(values)
+    return ordered[max(0, ceil(percentile * len(ordered)) - 1)]
+
+
+def _aggregate_rollout_timing(all_samples: list[Sample], get_samples_times: list[float]) -> dict[str, float | int]:
+    timing_data = _collect_timing_from_samples(all_samples)
+    size_data = _collect_sizes_from_samples(all_samples)
+    metrics: dict[str, float | int] = {}
+
+    for phase, values in timing_data.items():
+        prefix = f"perf_detail/rollout/{phase}_time"
+        metrics[f"{prefix}/count"] = len(values)
+        metrics[f"{prefix}/total"] = sum(values)
+        metrics[f"{prefix}/mean"] = sum(values) / len(values)
+        metrics[f"{prefix}/p50"] = _percentile(values, 0.50)
+        metrics[f"{prefix}/p95"] = _percentile(values, 0.95)
+        metrics[f"{prefix}/max"] = max(values)
+
+    for name, values in size_data.items():
+        prefix = f"perf_detail/rollout/{name}"
+        metrics[f"{prefix}/count"] = len(values)
+        metrics[f"{prefix}/total"] = sum(values)
+        metrics[f"{prefix}/mean"] = sum(values) / len(values)
+        metrics[f"{prefix}/p50"] = _percentile(values, 0.50)
+        metrics[f"{prefix}/p95"] = _percentile(values, 0.95)
+        metrics[f"{prefix}/max"] = max(values)
 
     if get_samples_times:
         metrics["perf_detail/rollout/get_samples_time/total"] = sum(get_samples_times)
         metrics["perf_detail/rollout/get_samples_time/mean"] = sum(get_samples_times) / len(get_samples_times)
 
     return metrics
+
+
+def _sglang_parallel_sampling_skip_reason(
+    args: Namespace,
+    group: list[Sample],
+    *,
+    shared_multimodal_input: bool,
+) -> str | None:
+    """Return why a CPU-precomputed group must retain scalar requests."""
+    if len(group) <= 1:
+        return "parallel sampling requires more than one sample"
+    if not shared_multimodal_input or any(sample.prompt != group[0].prompt for sample in group[1:]):
+        return "parallel sampling requires one shared prompt and multimodal input"
+    if getattr(args, "sglang_enable_deterministic_inference", False):
+        return "deterministic inference requires distinct per-sample seeds"
+    if getattr(args, "partial_rollout", False):
+        return "partial rollout requires per-sample abort and continuation state"
+    if getattr(args, "custom_generate_function_path", None) or any(
+        getattr(sample, "generate_function_path", None) for sample in group
+    ):
+        return "custom generate function requires the scalar generation contract"
+    if getattr(args, "use_slime_router", False):
+        return "slime router middleware requires the scalar response contract"
+    if getattr(args, "use_rollout_routing_replay", False):
+        return "rollout routing replay requires per-sample routed-expert metadata"
+    rollout_resource = getattr(args, "resource", {}).get("rollout", [])
+    has_single_engine = (
+        isinstance(rollout_resource, (list, tuple))
+        and len(rollout_resource) == 2
+        and rollout_resource[1] == getattr(args, "rollout_num_gpus_per_engine", None)
+    )
+    if getattr(args, "sglang_router_policy", "round_robin") != "round_robin" and not has_single_engine:
+        return "non-round-robin routing requires per-sample routing semantics"
+    if any(
+        sample.status != Sample.Status.PENDING
+        or sample.response
+        or sample.response_length
+        or sample.tokens
+        or sample.rollout_tokens
+        for sample in group
+    ):
+        return "parallel sampling requires fresh samples with empty generation state"
+    return None
+
+
+def _log_parallel_sampling_skip_once(state: GenerateState, reason: str) -> None:
+    reasons = getattr(state, "parallel_sampling_skip_reasons", None)
+    if reasons is None:
+        reasons = set()
+        state.parallel_sampling_skip_reasons = reasons
+    if reason in reasons:
+        return
+    reasons.add(reason)
+    logger.info("SGLang parallel sampling is disabled: %s; using scalar requests", reason)
+
+
+async def _generate_precomputed_group(
+    args: Namespace,
+    state: GenerateState,
+    group: list[Sample],
+    sampling_params: dict[str, Any],
+    *,
+    processor_prompt_ids: list[int],
+    actor_inputs: dict[str, Any],
+    sglang_image_data: dict[str, Any],
+    image_processor_elapsed: float,
+    shared_timing: dict[str, float],
+    shared_sizes: dict[str, int],
+    evaluation: bool,
+    sglang_prompt_ids: list[int] | None = None,
+    sglang_multimodal_payload: dict[str, list] | None = None,
+    mm_encode_elapsed: float = 0.0,
+) -> list[Sample]:
+    """Generate one fresh multimodal group through one SGLang request."""
+    parallel_sampling_params = sampling_params.copy()
+    parallel_sampling_params["n"] = len(group)
+    payload = {
+        "input_ids": processor_prompt_ids if sglang_prompt_ids is None else sglang_prompt_ids,
+        "sampling_params": parallel_sampling_params,
+        "return_logprob": not evaluation,
+    }
+    if sglang_multimodal_payload is None:
+        payload["image_data"] = [sglang_image_data]
+    else:
+        payload.update(sglang_multimodal_payload)
+
+    for sample in group:
+        sample.multimodal_train_inputs = actor_inputs
+        sample.tokens = list(processor_prompt_ids)
+        sample.rollout_tokens = list(payload["input_ids"])
+
+    request_metrics: dict[str, float | int] = {}
+    generate_started_at = monotonic()
+    output = await post(
+        f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate",
+        payload,
+        request_metrics=request_metrics,
+    )
+    generate_elapsed = monotonic() - generate_started_at
+    if not isinstance(output, list):
+        raise TypeError(
+            "SGLang parallel sampling must return a list of response objects; "
+            f"got {type(output).__name__} for n={len(group)}"
+        )
+    if len(output) != len(group):
+        raise ValueError(f"SGLang parallel sampling response count mismatch: expected {len(group)}, got {len(output)}")
+    if any(not isinstance(item, dict) for item in output):
+        raise TypeError("SGLang parallel sampling responses must all be objects")
+
+    request_timing = {
+        **shared_timing,
+        "generate": generate_elapsed,
+        "http_request_build": float(request_metrics["request_build_seconds"]),
+        "http_response_wait": float(request_metrics["response_wait_seconds"]),
+        "http_response_read": float(request_metrics["response_read_seconds"]),
+        "http_response_decode": float(request_metrics["response_decode_seconds"]),
+        "image_processor": image_processor_elapsed,
+        "mm_encode": mm_encode_elapsed,
+    }
+    request_sizes = {
+        **shared_sizes,
+        "http_attempts": int(request_metrics["attempts"]),
+        "http_request_body_bytes": int(request_metrics["request_body_bytes"]),
+        "http_response_body_bytes": int(request_metrics["response_body_bytes"]),
+        "sglang_generation_requests": 1,
+        "sglang_parallel_samples": len(group),
+    }
+    return [
+        await _apply_sglang_output(
+            args,
+            state,
+            sample,
+            sample_output,
+            timing=request_timing if sample_index == 0 else None,
+            sizes=request_sizes if sample_index == 0 else None,
+        )
+        for sample_index, (sample, sample_output) in enumerate(zip(group, output, strict=True))
+    ]
 
 
 async def generate_and_rm_group(
@@ -659,6 +898,7 @@ async def generate_and_rm_group(
     shared_multimodal_input = first_mm is not None and all(
         getattr(s, "multimodal_inputs", None) is first_mm for s in group[1:]
     )
+    used_parallel_sampling = False
     if (
         state.vision_encoder is not None
         and shared_multimodal_input
@@ -670,35 +910,141 @@ async def generate_and_rm_group(
             group[0].prompt,
             first_mm,
         )
-        features = await _run_cpu_vision_encoder(state, multimodal_train_inputs)
-        prepared_payload, actor_inputs = prepare_qwen3_vl_precomputed_rollout_inputs(
-            payload={},
-            multimodal_train_inputs=multimodal_train_inputs,
-            features=features,
+        (
+            sglang_image_data,
+            actor_inputs,
+            shared_timing,
+            shared_sizes,
+        ) = await _prepare_cpu_vision_rollout_inputs(
+            state,
+            multimodal_train_inputs,
         )
-        sglang_image_data = serialize_sglang_precomputed_image_data(prepared_payload["image_data"][0])
-        for sample in group:
-            sample._precomputed_processor_prompt_ids = processor_prompt_ids
-            sample._precomputed_actor_inputs = actor_inputs
-            sample._precomputed_sglang_image_data = sglang_image_data
-            sample._precomputed_image_processor_elapsed = t_processor
+        parallel_sampling_skip_reason = _sglang_parallel_sampling_skip_reason(
+            args,
+            group,
+            shared_multimodal_input=shared_multimodal_input,
+        )
+        if parallel_sampling_skip_reason is None:
+            used_parallel_sampling = True
+            async with state.semaphore:
+                if state.aborted:
+                    for sample in group:
+                        sample.status = Sample.Status.ABORTED
+                else:
+                    with state.dp_rank_context():
+                        group = await _generate_precomputed_group(
+                            args,
+                            state,
+                            group,
+                            sampling_params,
+                            processor_prompt_ids=processor_prompt_ids,
+                            actor_inputs=actor_inputs,
+                            sglang_image_data=sglang_image_data,
+                            image_processor_elapsed=t_processor,
+                            shared_timing=shared_timing,
+                            shared_sizes=shared_sizes,
+                            evaluation=evaluation,
+                        )
+        else:
+            _log_parallel_sampling_skip_once(state, parallel_sampling_skip_reason)
+            for sample_index, sample in enumerate(group):
+                sample._precomputed_processor_prompt_ids = processor_prompt_ids
+                sample._precomputed_actor_inputs = actor_inputs
+                sample._precomputed_sglang_image_data = sglang_image_data
+                sample._precomputed_image_processor_elapsed = t_processor
+                if sample_index == 0:
+                    sample._precomputed_shared_timing = shared_timing
+                    sample._precomputed_shared_sizes = shared_sizes
+    elif (
+        state.processor
+        and shared_multimodal_input
+        and first_mm.get("images")
+        and not first_mm.get("videos")
+        and not first_mm.get("audio")
+        and all(sample.prompt == group[0].prompt for sample in group[1:])
+    ):
+        parallel_sampling_skip_reason = _sglang_parallel_sampling_skip_reason(
+            args,
+            group,
+            shared_multimodal_input=shared_multimodal_input,
+        )
+        if parallel_sampling_skip_reason is None:
+            processor_prompt_ids, actor_inputs, t_processor = await _run_image_processor(
+                state,
+                args,
+                group[0].prompt,
+                first_mm,
+            )
+            encoded_mm, t_enc = await _encode_multimodal_inputs(first_mm)
+            tokenizer_prompt_ids = state.tokenizer.encode(group[0].prompt, add_special_tokens=False)
+            used_parallel_sampling = True
+            async with state.semaphore:
+                if state.aborted:
+                    for sample in group:
+                        sample.status = Sample.Status.ABORTED
+                else:
+                    with state.dp_rank_context():
+                        group = await _generate_precomputed_group(
+                            args,
+                            state,
+                            group,
+                            sampling_params,
+                            processor_prompt_ids=processor_prompt_ids,
+                            actor_inputs=actor_inputs,
+                            sglang_image_data={},
+                            image_processor_elapsed=t_processor,
+                            shared_timing={},
+                            shared_sizes={},
+                            evaluation=evaluation,
+                            sglang_prompt_ids=tokenizer_prompt_ids,
+                            sglang_multimodal_payload=encoded_mm,
+                            mm_encode_elapsed=t_enc,
+                        )
+        else:
+            _log_parallel_sampling_skip_once(state, parallel_sampling_skip_reason)
+            encoded_mm, t_enc = await _encode_multimodal_inputs(first_mm)
+            for sample in group:
+                sample._pre_encoded_mm = encoded_mm
+                sample._pre_encoded_mm_elapsed = t_enc
     elif shared_multimodal_input:
         encoded_mm, t_enc = await _encode_multimodal_inputs(first_mm)
         for sample in group:
             sample._pre_encoded_mm = encoded_mm
             sample._pre_encoded_mm_elapsed = t_enc
 
-    tasks = []
-    for idx, sample in enumerate(group):
-        current_sampling_params = sampling_params.copy()
-        if getattr(args, "sglang_enable_deterministic_inference", False):
-            seed = state.group_sampling_seeds[idx]
-            current_sampling_params["sampling_seed"] = seed
-        tasks.append(
-            asyncio.create_task(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
-        )
+    if (
+        used_parallel_sampling
+        and not args.group_rm
+        and not any(sample.status == Sample.Status.ABORTED for sample in group)
+    ):
+        samples_need_reward = [sample for sample in group if sample.reward is None]
+        rewards = await asyncio.gather(*[async_rm(args, sample) for sample in samples_need_reward])
+        for sample, reward in zip(samples_need_reward, rewards, strict=True):
+            sample.reward = reward
 
-    group = await asyncio.gather(*tasks)
+        if getattr(args, "use_opd", False) and getattr(args, "opd_type", None) == "sglang" and not evaluation:
+            from relax.engine.rollout.on_policy_distillation import (
+                create_teacher_client_session,
+                fetch_teacher_log_probs,
+            )
+
+            async with create_teacher_client_session(args) as teacher_session:
+                await asyncio.gather(
+                    *[fetch_teacher_log_probs(args, sample, session=teacher_session) for sample in group]
+                )
+
+    if not used_parallel_sampling:
+        tasks = []
+        for idx, sample in enumerate(group):
+            current_sampling_params = sampling_params.copy()
+            if getattr(args, "sglang_enable_deterministic_inference", False):
+                seed = state.group_sampling_seeds[idx]
+                current_sampling_params["sampling_seed"] = seed
+            tasks.append(
+                asyncio.create_task(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
+            )
+
+        group = await asyncio.gather(*tasks)
 
     # eval should still compute group reward even if abort was triggered by a concurrent rollout
     if (not state.aborted or evaluation) and args.group_rm:
@@ -1032,7 +1378,6 @@ EVAL_PROMPT_DATASET = {}
 
 
 async def eval_rollout(args: Namespace, rollout_id: int) -> tuple[dict[str, dict[str, list[Any]]], list[list[Sample]]]:
-
     state = GenerateState(args)
     # Increment evaluating counter so that abort() knows to wait for eval to finish.
     # This prevents abort_all from killing in-flight eval requests on SGLang workers.
@@ -1045,7 +1390,11 @@ async def eval_rollout(args: Namespace, rollout_id: int) -> tuple[dict[str, dict
         results = {}
         for r in results_list:
             results.update(r)
-        metrics = await _collect_cpu_vision_metrics(state, phase=f"eval_{rollout_id}")
+        all_eval_samples = [
+            sample for dataset_result in results.values() for sample in dataset_result.get("samples", [])
+        ]
+        metrics = _aggregate_rollout_timing(all_eval_samples, [])
+        metrics.update(await _collect_cpu_vision_metrics(state, phase=f"eval_{rollout_id}"))
         return RolloutFnEvalOutput(data=results, metrics=metrics), []
     finally:
         state.evaluating -= 1
@@ -1099,82 +1448,44 @@ async def eval_rollout_single_dataset(
 
     sample_index = 0
 
-    if args.group_rm:
-        # group_rm mode: group samples by prompt and use generate_and_rm_group
-        # so that the RM can see all responses for the same prompt together.
-        tasks = []
-        for _i, prompt_sample in enumerate(dataset.samples):
-            group = []
-            for j in range(dataset_cfg.n_samples_per_eval_prompt):
-                sample = copy.deepcopy(prompt_sample)
-                sample.index = sample_index
-                sample_index += 1
-                sample.metadata = dataset_cfg.inject_metadata(getattr(sample, "metadata", None))
-                sample.generate_function_path = getattr(dataset_cfg, "custom_generate_function_path", None)
-                group.append(sample)
-            sampling_params = base_sampling_params
-            if getattr(args, "sglang_enable_deterministic_inference", False):
-                sampling_params = base_sampling_params.copy()
-                sampling_params["sampling_seed"] = args.rollout_seed
-            tasks.append(
-                asyncio.create_task(
-                    generate_and_rm_group(args, group, sampling_params=sampling_params, evaluation=True)
-                )
+    # Group branches by prompt for parallel generation. In group_rm mode,
+    # this also lets the RM see all responses for the prompt together.
+    tasks = []
+    for prompt_sample in dataset.samples:
+        group = []
+        multimodal_inputs = prompt_sample.multimodal_inputs
+        for _ in range(dataset_cfg.n_samples_per_eval_prompt):
+            sample = copy.deepcopy(prompt_sample)
+            sample.multimodal_inputs = multimodal_inputs
+            sample.index = sample_index
+            sample_index += 1
+            sample.metadata = dataset_cfg.inject_metadata(getattr(sample, "metadata", None))
+            sample.generate_function_path = getattr(dataset_cfg, "custom_generate_function_path", None)
+            group.append(sample)
+        sampling_params = base_sampling_params
+        if getattr(args, "sglang_enable_deterministic_inference", False):
+            sampling_params = base_sampling_params.copy()
+            sampling_params["sampling_seed"] = args.rollout_seed
+        tasks.append(
+            asyncio.create_task(generate_and_rm_group(args, group, sampling_params=sampling_params, evaluation=True))
+        )
+
+    data = []
+    do_print = True
+    pbar = tqdm(total=len(tasks), desc=f"Eval {dataset_cfg.name}", disable=not do_print)
+    for coro in asyncio.as_completed(tasks):
+        group = await coro
+        if do_print:
+            sample = group[0]
+            logger.info(
+                "eval_rollout_single_dataset example data: "
+                f"{[str(sample.prompt) + sample.response]} "
+                f"reward={sample.reward}"
             )
-
-        data = []
-        do_print = True
-        pbar = tqdm(total=len(tasks), desc=f"Eval {dataset_cfg.name}", disable=not do_print)
-        for coro in asyncio.as_completed(tasks):
-            group = await coro
-            if do_print:
-                sample = group[0]
-                logger.info(
-                    "eval_rollout_single_dataset example data: "
-                    f"{[str(sample.prompt) + sample.response]} "
-                    f"reward={sample.reward}"
-                )
-                do_print = False
-            data.extend(group)
-            pbar.update(1)
-        pbar.close()
-    else:
-        tasks = []
-        for _i, prompt_sample in enumerate(dataset.samples):
-            for j in range(dataset_cfg.n_samples_per_eval_prompt):
-                sample = copy.deepcopy(prompt_sample)
-                sample.index = sample_index
-                sample_index += 1
-                sample.metadata = dataset_cfg.inject_metadata(getattr(sample, "metadata", None))
-                sample.generate_function_path = getattr(dataset_cfg, "custom_generate_function_path", None)
-                sampling_params = base_sampling_params
-                if getattr(args, "sglang_enable_deterministic_inference", False):
-                    sampling_params = base_sampling_params.copy()
-                    sampling_params["sampling_seed"] = args.rollout_seed + j
-                tasks.append(
-                    asyncio.create_task(
-                        generate_and_rm(args, sample, sampling_params=sampling_params, evaluation=True)
-                    )
-                )
-
-        data = []
-        do_print = True
-        pbar = tqdm(total=len(tasks), desc=f"Eval {dataset_cfg.name}", disable=not do_print)
-        for coro in asyncio.as_completed(tasks):
-            sample = await coro
-            if do_print:
-                logger.info(
-                    "eval_rollout_single_dataset example data: "
-                    f"{[str(sample.prompt) + sample.response]} "
-                    f"reward={sample.reward}"
-                )
-                do_print = False
-            if isinstance(sample, list):
-                data.extend(sample)
-            else:
-                data.append(sample)
-            pbar.update(1)
-        pbar.close()
+            do_print = False
+        data.extend(group)
+        pbar.update(1)
+    pbar.close()
 
     data.sort(key=lambda sample: sample.index)
 

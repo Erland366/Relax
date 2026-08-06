@@ -7,10 +7,23 @@ cd "${ROOT_DIR}"
 
 export REFINEMENT_DATA="${REFINEMENT_DATA:-/vast/users/qirong.ho/erland/Python_project/SFT_training/visual_xor_refinement_data}"
 export PROMPT_SET="${PROMPT_SET:-${REFINEMENT_DATA}/refinement_rl_train.parquet}"
-export EVAL_CONFIG="${EVAL_CONFIG:-${REFINEMENT_DATA}/refinement_eval_config.json}"
 export HF_CHECKPOINT="${HF_CHECKPOINT:-/vast/users/qirong.ho/erland/Python_project/SFT_training/qwen3-vl-0.37b-visual-xor-refinement-sft}"
 
-for required_file in "${HF_CHECKPOINT}/config.json" "${HF_CHECKPOINT}/model.safetensors" "${PROMPT_SET}" "${EVAL_CONFIG}"; do
+ENABLE_EVAL="${ENABLE_EVAL:-1}"
+if [ "${ENABLE_EVAL}" = "1" ]; then
+    export EVAL_CONFIG="${EVAL_CONFIG:-${REFINEMENT_DATA}/refinement_eval_config.json}"
+elif [ "${ENABLE_EVAL}" = "0" ]; then
+    unset EVAL_CONFIG EVAL_INTERVAL EVAL_MAX_CONTEXT_LEN EVAL_MAX_PROMPT_LEN EVAL_MAX_RESPONSE_LEN
+else
+    echo "ENABLE_EVAL must be 0 or 1, got ${ENABLE_EVAL}" >&2
+    exit 2
+fi
+
+required_files=("${HF_CHECKPOINT}/config.json" "${HF_CHECKPOINT}/model.safetensors" "${PROMPT_SET}")
+if [ "${ENABLE_EVAL}" = "1" ]; then
+    required_files+=("${EVAL_CONFIG}")
+fi
+for required_file in "${required_files[@]}"; do
     if [ ! -f "${required_file}" ]; then
         echo "Required CPU-vision input does not exist: ${required_file}" >&2
         exit 2
@@ -94,10 +107,12 @@ export ENABLE_RECOMPUTE=1
 export USE_STREAMING_DATASET=0
 export ROLLOUT_SHUFFLE=0
 
-export EVAL_INTERVAL="${EVAL_INTERVAL:-4}"
-export EVAL_MAX_CONTEXT_LEN=512
-export EVAL_MAX_PROMPT_LEN=511
-export EVAL_MAX_RESPONSE_LEN=3
+if [ "${ENABLE_EVAL}" = "1" ]; then
+    export EVAL_INTERVAL="${EVAL_INTERVAL:-4}"
+    export EVAL_MAX_CONTEXT_LEN=512
+    export EVAL_MAX_PROMPT_LEN=511
+    export EVAL_MAX_RESPONSE_LEN=3
+fi
 
 export ROLLOUT_TEMPERATURE=1.0
 export ROLLOUT_TOP_P=1.0

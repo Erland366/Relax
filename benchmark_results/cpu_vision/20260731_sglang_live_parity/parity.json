@@ -1,0 +1,272 @@
+{
+  "gates": {
+    "action_logprob_absolute_delta_max": 0.01,
+    "action_margin_absolute_delta_max": 0.01,
+    "action_probability_absolute_delta_max": 0.01,
+    "generated_token_match_rate_min": 1.0,
+    "text_match_rate_min": 1.0
+  },
+  "metadata": {
+    "action_a_token_id": 32,
+    "action_b_token_id": 33,
+    "base_gpu_id": 0,
+    "checkpoint": "/vast/users/qirong.ho/erland/Python_project/SFT_training/qwen3-vl-0.37b-visual-xor-refinement-sft",
+    "dataset": "/vast/users/qirong.ho/erland/Python_project/SFT_training/visual_xor_refinement_data/refinement_rl_eval.parquet",
+    "host": "127.0.0.1",
+    "num_images": 8,
+    "port": 31000,
+    "vision_revision": "7230823af0f8c9c936ea3c5d265081349c33e59e4f46c73fa2c1d3abbe3adcb5"
+  },
+  "passed": true,
+  "samples": [
+    {
+      "action_logprob_absolute_delta": {
+        "action_a": 5.960464477539063e-08,
+        "action_b": 5.960464477539063e-08
+      },
+      "action_margin_absolute_delta": 0.0,
+      "action_probability_absolute_delta": 0.0,
+      "feature_id": "ae3779b8f2088df0431779448f1a83586d69d71096bcd18686b3d17a1a406414",
+      "generated_token_match": true,
+      "native": {
+        "action_a_logprob": -0.5239084959030151,
+        "action_a_probability": 0.5926665999540697,
+        "action_b_logprob": -0.8989084959030151,
+        "action_b_probability": 0.4073334000459303,
+        "action_margin": 0.375,
+        "generated_token_id": 32,
+        "text": "A"
+      },
+      "precomputed": {
+        "action_a_logprob": -0.5239085555076599,
+        "action_a_probability": 0.5926665999540697,
+        "action_b_logprob": -0.8989085555076599,
+        "action_b_probability": 0.4073334000459303,
+        "action_margin": 0.375,
+        "generated_token_id": 32,
+        "text": "A"
+      },
+      "sample_id": "b544a0b1cbd68c7b11083d28",
+      "text_match": true
+    },
+    {
+      "action_logprob_absolute_delta": {
+        "action_a": 4.76837158203125e-07,
+        "action_b": 5.811452865600586e-07
+      },
+      "action_margin_absolute_delta": 1.043081283569336e-07,
+      "action_probability_absolute_delta": 1.7429432036530912e-08,
+      "feature_id": "19e71595e66ea4d247f9bea16d4c6abb6284a3a2e753edebe2ab4d8d13544002",
+      "generated_token_match": true,
+      "native": {
+        "action_a_logprob": -1.5516905784606934,
+        "action_a_probability": 0.21206881182686205,
+        "action_b_logprob": -0.23919062316417694,
+        "action_b_probability": 0.7879311881731379,
+        "action_margin": -1.3124999552965164,
+        "generated_token_id": 33,
+        "text": "B"
+      },
+      "precomputed": {
+        "action_a_logprob": -1.5516901016235352,
+        "action_a_probability": 0.21206879439743,
+        "action_b_logprob": -0.23919004201889038,
+        "action_b_probability": 0.78793120560257,
+        "action_margin": -1.3125000596046448,
+        "generated_token_id": 33,
+        "text": "B"
+      },
+      "sample_id": "f07534971a8c09b1a437b19e",
+      "text_match": true
+    },
+    {
+      "action_logprob_absolute_delta": {
+        "action_a": 2.384185791015625e-07,
+        "action_b": 2.8312206268310547e-07
+      },
+      "action_margin_absolute_delta": 4.470348358154297e-08,
+      "action_probability_absolute_delta": 7.469756729827637e-09,
+      "feature_id": "491a7f3dffd99371c6ebdee98d4bdae43ecece40464c433e0d474e31b3f80fd9",
+      "generated_token_match": true,
+      "native": {
+        "action_a_logprob": -1.5516905784606934,
+        "action_a_probability": 0.21206881182686205,
+        "action_b_logprob": -0.23919062316417694,
+        "action_b_probability": 0.7879311881731379,
+        "action_margin": -1.3124999552965164,
+        "generated_token_id": 33,
+        "text": "B"
+      },
+      "precomputed": {
+        "action_a_logprob": -1.5516903400421143,
+        "action_a_probability": 0.21206880435710532,
+        "action_b_logprob": -0.23919034004211426,
+        "action_b_probability": 0.7879311956428947,
+        "action_margin": -1.3125,
+        "generated_token_id": 33,
+        "text": "B"
+      },
+      "sample_id": "48771c042752696e33a99a15",
+      "text_match": true
+    },
+    {
+      "action_logprob_absolute_delta": {
+        "action_a": 3.5762786865234375e-07,
+        "action_b": 3.5762786865234375e-07
+      },
+      "action_margin_absolute_delta": 0.0,
+      "action_probability_absolute_delta": 0.0,
+      "feature_id": "65356121cc842316957caf36b8afd5a09839a6ac512774464fad9d194ba0a648",
+      "generated_token_match": true,
+      "native": {
+        "action_a_logprob": -0.451792448759079,
+        "action_a_probability": 0.6370308013713525,
+        "action_b_logprob": -1.0142924785614014,
+        "action_b_probability": 0.3629691986286475,
+        "action_margin": 0.5625000298023224,
+        "generated_token_id": 32,
+        "text": "A"
+      },
+      "precomputed": {
+        "action_a_logprob": -0.4517920911312103,
+        "action_a_probability": 0.6370308013713525,
+        "action_b_logprob": -1.0142921209335327,
+        "action_b_probability": 0.3629691986286475,
+        "action_margin": 0.5625000298023224,
+        "generated_token_id": 32,
+        "text": "A"
+      },
+      "sample_id": "6e1a46dd45c71f6406aacdf2",
+      "text_match": true
+    },
+    {
+      "action_logprob_absolute_delta": {
+        "action_a": 1.4007091522216797e-06,
+        "action_b": 1.430511474609375e-06
+      },
+      "action_margin_absolute_delta": 2.9802322387695312e-08,
+      "action_probability_absolute_delta": 6.767860383227742e-09,
+      "feature_id": "8a125b6eb071986008ae9dd20e0ae2bfd2e01de70178ba420fe49b8fafde6632",
+      "generated_token_match": true,
+      "native": {
+        "action_a_logprob": -0.42951709032058716,
+        "action_a_probability": 0.6513548511303336,
+        "action_b_logprob": -1.0545170307159424,
+        "action_b_probability": 0.34864514886966635,
+        "action_margin": 0.6249999403953552,
+        "generated_token_id": 32,
+        "text": "A"
+      },
+      "precomputed": {
+        "action_a_logprob": -0.4295184910297394,
+        "action_a_probability": 0.651354857898194,
+        "action_b_logprob": -1.054518461227417,
+        "action_b_probability": 0.34864514210180597,
+        "action_margin": 0.6249999701976776,
+        "generated_token_id": 32,
+        "text": "A"
+      },
+      "sample_id": "212b9339dcef488e0a8c643c",
+      "text_match": true
+    },
+    {
+      "action_logprob_absolute_delta": {
+        "action_a": 0.0,
+        "action_b": 0.0
+      },
+      "action_margin_absolute_delta": 0.0,
+      "action_probability_absolute_delta": 0.0,
+      "feature_id": "4dc812bb2e78c4826fae0820dff7b2f188606c0de2a2020919a123821112bd87",
+      "generated_token_match": true,
+      "native": {
+        "action_a_logprob": -1.2243521213531494,
+        "action_a_probability": 0.29421497216298875,
+        "action_b_logprob": -0.3493521213531494,
+        "action_b_probability": 0.7057850278370112,
+        "action_margin": -0.875,
+        "generated_token_id": 33,
+        "text": "B"
+      },
+      "precomputed": {
+        "action_a_logprob": -1.2243521213531494,
+        "action_a_probability": 0.29421497216298875,
+        "action_b_logprob": -0.3493521213531494,
+        "action_b_probability": 0.7057850278370112,
+        "action_margin": -0.875,
+        "generated_token_id": 33,
+        "text": "B"
+      },
+      "sample_id": "3c41d1df8cf6332cc282ab1f",
+      "text_match": true
+    },
+    {
+      "action_logprob_absolute_delta": {
+        "action_a": 3.5762786865234375e-07,
+        "action_b": 3.8743019104003906e-07
+      },
+      "action_margin_absolute_delta": 2.9802322387695312e-08,
+      "action_probability_absolute_delta": 4.800696590256948e-09,
+      "feature_id": "9051d36f4a8b46114b087f0ba506f0f785a15e293dbd6f2e1bca5162277b36dd",
+      "generated_token_match": true,
+      "native": {
+        "action_a_logprob": -1.6012712717056274,
+        "action_a_probability": 0.20181322466072713,
+        "action_b_logprob": -0.22627128660678864,
+        "action_b_probability": 0.7981867753392728,
+        "action_margin": -1.3749999850988388,
+        "generated_token_id": 33,
+        "text": "B"
+      },
+      "precomputed": {
+        "action_a_logprob": -1.601271629333496,
+        "action_a_probability": 0.20181322946142372,
+        "action_b_logprob": -0.22627167403697968,
+        "action_b_probability": 0.7981867705385763,
+        "action_margin": -1.3749999552965164,
+        "generated_token_id": 33,
+        "text": "B"
+      },
+      "sample_id": "12b3cd18f8ed59d03eaa3b76",
+      "text_match": true
+    },
+    {
+      "action_logprob_absolute_delta": {
+        "action_a": 5.662441253662109e-07,
+        "action_b": 5.364418029785156e-07
+      },
+      "action_margin_absolute_delta": 2.9802322387695312e-08,
+      "action_probability_absolute_delta": 7.003656543602688e-09,
+      "feature_id": "f09c9c542a45fd6a9b8ed39fe28b448fb2c7e650b404436156e3289183498f87",
+      "generated_token_match": true,
+      "native": {
+        "action_a_logprob": -0.47490909695625305,
+        "action_a_probability": 0.622459324198198,
+        "action_b_logprob": -0.9749090671539307,
+        "action_b_probability": 0.37754067580180195,
+        "action_margin": 0.4999999701976776,
+        "generated_token_id": 32,
+        "text": "A"
+      },
+      "precomputed": {
+        "action_a_logprob": -0.4749085307121277,
+        "action_a_probability": 0.6224593312018546,
+        "action_b_logprob": -0.9749085307121277,
+        "action_b_probability": 0.3775406687981454,
+        "action_margin": 0.5,
+        "generated_token_id": 32,
+        "text": "A"
+      },
+      "sample_id": "0045743412af78ffced33957",
+      "text_match": true
+    }
+  ],
+  "schema_version": 1,
+  "summary": {
+    "generated_token_match_rate": 1.0,
+    "max_action_logprob_absolute_delta": 1.430511474609375e-06,
+    "max_action_margin_absolute_delta": 1.043081283569336e-07,
+    "max_action_probability_absolute_delta": 1.7429432036530912e-08,
+    "num_samples": 8,
+    "text_match_rate": 1.0
+  }
+}

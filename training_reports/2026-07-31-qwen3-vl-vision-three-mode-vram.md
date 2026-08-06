@@ -1,8 +1,15 @@
 # Qwen3-VL Three-Mode Vision VRAM and Cache Comparison
 
+> **Corrected performance follow-up:** the matched three-mode workload was
+> rerun on 2026-08-01 after fixing SGLang's precomputed DeepStack consumer and
+> adding stage/payload instrumentation. Use
+> [the corrected performance report](2026-08-01-qwen3-vl-corrected-three-mode-performance.md)
+> for current timing and memory conclusions. This report preserves the
+> historical bring-up evidence.
+
 - **Date:** 2026-07-31
-- **Status:** GPU-weight omission passed end to end; performance claims remain
-  blocked on live native-versus-precomputed semantic parity
+- **Status:** GPU-weight omission and live semantic parity passed; CPU scaling
+  and transport performance remain open
 - **Hardware:** four AMD MI210 GPUs; two allocated physical CPU cores
 - **Checkpoint:**
   `/vast/users/qirong.ho/erland/Python_project/SFT_training/qwen3-vl-0.37b-visual-xor-refinement-sft`
@@ -25,8 +32,11 @@ The comparison answers three separate questions:
 - does the CPU cache avoid repeated encoding under the real evaluation and
   rollout workload?
 
-It does not yet establish that the CPU path is a behaviorally equivalent or
-faster replacement for native GPU vision.
+The original runs did not establish behavioral equivalence. A later fix and
+deterministic live SGLang parity probe now establish equivalence for the tested
+single-image PP1/CP1 path. The original timing measurements remain valid for
+the older implementation, but they must not be projected onto the corrected
+path or used as a CPU scaling result.
 
 ## Equalized configuration
 
@@ -176,16 +186,22 @@ The baseline evaluation is also a live-system correctness signal:
 | CPU resident | 0.5039 | 1.0 | 0.6875 | 0.5000 | 0.5000 |
 | CPU omitted | 0.5000 | 1.0 | 0.7148 | 0.5000 | 0.5000 |
 
-CPU resident and CPU omitted agree closely: both retain an action-A bias and
-score at chance. That makes GPU-weight omission an unlikely cause of the
-behavioral difference. Native GPU vision is balanced between A and B and is
+CPU resident and CPU omitted agreed closely: both retained an action-A bias
+and scored at chance. That made GPU-weight omission an unlikely cause of the
+behavioral difference. Native GPU vision was balanced between A and B and was
 materially above chance on the same held-out evaluation.
 
 The independent runs use stochastic sampling, so this table alone does not
-locate the mismatch. The gap is nevertheless too large to support a
-performance-equivalence claim. Earlier local Hugging Face feature and logit
-parity passed, which narrows the next gate to the live serving/training
-integration rather than the standalone CPU encoder.
+locate the mismatch. The gap was nevertheless too large to support a
+performance-equivalence claim. The follow-up investigation found that
+SGLang's transformers multimodal wrapper parsed but did not consume
+`precomputed_embeddings`. Relax already serialized final plus all three
+DeepStack streams correctly. After adding the missing language-model adapter,
+an omitted-weight one-cycle run scored `0.69921875` held out with action-A
+rate `0.453125`; the earlier native result was `0.6816` and `0.4980`. The
+deterministic eight-image SGLang gate then matched all tokens with maximum
+action-margin delta `1.043081283569336e-07`. See the
+[live parity report](2026-07-31-qwen3-vl-live-precomputed-deepstack-parity.md).
 
 ## Conclusions
 
@@ -200,12 +216,12 @@ integration rather than the standalone CPU encoder.
    native-to-omitted difference.
 4. **This CPU path is currently slower on the tested allocation.** It is about
    1.53x native wall time, and omission does not improve throughput.
-5. **Semantic parity is the P0 blocker.** Before CPU scaling, binary transport,
-   more replicas, or throughput claims, compare native-image and precomputed-
-   feature logits inside the live SGLang transformers backend with identical
-   checkpoint revision, processor-expanded prompt IDs, position IDs, feature
-   bundle, sampling parameters, and policy version. Repeat the same fixed-
-   input gate at the Megatron actor-forward boundary.
+5. **The semantic blocker is closed for single-image PP1/CP1.** The corrected
+   live SGLang path matched native decisions on eight fixed images, and the
+   omitted-weight Relax run kept Megatron/SGLang sampled-token log-probability
+   differences below `5e-7`. CPU scaling, binary transport, multiple replicas,
+   video, multi-image requests, CP, PP greater than one, and chunked multimodal
+   prefill remain separate gates.
 
 ## Evidence
 

@@ -7,6 +7,7 @@ import multiprocessing
 import os
 import random
 import socket
+from time import monotonic
 
 import httpx
 
@@ -167,18 +168,55 @@ def _next_actor():
     return actor
 
 
-async def _post(client, url, payload, max_retries=MAX_RETRIES, headers=None):
+def _accumulate_request_metric(metrics: dict, name: str, value: float | int) -> None:
+    metrics[name] = metrics.get(name, 0) + value
+
+
+async def _post(client, url, payload, max_retries=MAX_RETRIES, headers=None, request_metrics=None):
     retry_count = 0
     while retry_count < max_retries:
         response = None
         try:
-            response = await client.post(url, json=payload or {}, headers=headers)
+            if request_metrics is None:
+                response = await client.post(url, json=payload or {}, headers=headers)
+            else:
+                _accumulate_request_metric(request_metrics, "attempts", 1)
+                request_build_started_at = monotonic()
+                request = client.build_request("POST", url, json=payload or {}, headers=headers)
+                _accumulate_request_metric(
+                    request_metrics,
+                    "request_build_seconds",
+                    monotonic() - request_build_started_at,
+                )
+                _accumulate_request_metric(request_metrics, "request_body_bytes", len(request.content))
+                response_wait_started_at = monotonic()
+                response = await client.send(request)
+                _accumulate_request_metric(
+                    request_metrics,
+                    "response_wait_seconds",
+                    monotonic() - response_wait_started_at,
+                )
             response.raise_for_status()
+            response_read_started_at = monotonic()
             content = await response.aread()
+            if request_metrics is not None:
+                _accumulate_request_metric(
+                    request_metrics,
+                    "response_read_seconds",
+                    monotonic() - response_read_started_at,
+                )
+                _accumulate_request_metric(request_metrics, "response_body_bytes", len(content))
+            response_decode_started_at = monotonic()
             try:
                 output = json.loads(content)
             except json.JSONDecodeError:
                 output = content.decode() if isinstance(content, bytes) else content
+            if request_metrics is not None:
+                _accumulate_request_metric(
+                    request_metrics,
+                    "response_decode_seconds",
+                    monotonic() - response_decode_started_at,
+                )
         except Exception as e:
             retry_count += 1
 
@@ -259,8 +297,24 @@ def _init_ray_distributed_post(args):
                 timeout=httpx.Timeout(None),
             )
 
-        async def do_post(self, url, payload, max_retries=MAX_RETRIES, headers=None):
-            return await _post(self._client, url, payload, max_retries, headers=headers)
+        async def do_post(
+            self,
+            url,
+            payload,
+            max_retries=MAX_RETRIES,
+            headers=None,
+            collect_request_metrics=False,
+        ):
+            request_metrics = {} if collect_request_metrics else None
+            output = await _post(
+                self._client,
+                url,
+                payload,
+                max_retries,
+                headers=headers,
+                request_metrics=request_metrics,
+            )
+            return (output, request_metrics) if collect_request_metrics else output
 
     # Create actors per node
     created = []
@@ -284,7 +338,7 @@ def _init_ray_distributed_post(args):
     _post_actors = created
 
 
-async def post(url, payload, max_retries=MAX_RETRIES, headers=None):
+async def post(url, payload, max_retries=MAX_RETRIES, headers=None, request_metrics=None):
     # If distributed mode is enabled and actors exist, dispatch via Ray.
     if _distributed_post_enabled and _post_actors:
         try:
@@ -296,13 +350,31 @@ async def post(url, payload, max_retries=MAX_RETRIES, headers=None):
                 # `min(32, cpu+4)`), which becomes a hard upper bound on the
                 # number of in-flight POSTs that can be waited on in parallel
                 # and produces large tail latencies under high concurrency.
-                obj_ref = actor.do_post.remote(url, payload, max_retries, headers=headers)
-                return await obj_ref
+                obj_ref = actor.do_post.remote(
+                    url,
+                    payload,
+                    max_retries,
+                    headers=headers,
+                    collect_request_metrics=request_metrics is not None,
+                )
+                result = await obj_ref
+                if request_metrics is not None:
+                    output, remote_metrics = result
+                    request_metrics.update(remote_metrics)
+                    return output
+                return result
         except Exception as e:
             logger.info(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
             # fall through to local
 
-    return await _post(_http_client, url, payload, max_retries, headers=headers)
+    return await _post(
+        _http_client,
+        url,
+        payload,
+        max_retries,
+        headers=headers,
+        request_metrics=request_metrics,
+    )
 
 
 async def get(url):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -55,3 +56,35 @@ def test_post_retries_retryable_503_then_succeeds():
 
     assert result == {"ok": True}
     assert client.calls == 2
+
+
+def test_post_collects_request_build_and_response_metrics():
+    observed = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["request_body"] = request.content
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    async def run_request():
+        metrics = {}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await _post(
+                client,
+                "http://test/post",
+                {"values": [1.0, 2.0]},
+                max_retries=1,
+                request_metrics=metrics,
+            )
+        return result, metrics
+
+    result, metrics = asyncio.run(run_request())
+
+    assert result == {"ok": True}
+    assert json.loads(observed["request_body"]) == {"values": [1.0, 2.0]}
+    assert metrics["attempts"] == 1
+    assert metrics["request_body_bytes"] == len(observed["request_body"])
+    assert metrics["response_body_bytes"] > 0
+    assert metrics["request_build_seconds"] >= 0.0
+    assert metrics["response_wait_seconds"] >= 0.0
+    assert metrics["response_read_seconds"] >= 0.0
+    assert metrics["response_decode_seconds"] >= 0.0

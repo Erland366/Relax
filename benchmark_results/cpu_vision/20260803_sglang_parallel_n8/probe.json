@@ -1,0 +1,266 @@
+{
+  "gates": {
+    "action_logprob_absolute_delta_max": 0.01,
+    "action_margin_absolute_delta_max": 0.01,
+    "action_probability_absolute_delta_max": 0.01,
+    "generated_token_match_rate_min": 1.0,
+    "text_match_rate_min": 1.0
+  },
+  "metadata": {
+    "action_a_token_id": 32,
+    "action_b_token_id": 33,
+    "base_gpu_id": 0,
+    "checkpoint": "/vast/users/qirong.ho/erland/Python_project/SFT_training/qwen3-vl-0.37b-visual-xor-refinement-sft",
+    "dataset": "/vast/users/qirong.ho/erland/Python_project/SFT_training/visual_xor_refinement_data/refinement_rl_eval.parquet",
+    "deterministic_parallel_sampling_supported": false,
+    "host": "127.0.0.1",
+    "num_images": 1,
+    "parallel_samples": 8,
+    "port": 31000,
+    "vision_revision": "7230823af0f8c9c936ea3c5d265081349c33e59e4f46c73fa2c1d3abbe3adcb5"
+  },
+  "parallel_sampling": {
+    "gates": {
+      "action_logprob_absolute_delta_max": 0.01,
+      "action_margin_absolute_delta_max": 0.01,
+      "action_probability_absolute_delta_max": 0.01,
+      "output_match_rate_min": 1.0,
+      "parallel_to_scalar_request_body_ratio_max": 1.01,
+      "text_match_rate_min": 1.0
+    },
+    "passed": true,
+    "samples": [
+      {
+        "branches": [
+          {
+            "action_logprob_absolute_delta": {
+              "action_a": 1.1920928955078125e-07,
+              "action_b": 1.1920928955078125e-07
+            },
+            "action_margin_absolute_delta": 0.0,
+            "action_probability_absolute_delta": 0.0,
+            "branch_index": 0,
+            "output_match": true,
+            "result": {
+              "action_a_logprob": -0.5239086747169495,
+              "action_a_probability": 0.5926665999540697,
+              "action_b_logprob": -0.8989086747169495,
+              "action_b_probability": 0.4073334000459303,
+              "action_margin": 0.375,
+              "generated_token_id": 32,
+              "text": "A"
+            },
+            "text_match": true
+          },
+          {
+            "action_logprob_absolute_delta": {
+              "action_a": 2.980232238769531e-07,
+              "action_b": 2.980232238769531e-07
+            },
+            "action_margin_absolute_delta": 0.0,
+            "action_probability_absolute_delta": 0.0,
+            "branch_index": 1,
+            "output_match": true,
+            "result": {
+              "action_a_logprob": -0.5239088535308838,
+              "action_a_probability": 0.5926665999540697,
+              "action_b_logprob": -0.8989088535308838,
+              "action_b_probability": 0.4073334000459303,
+              "action_margin": 0.375,
+              "generated_token_id": 32,
+              "text": "A"
+            },
+            "text_match": true
+          },
+          {
+            "action_logprob_absolute_delta": {
+              "action_a": 1.1920928955078125e-07,
+              "action_b": 1.1920928955078125e-07
+            },
+            "action_margin_absolute_delta": 0.0,
+            "action_probability_absolute_delta": 0.0,
+            "branch_index": 2,
+            "output_match": true,
+            "result": {
+              "action_a_logprob": -0.5239086747169495,
+              "action_a_probability": 0.5926665999540697,
+              "action_b_logprob": -0.8989086747169495,
+              "action_b_probability": 0.4073334000459303,
+              "action_margin": 0.375,
+              "generated_token_id": 32,
+              "text": "A"
+            },
+            "text_match": true
+          },
+          {
+            "action_logprob_absolute_delta": {
+              "action_a": 2.980232238769531e-07,
+              "action_b": 2.980232238769531e-07
+            },
+            "action_margin_absolute_delta": 0.0,
+            "action_probability_absolute_delta": 0.0,
+            "branch_index": 3,
+            "output_match": true,
+            "result": {
+              "action_a_logprob": -0.5239088535308838,
+              "action_a_probability": 0.5926665999540697,
+              "action_b_logprob": -0.8989088535308838,
+              "action_b_probability": 0.4073334000459303,
+              "action_margin": 0.375,
+              "generated_token_id": 32,
+              "text": "A"
+            },
+            "text_match": true
+          },
+          {
+            "action_logprob_absolute_delta": {
+              "action_a": 1.1920928955078125e-07,
+              "action_b": 1.1920928955078125e-07
+            },
+            "action_margin_absolute_delta": 0.0,
+            "action_probability_absolute_delta": 0.0,
+            "branch_index": 4,
+            "output_match": true,
+            "result": {
+              "action_a_logprob": -0.5239086747169495,
+              "action_a_probability": 0.5926665999540697,
+              "action_b_logprob": -0.8989086747169495,
+              "action_b_probability": 0.4073334000459303,
+              "action_margin": 0.375,
+              "generated_token_id": 32,
+              "text": "A"
+            },
+            "text_match": true
+          },
+          {
+            "action_logprob_absolute_delta": {
+              "action_a": 2.980232238769531e-07,
+              "action_b": 2.980232238769531e-07
+            },
+            "action_margin_absolute_delta": 0.0,
+            "action_probability_absolute_delta": 0.0,
+            "branch_index": 5,
+            "output_match": true,
+            "result": {
+              "action_a_logprob": -0.5239088535308838,
+              "action_a_probability": 0.5926665999540697,
+              "action_b_logprob": -0.8989088535308838,
+              "action_b_probability": 0.4073334000459303,
+              "action_margin": 0.375,
+              "generated_token_id": 32,
+              "text": "A"
+            },
+            "text_match": true
+          },
+          {
+            "action_logprob_absolute_delta": {
+              "action_a": 1.1920928955078125e-07,
+              "action_b": 1.1920928955078125e-07
+            },
+            "action_margin_absolute_delta": 0.0,
+            "action_probability_absolute_delta": 0.0,
+            "branch_index": 6,
+            "output_match": true,
+            "result": {
+              "action_a_logprob": -0.5239086747169495,
+              "action_a_probability": 0.5926665999540697,
+              "action_b_logprob": -0.8989086747169495,
+              "action_b_probability": 0.4073334000459303,
+              "action_margin": 0.375,
+              "generated_token_id": 32,
+              "text": "A"
+            },
+            "text_match": true
+          },
+          {
+            "action_logprob_absolute_delta": {
+              "action_a": 2.980232238769531e-07,
+              "action_b": 2.980232238769531e-07
+            },
+            "action_margin_absolute_delta": 0.0,
+            "action_probability_absolute_delta": 0.0,
+            "branch_index": 7,
+            "output_match": true,
+            "result": {
+              "action_a_logprob": -0.5239088535308838,
+              "action_a_probability": 0.5926665999540697,
+              "action_b_logprob": -0.8989088535308838,
+              "action_b_probability": 0.4073334000459303,
+              "action_margin": 0.375,
+              "generated_token_id": 32,
+              "text": "A"
+            },
+            "text_match": true
+          }
+        ],
+        "parallel_request_body_bytes": 3179557,
+        "sample_index": 0,
+        "scalar_request_body_bytes": 3179549,
+        "scalar_result": {
+          "action_a_logprob": -0.5239085555076599,
+          "action_a_probability": 0.5926665999540697,
+          "action_b_logprob": -0.8989085555076599,
+          "action_b_probability": 0.4073334000459303,
+          "action_margin": 0.375,
+          "generated_token_id": 32,
+          "text": "A"
+        }
+      }
+    ],
+    "summary": {
+      "generated_outputs": 8,
+      "generation_requests": 1,
+      "grouped_request_bytes": 3179557,
+      "max_action_logprob_absolute_delta": 2.980232238769531e-07,
+      "max_action_margin_absolute_delta": 0.0,
+      "max_action_probability_absolute_delta": 0.0,
+      "output_match_rate": 1.0,
+      "parallel_samples": 8,
+      "scalar_equivalent_request_bytes": 25436392,
+      "text_match_rate": 1.0,
+      "transport_reduction_ratio": 0.8749996854899862
+    }
+  },
+  "passed": true,
+  "samples": [
+    {
+      "action_logprob_absolute_delta": {
+        "action_a": 5.960464477539063e-08,
+        "action_b": 5.960464477539063e-08
+      },
+      "action_margin_absolute_delta": 0.0,
+      "action_probability_absolute_delta": 0.0,
+      "feature_id": "ae3779b8f2088df0431779448f1a83586d69d71096bcd18686b3d17a1a406414",
+      "generated_token_match": true,
+      "native": {
+        "action_a_logprob": -0.5239084959030151,
+        "action_a_probability": 0.5926665999540697,
+        "action_b_logprob": -0.8989084959030151,
+        "action_b_probability": 0.4073334000459303,
+        "action_margin": 0.375,
+        "generated_token_id": 32,
+        "text": "A"
+      },
+      "precomputed": {
+        "action_a_logprob": -0.5239085555076599,
+        "action_a_probability": 0.5926665999540697,
+        "action_b_logprob": -0.8989085555076599,
+        "action_b_probability": 0.4073334000459303,
+        "action_margin": 0.375,
+        "generated_token_id": 32,
+        "text": "A"
+      },
+      "sample_id": "b544a0b1cbd68c7b11083d28",
+      "text_match": true
+    }
+  ],
+  "schema_version": 1,
+  "summary": {
+    "generated_token_match_rate": 1.0,
+    "max_action_logprob_absolute_delta": 5.960464477539063e-08,
+    "max_action_margin_absolute_delta": 0.0,
+    "max_action_probability_absolute_delta": 0.0,
+    "num_samples": 1,
+    "text_match_rate": 1.0
+  }
+}

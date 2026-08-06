@@ -1,7 +1,8 @@
 # Qwen3-VL CPU Vision Two-Cycle Relax Smoke
 
 - **Date:** 2026-07-30
-- **Status:** Passed in GPU-resident control mode
+- **Status:** Passed as a transport/Megatron smoke; SGLang semantic claim was
+  superseded by the 2026-07-31 DeepStack fix
 - **Ray job:** `raysubmit_sZm1DdH3fZ9bqGLj`
 - **W&B:** `https://wandb.ai/erlandpg/relax-amd-visual-xor-refinement/runs/3rm56cjz`
 - **Log:** `log/visual-xor-refinement-cpu-vision-20260730_122136.log`
@@ -24,9 +25,13 @@ image
   -> actor-forward and SGLang weight synchronization
 ```
 
-This is a correctness smoke. It does not claim that CPU visual execution is
-faster than native GPU visual execution, and it does not yet prove the
-GPU-weight-omission mode.
+This is a transport and Megatron correctness smoke. A later investigation
+showed that the SGLang transformers wrapper in this run parsed but ignored the
+precomputed embedding field. Therefore this historical run proves CPU
+encoding, caching, transfer-queue transport, Megatron actor-forward/training,
+and synchronization, but not SGLang semantic consumption. The corrected live
+gate is documented in
+[Qwen3-VL Live Precomputed DeepStack Parity](2026-07-31-qwen3-vl-live-precomputed-deepstack-parity.md).
 
 ## Configuration
 
@@ -183,7 +188,8 @@ benchmark rather than treated as desirable behavior.
 ## Acceptance gates
 
 - [x] CPU encoder loaded the expected frozen visual revision.
-- [x] SGLang consumed processor-expanded IDs with the precomputed feature grid.
+- [x] SGLang received processor-expanded IDs with the precomputed feature grid.
+- [ ] This historical SGLang build consumed the precomputed feature tensor.
 - [x] Baseline evaluation completed all `768` samples.
 - [x] Both rollout IDs completed all `64` samples.
 - [x] Megatron actor-forward consumed final plus all three DeepStack streams.
@@ -192,15 +198,16 @@ benchmark rather than treated as desirable behavior.
 - [x] The job exited successfully and released all four GPUs.
 - [x] No model or optimizer checkpoint was written.
 - [ ] Exact cache counters were captured at shutdown.
-- [ ] SGLang and Megatron logits were compared under fixed feature, policy,
-      prompt, and sampled-token identities.
-- [ ] The same smoke passed with GPU visual weights omitted.
+- [x] A later corrected SGLang build passed fixed-image native-versus-
+      precomputed next-token parity.
+- [x] A later one-cycle smoke passed with GPU visual weights omitted and
+      Megatron/SGLang sampled-token differences below `5e-7`.
 - [ ] Native GPU, CPU-resident, and CPU-omitted VRAM/throughput were compared.
 
 ## Next gate
 
-The immediate correctness gate is the same two-cycle run with
-`VISION_ENCODER_OMIT_GPU_WEIGHTS=1`, followed by measured per-device VRAM.
-Before making a performance claim, add explicit aggregation for CPU cache and
-queue metrics and compare all three execution modes on the same input and
-policy versions.
+The original next gates were completed on 2026-07-31: GPU-weight omission,
+per-device VRAM, cache counters, the SGLang DeepStack consumption fix, and
+live parity. The remaining work is performance-oriented: replace JSON tensor
+transport, scale CPU replicas on a CPU-rich allocation, and validate the
+currently unsupported multimodal/parallelism variants.
