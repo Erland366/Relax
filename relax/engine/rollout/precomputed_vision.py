@@ -47,4 +47,21 @@ def serialize_sglang_precomputed_image_data(image_data: dict[str, Any]) -> dict[
         "image_grid_thw": image_grid_thw.detach().to(device="cpu", dtype=torch.int64).tolist(),
         "feature_id": image_data.get("feature_id", ""),
         "vision_revision": image_data.get("vision_revision", ""),
+        "feature_schema_version": image_data.get("feature_schema_version", ""),
+    }
+
+
+def build_sglang_precomputed_image_id_data(image_data: dict[str, Any]) -> dict[str, Any]:
+    """Replace one published inline feature with its immutable cache identity."""
+    if image_data.get("format") != "precomputed_embedding":
+        raise ValueError(f"Expected precomputed_embedding image data, got {image_data.get('format')!r}")
+    image_grid_thw = image_data.get("image_grid_thw")
+    if isinstance(image_grid_thw, torch.Tensor):
+        image_grid_thw = image_grid_thw.detach().to(device="cpu", dtype=torch.int64).tolist()
+    return {
+        "format": "precomputed_embedding_id",
+        "image_grid_thw": image_grid_thw,
+        "feature_id": image_data.get("feature_id", ""),
+        "vision_revision": image_data.get("vision_revision", ""),
+        "feature_schema_version": image_data.get("feature_schema_version", ""),
     }

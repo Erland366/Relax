@@ -4,6 +4,7 @@ import importlib
 import sys
 import types
 from argparse import ArgumentParser, Namespace
+from dataclasses import FrozenInstanceError
 
 import pytest
 import torch
@@ -144,17 +145,10 @@ def test_register_vision_encoder_only_when_enabled(monkeypatch):
     assert algo["vision_encoder"] is vision_component.VisionEncoder
 
 
-def test_vision_encoder_encode_reuses_cached_frozen_features(monkeypatch):
+def test_vision_encoder_encode_returns_replica_telemetry_with_cached_frozen_features():
     vision_component = _vision_component()
     vision_module = importlib.import_module("relax.backends.vision.qwen3_vl")
     cache_module = importlib.import_module("relax.backends.vision.cache")
-    monotonic_times = iter((10.0, 10.25))
-    monkeypatch.setattr(
-        vision_component,
-        "monotonic",
-        lambda: next(monotonic_times),
-        raising=False,
-    )
     image_grid_thw = torch.tensor([[1, 2, 2]], dtype=torch.int64)
     pixel_values = torch.arange(8, dtype=torch.float32).reshape(4, 2)
     encoded = vision_module.Qwen3VLFrozenVisionFeatures(
@@ -180,39 +174,45 @@ def test_vision_encoder_encode_reuses_cached_frozen_features(monkeypatch):
     encoder = vision_component.VisionEncoder.__new__(vision_component.VisionEncoder)
     encoder.backend = backend
     encoder.cache = cache_module.ByteBoundedLRUCache(max_bytes=1024)
+    encoder.replica_id = "vision-replica-a"
 
     first = encoder.encode(pixel_values=pixel_values, image_grid_thw=image_grid_thw)
-    first_metrics = encoder.get_metrics()
     second = encoder.encode(pixel_values=pixel_values.clone(), image_grid_thw=image_grid_thw.clone())
-    second_metrics = encoder.get_metrics()
 
-    assert first is encoded
-    assert second is first
+    expected_feature_id = vision_module.build_qwen3_vl_feature_cache_key(
+        pixel_values=pixel_values,
+        image_grid_thw=image_grid_thw,
+        vision_revision=backend.revision,
+        output_dtype=backend.output_dtype,
+    )
+    assert isinstance(first, vision_component.VisionEncoderResponse)
+    assert first.features is encoded
+    assert second.features is first.features
+    assert first.replica_id == second.replica_id == "vision-replica-a"
+    assert first.feature_id == second.feature_id == expected_feature_id
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert first.backend_encode_seconds >= 0.0
+    assert first.backend_batch_size == 1
+    assert second.backend_encode_seconds == 0.0
+    assert second.backend_batch_size == 0
     assert backend.calls == 1
-    assert first_metrics == {
-        "entries": 1,
-        "resident_bytes": encoded.nbytes,
-        "hits": 0,
-        "misses": 1,
-        "evictions": 0,
-        "encode_requests_total": 1,
-        "backend_encode_requests_total": 1,
-        "backend_encoded_images_total": 1,
-        "emitted_feature_bytes_total": encoded.nbytes,
-        "backend_encode_seconds_total": pytest.approx(0.25),
-    }
-    assert second_metrics == {
-        "entries": 1,
-        "resident_bytes": encoded.nbytes,
-        "hits": 1,
-        "misses": 1,
-        "evictions": 0,
-        "encode_requests_total": 2,
-        "backend_encode_requests_total": 1,
-        "backend_encoded_images_total": 1,
-        "emitted_feature_bytes_total": encoded.nbytes,
-        "backend_encode_seconds_total": pytest.approx(0.25),
-    }
+    assert first.metrics_snapshot["encode_requests_total"] == 1
+    assert first.metrics_snapshot["hits"] == 0
+    assert first.metrics_snapshot["misses"] == 1
+    assert first.metrics_snapshot["backend_encode_requests_total"] == 1
+    assert first.metrics_snapshot["backend_encoded_images_total"] == 1
+    assert first.metrics_snapshot["emitted_feature_bytes_total"] == encoded.nbytes
+    assert first.metrics_snapshot["process_cpu_seconds_total"] >= 0.0
+    assert first.metrics_snapshot["rss_bytes"] >= 0
+    assert second.metrics_snapshot["encode_requests_total"] == 2
+    assert second.metrics_snapshot["hits"] == 1
+    assert second.metrics_snapshot["misses"] == 1
+    assert second.metrics_snapshot["backend_encode_requests_total"] == 1
+    assert second.metrics_snapshot["backend_encoded_images_total"] == 1
+    assert second.metrics_snapshot["emitted_feature_bytes_total"] == encoded.nbytes
+    with pytest.raises(FrozenInstanceError):
+        first.features.feature_id = "mutable"
 
 
 def test_vision_encoder_encode_rejects_mismatched_requested_identity():
@@ -246,16 +246,16 @@ def test_vision_encoder_encode_rejects_mismatched_requested_identity():
     encoder = vision_component.VisionEncoder.__new__(vision_component.VisionEncoder)
     encoder.backend = FakeBackend()
     encoder.cache = cache_module.ByteBoundedLRUCache(max_bytes=1024)
+    encoder.replica_id = "vision-replica-identity"
 
-    assert (
-        encoder.encode(
-            pixel_values=pixel_values,
-            image_grid_thw=image_grid_thw,
-            requested_feature_id=feature_id,
-            requested_vision_revision=revision,
-        )
-        is encoded
+    response = encoder.encode(
+        pixel_values=pixel_values,
+        image_grid_thw=image_grid_thw,
+        requested_feature_id=feature_id,
+        requested_vision_revision=revision,
     )
+    assert response.features is encoded
+    assert response.feature_id == feature_id
     with pytest.raises(ValueError, match="feature_id.*match"):
         encoder.encode(
             pixel_values=pixel_values,
@@ -269,6 +269,62 @@ def test_vision_encoder_encode_rejects_mismatched_requested_identity():
             image_grid_thw=image_grid_thw,
             requested_feature_id=feature_id,
             requested_vision_revision="wrong-vision-revision",
+        )
+
+
+def test_vision_encoder_response_propagates_and_validates_feature_schema_version():
+    vision_component = _vision_component()
+    vision_module = importlib.import_module("relax.backends.vision.qwen3_vl")
+    cache_module = importlib.import_module("relax.backends.vision.cache")
+    image_grid_thw = torch.tensor([[1, 2, 2]], dtype=torch.int64)
+    pixel_values = torch.arange(8, dtype=torch.float32).reshape(4, 2)
+    schema_version = "qwen3-vl-frozen-vision-v1"
+    feature_id = vision_module.build_qwen3_vl_feature_cache_key(
+        pixel_values=pixel_values,
+        image_grid_thw=image_grid_thw,
+        vision_revision="vision-revision",
+        feature_schema_version=schema_version,
+        output_dtype=torch.bfloat16,
+    )
+    encoded = vision_module.Qwen3VLFrozenVisionFeatures(
+        image_grid_thw=image_grid_thw,
+        vision_embeds=torch.ones((1, 2), dtype=torch.bfloat16),
+        deepstack_visual_embeds=(),
+        feature_id=feature_id,
+        vision_revision="vision-revision",
+        feature_schema_version=schema_version,
+    )
+
+    class FakeBackend:
+        output_dtype = torch.bfloat16
+        revision = "vision-revision"
+        feature_schema_version = schema_version
+
+        def encode(self, *, pixel_values, image_grid_thw):
+            return encoded
+
+    encoder = vision_component.VisionEncoder.__new__(vision_component.VisionEncoder)
+    encoder.backend = FakeBackend()
+    encoder.cache = cache_module.ByteBoundedLRUCache(max_bytes=1024)
+    encoder.replica_id = "vision-replica-schema"
+
+    response = encoder.encode(
+        pixel_values=pixel_values,
+        image_grid_thw=image_grid_thw,
+        requested_feature_id=feature_id,
+        requested_vision_revision="vision-revision",
+        requested_feature_schema_version=schema_version,
+    )
+
+    assert response.feature_schema_version == schema_version
+    assert response.features.feature_schema_version == schema_version
+    with pytest.raises(ValueError, match="feature_schema_version.*match"):
+        encoder.encode(
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
+            requested_feature_id=feature_id,
+            requested_vision_revision="vision-revision",
+            requested_feature_schema_version="qwen3-vl-frozen-vision-v2",
         )
 
 

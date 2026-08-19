@@ -23,8 +23,10 @@ raw image
   -> CPU vision_encoder Ray Serve service
        -> final projected visual embeddings
        -> three ordered DeepStack embedding streams
-       -> byte-bounded, revisioned LRU cache
+       -> Tier 1 byte-bounded, schema/revision-aware producer LRU
   -> one SGLang precomputed_embedding request per eligible prompt group
+       -> Tier 2 byte-bounded SGLang host LRU
+       -> later requests carry only immutable feature identity
        -> native SGLang n-way decode branches
   -> Megatron precomputed visual forward boundary
 ```
@@ -75,13 +77,33 @@ export VISION_ENCODER_BACKEND=pytorch
 export VISION_ENCODER_NUM_CPUS=8
 export VISION_ENCODER_NUM_REPLICAS=1
 export VISION_ENCODER_CACHE_MAX_BYTES=1073741824
+export SGLANG_VISION_FEATURE_CACHE_MAX_BYTES=1073741824
 export VISION_ENCODER_MAX_BATCH_SIZE=8
 export VISION_ENCODER_OMIT_GPU_WEIGHTS=0
 ```
 
 The cache key includes the processed pixels, grid, output dtype, visual
-configuration, and a hash of every visual tensor. Reusing a feature from a
-different checkpoint revision is therefore not allowed.
+configuration, feature-schema version, and a hash of every visual tensor.
+Reusing a feature from a different checkpoint revision or representation
+schema is therefore not allowed. Oversized entries bypass Tier 1 admission
+without evicting smaller resident entries.
+
+`SGLANG_VISION_FEATURE_CACHE_MAX_BYTES` defaults to zero. A positive value
+enables the separate process-local Tier 2 cache in the SGLang multimodal
+processor. The first request publishes the packed BF16 tensor inline; later
+requests send `feature_id`, `vision_revision`, `feature_schema_version`, and
+the grid only. An exact marked miss produces one inline republish. Other HTTP
+400 errors, identity mismatches, grid mismatches, and a second failure are not
+retried through a hidden scalar fallback.
+
+Tier 2 is job-lifetime host RAM, not a persistent registry or database. It
+saves repeated BF16/base64 serialization on grouped cache hits, HTTP request
+bytes, and SGLang base64 reconstruction. It does not remove
+tokenizer-to-scheduler tensor transfer, feature H2D, multimodal prefill, or
+actor transport. Enabled operation requires the PyTorch CPU-vision backend,
+the SGLang Transformers implementation, and one tokenizer worker. Multiple
+engines require `consistent_hashing`; publication, ID lookup, and republish
+all use the content-addressed `feature_id` routing key.
 
 `VISION_ENCODER_NUM_CPUS` is reserved **per replica**. For example, two
 replicas with eight threads reserve sixteen Ray CPU slots, in addition to the
@@ -209,20 +231,30 @@ python -m examples.visual_xor.benchmark_cpu_vision_scaling \
   --dataset "$REFINEMENT_DATA/refinement_rl_train.parquet" \
   --output benchmark_results/cpu_vision/scaling.json \
   --peak-unique-images-per-second 20 \
-  --replica-counts 1,2 \
-  --thread-counts 2,4,8 \
-  --batch-sizes 1,4,8 \
+  --replica-counts 1,2,4 \
+  --thread-counts 1,2,4,8 \
+  --batch-sizes 1,2,4,8 \
+  --max-total-cpus 8 \
   --num-images 64 \
-  --repeats 3
+  --repeats 5
 ```
 
 The benchmark creates one frozen backend per spawned process, warms each
-worker before timing, reuses pools across batch-size trials, and records wall
-time, summed backend encode time, emitted feature bytes, completed images, and
-throughput. A configuration passes only if it sustains at least `1.25` times
-the supplied peak unique-image demand. The demand value must come from the
-rollout workload; inventing a small value only proves the harness, not
-capacity.
+worker before timing, keeps only one replica/thread process layout alive, and
+reuses that layout across its consecutive batch-size trials. It records outer
+wall time, summed backend-forward wall time, summed backend process CPU time,
+per-process configured thread count and peak RSS, emitted feature bytes,
+completed images, and throughput. `--max-total-cpus` defaults to eight and
+removes every layout where `replicas * threads_per_replica` exceeds that
+budget.
+
+A configuration passes only if it sustains at least `1.25` times the supplied
+peak unique-image demand. The recommendation chooses the smallest passing CPU
+reservation, then breaks ties by higher throughput, fewer replicas, fewer
+threads, and smaller explicit batch size. The artifact also reports scaling
+efficiency relative to the `1 replica x 1 thread x batch size 1` baseline.
+The demand value must come from the rollout workload; inventing a small value
+only proves the harness, not capacity.
 
 The batch-size dimension is currently a backend capability/what-if sweep.
 Visual-XOR rollout sends one image per service request and the service does not
@@ -231,12 +263,24 @@ yet coalesce independent Ray Serve requests into a larger visual batch.
 does not create dynamic batching. Use the batch-size-one result for the
 current end-to-end recipe. Treat larger-batch results as motivation for a
 separate request-batching change, not as throughput the live path already
-achieves.
+achieves. The offline artifact marks a layout batching-eligible only when its
+best explicit batch size improves throughput by at least 20% over batch size
+one, and selects the smallest batch size within 5% of that best throughput.
 
-Each live service replica exposes raw counters. The rollout path snapshots
-them after every eval and rollout, writes them to the normal log, and forwards
-them to W&B with cumulative (`*_total`) and since-last-snapshot
-(`*_interval`) values:
+`--vision-encoder-batch-wait-timeout-ms` and
+`VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS` currently accept only zero. Negative or
+non-finite values fail validation, and positive values fail with an explicit
+`NotImplementedError`; they are not a silent no-op. Implement the asynchronous
+per-replica miss queue only after an E2 artifact passes the 20% gate.
+
+Every `VisionEncoder.encode` response carries the immutable feature bundle,
+replica and feature identities, cache-hit state, backend-forward wall time,
+actual backend batch size, and the serving replica's cumulative counter
+snapshot. The rollout manager retains the newest snapshot observed from every
+replica; it does not call load-balanced `get_metrics()` and mislabel one
+arbitrary replica as deployment-wide state. It writes the aggregate after
+every eval and rollout and forwards cumulative (`*_total`) and
+since-last-snapshot (`*_interval`) values to W&B:
 
 ```text
 vision_encoder/cache/entries
@@ -252,6 +296,16 @@ vision_encoder/backend/emitted_feature_bytes_total, emitted_feature_bytes_interv
 vision_encoder/backend/encode_seconds_total, encode_seconds_interval
 vision_encoder/backend/images_per_second_interval
 vision_encoder/backend/seconds_per_request_interval
+vision_encoder/replicas/{expected,observed,active,idle,unobserved}
+vision_encoder/replica/<id>/requests_total, requests_interval
+vision_encoder/replica/<id>/request_fraction_total, request_fraction_interval
+vision_encoder/replica/<id>/process_cpu_seconds_total
+vision_encoder/replica/<id>/process_cpu_utilization_percent_interval
+vision_encoder/replica/<id>/rss_bytes
+vision_encoder/features/unique_total, unique_interval
+vision_encoder/backend/duplicate_encode_ratio, duplicate_encode_ratio_interval
+vision_encoder/backend/batch_size_{mean,p95,max}
+vision_encoder/backend/batch_size_{mean,p95,max}_interval
 
 perf_detail/rollout/vision_service_round_trip_time/{count,total,mean,p50,p95,max}
 perf_detail/rollout/precomputed_prepare_time/{count,total,mean,p50,p95,max}
@@ -265,13 +319,20 @@ perf_detail/rollout/http_request_body_bytes/{count,total,mean,p50,p95,max}
 perf_detail/rollout/http_response_body_bytes/{count,total,mean,p50,p95,max}
 perf_detail/rollout/sglang_generation_requests/{count,total,mean,p50,p95,max}
 perf_detail/rollout/sglang_parallel_samples/{count,total,mean,p50,p95,max}
+perf_detail/rollout/sglang_vision_cache_inline_publish_requests/{count,total,mean,p50,p95,max}
+perf_detail/rollout/sglang_vision_cache_id_only_requests/{count,total,mean,p50,p95,max}
+perf_detail/rollout/sglang_vision_cache_id_only_hits/{count,total,mean,p50,p95,max}
+perf_detail/rollout/sglang_vision_cache_id_only_misses/{count,total,mean,p50,p95,max}
+perf_detail/rollout/sglang_vision_cache_republish/{count,total,mean,p50,p95,max}
 ```
 
 Cache hits increment total requests but do not increment backend work or
-backend time. These counters are per replica, not a deployment-wide aggregate.
-The current correctness launcher uses one replica, so its snapshots are also
-deployment totals. Aggregate replica snapshots explicitly before interpreting
-a multi-replica experiment.
+backend time. `rss_bytes` is Linux process peak RSS from `ru_maxrss`, converted
+from KiB to bytes. CPU utilization is derived per replica from changes in
+process CPU seconds divided by changes in the replica's monotonic snapshot
+time. Interval feature sets are cleared after collection, so a recurring
+feature ID is counted again in the next rollout interval. Duplicate-encode
+ratio uses backend-miss feature identities rather than cache-hit identities.
 
 The client-side CPU-service round trip includes Ray/Serve scheduling and
 feature-result transport, while the service's backend encode counter measures
@@ -285,7 +346,119 @@ combined boundary dominates.
 
 The historical metric name `precomputed_to_list_time` remains for W&B series
 continuity. It now measures contiguous-BF16/base64 packing, not conversion to
-nested Python lists.
+nested Python lists. On a grouped Tier 2 ID hit, that serialization is skipped
+entirely. The actor still receives the established tensor-only dictionary;
+actor-side feature-table deduplication remains measurement-gated and is not
+silently introduced by the rollout cache.
+
+## CPU-ViT capacity experiment
+
+Set `CPU_VISION_CAPACITY_MODE=1` for E1 and E3 live runs. Before invoking the
+base launcher, the import-light preflight requires at least 16 CPUs in the
+process affinity mask, at least eight distinct `(physical_package_id,
+core_id)` pairs, and no more than eight reserved ViT CPUs across all replicas.
+This prevents an SMT-only allocation from being reported as a CPU scaling
+result.
+
+On the `faculty` Slurm cluster, submit the E0-E1 sequence with:
+
+```bash
+sbatch scripts/slurm/qwen3_vl_cpu_vit_e0_e1.sbatch
+```
+
+The batch job requests node-exclusive access, four MI210 GPUs, 16 non-SMT CPU
+cores, and 128 GiB for at most 12 hours. Node exclusivity is required because
+the single-node launcher uses a fixed Ray dashboard port and performs broad
+local Ray cleanup. It starts with the local full-vocabulary parity gate, runs
+the live scalar/grouped parity probe, and then runs D0-D3 sequentially in the
+same allocation. The grouped-native artifact remains non-blocking when the
+scalar CPU and grouped CPU gates pass. As an additional guard, the wrapper
+refuses to invoke the local Ray launcher if another active job owned by the
+same user shares its node.
+Artifacts and the D0-D3 log manifest are written under
+`benchmark_results/cpu_vision/slurm_<job_id>_e0_e1/`; Slurm output is written
+to `log/slurm-cpu-vit-e0-e1-<job_id>.log`.
+
+The four demand profiles keep exactly 64 generated responses per rollout:
+
+| Profile | `ROLLOUT_BATCH_SIZE` | `N_SAMPLES_PER_PROMPT` | Claim |
+|---|---:|---:|---|
+| D0 | 8 | 8 | Existing grouped GRPO baseline |
+| D1 | 16 | 4 | RL-valid GRPO |
+| D2 | 32 | 2 | Highest unique-image RL-valid demand |
+| D3 | 64 | 1 | System-performance probe only; no GRPO learning claim |
+
+For each E1 run, also set:
+
+```bash
+CPU_VISION_CAPACITY_MODE=1
+NUM_ROLLOUT=12
+VISION_ENCODER_NUM_REPLICAS=1
+VISION_ENCODER_NUM_CPUS=1
+VISION_ENCODER_OMIT_GPU_WEIGHTS=1
+VISION_ENCODER_CACHE_MAX_BYTES=1
+VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS=0
+ENABLE_EVAL=0
+```
+
+Keep `GLOBAL_BATCH_SIZE=32`, `NUM_STEPS_PER_ROLLOUT=2`, `MAX_STALENESS=4`,
+checkpoint saving disabled, and dataset shuffling disabled. Discard rollout
+cycles 0-1. For each later cycle, pair
+`vision_encoder/features/unique_interval` with the corresponding complete
+actor-cycle wall time. E1 peak consumer demand is the maximum paired ratio,
+not the encoder's isolated throughput.
+
+Run E3 on D2 with `1x1`, `1x4`, `2x2`, and `4x1`, plus the distinct E2 winner.
+If D2 does not make `1x1` actor data wait reach 5%, use D3 only as a saturation
+probe. Keep weight-update wall visible as a timing covariate; it is not a
+CPU-ViT optimization objective.
+
+The current checkout was prepared under affinity CPUs `8,72`. Both map to
+physical package zero, core 16, so this allocation has two SMT threads of one
+physical core. It correctly fails the capacity preflight.
+
+Slurm job `141944` subsequently completed E0 and all four E1 profiles on a
+CPU-rich node. Use the checked analyzer rather than hand-pairing log lines:
+
+```bash
+python -m examples.visual_xor.analyze_cpu_vision_demand \
+  --profile D0=benchmark_results/cpu_vision/slurm_141944_e0_e1/e1_d0.console.log \
+  --profile D1=benchmark_results/cpu_vision/slurm_141944_e0_e1/e1_d1.console.log \
+  --profile D2=benchmark_results/cpu_vision/slurm_141944_e0_e1/e1_d2.console.log \
+  --profile D3=benchmark_results/cpu_vision/slurm_141944_e0_e1/e1_d3.console.log \
+  --output benchmark_results/cpu_vision/slurm_141944_e0_e1/e1_demand.json
+```
+
+The global E1 peak is `5.8588356399` unique images/s and the E2 target is
+`7.3235445499` images/s. D2 peaked at `3.2404551625` images/s and its maximum
+steady actor-wait ratio was only `0.6549997%`, so D2 did not reach the 5%
+saturation gate. D0-D2 have exact request/image accounting. D3 generated the
+required 64 accepted responses per cycle but its last interval encoded 29
+extra refill/filter candidates; the artifact flags this rather than treating
+D3 as an RL-valid accounting pass. Corrected E2 Slurm job `142801` completed
+all 36 matrix points inside a 16-core Slurm step. The `1x1` batch-one result
+already sustains `17.433295` images/s. Explicit batch eight gains only `7.955%`
+at that smallest passing layout, so live dynamic batching is not eligible for
+the selected configuration.
+
+Corrected E3 Slurm job `142804` completed the equal-four-CPU D2 comparison.
+`1x4`, `2x2`, and `4x1` averaged `1.613`, `1.405`, and `1.454` seconds of
+steady rollout wall, respectively, while all mean actor-wait ratios remained
+below `0.62%`. `2x2` had the lowest rollout wall, but used approximately
+`4.41 GiB` aggregate encoder RSS; `4x1` used `8.58 GiB` and did not improve on
+`2x2`; `1x4` used only `2.27 GiB`. These results do not displace `1x1` as the
+system recommendation because its offline batch-one capacity is already
+`2.975` times the measured peak demand and the live actor is not starved.
+
+E4 isolates the 1 GiB producer cache from a 1 GiB SGLang transport cache at
+that `1x1` winner. Attempts `142805` and `142809` found, respectively, a
+tensor-valued grid that was not JSON serializable and an early SGLang media
+loader that rejected the ID-only dictionary before cache resolution. Both
+boundaries now have regression tests. The E4 Slurm wrapper also requires exact
+vision, rollout, and actor cycles 0-11 and runs the checked cache analyzer
+before it reports completion. Replacement job `142817` is the active matched
+ablation; no Tier 2 live speedup is claimed until its versioned artifact
+passes.
 
 ## Execution plan
 
@@ -361,18 +534,18 @@ not by implementation difficulty.
 
 1. **Replica routing and duplicate caches.** Ray Serve replicas currently own
    independent LRUs and requests are not sticky by `feature_id`. Aggregate
-   per-replica metrics to calculate:
+   response snapshots now calculate:
 
    ```text
    duplicate_encode_ratio =
        aggregate backend encode requests / unique feature IDs requested
    ```
 
-   First evaluate feature-ID-sticky routing. Move to a shared object store only
+   Restore the 1 GiB cache for the winning E3 layout and repeat D2. If this
+   ratio exceeds `1.25`, evaluate feature-ID-sticky routing next. Do not move
+   directly to a shared object store or database; consider shared storage only
    if routing cannot provide sufficient locality or sharing is also required
-   across actor and rollout processes. Treat more than twice the unique
-   feature work, or duplicated work that prevents the 1.25-times capacity
-   target, as a reason to change the design.
+   across actor and rollout processes.
 2. **Concurrent-miss coalescing.** Two simultaneous misses for the same feature
    can both run the CPU backend before either inserts into its replica's LRU.
    Measure this cache-stampede case separately from cross-replica duplication.
@@ -394,16 +567,20 @@ not by implementation difficulty.
    round trips and live native-versus-precomputed parity. Keep legacy nested
    payloads readable during migration, and do not inspect native media objects
    as dictionaries.
-5. **Binary registry only if cross-request duplication remains material.**
-   Measure packing, serialization, transfer, deserialization, reconstruction/
-   H2D, and temporary RSS again after packed transport. Use a bounded
-   engine-local binary/shared-memory registry only if the remaining repeated
-   traffic justifies ownership, routing, eviction, and missing-ID recovery.
+5. **Bounded engine-local feature cache, now opt-in.** The implemented Tier 2
+   cache preserves the packed-inline first-use path, then uses ID-only lookup
+   for the same schema/revision/feature identity. It is disabled by default,
+   byte bounded, sticky-routed, and recovers one marked miss by republishing
+   inline. Measure packing, HTTP bytes, reconstruction, H2D, temporary RSS,
+   hit/miss/republish counts, and rollout wall before adopting it. Do not call
+   it a shared database or cross-job registry.
 6. **Request batching is not configured batching.**
    `VISION_ENCODER_MAX_BATCH_SIZE` only rejects oversized requests; it does not
    coalesce independent requests. Measure queue delay and batch-size-one
-   capacity first. Add bounded dynamic batching only if the larger-batch
-   benchmark materially improves throughput without violating rollout latency.
+   capacity first. Add bounded dynamic batching only if an explicit batch size
+   above one improves E2 throughput by at least 20% at the same replica/thread
+   layout. The live path must then pass its separate rollout-wall, CPU
+   reservation, parity, and p95 service-latency adoption gates.
 7. **Backpressure and in-flight memory.** Cache capacity does not include JSON
    copies, Ray object copies, pinned staging buffers, GPU copies, or queued
    requests. Record peak process RSS and in-flight feature bytes, then bound
@@ -499,9 +676,10 @@ changing the first resource value.
 
 Prima.cpp, llama.cpp, a persistent database, and PP-aware DeepStack routing are
 deferred. They are considered only after the PyTorch CPU baseline is correct
-and measured. Inline feature transport is replaced by an ID-addressed bounded
-in-memory store only if serialization/transfer exceeds 10% of rollout wall time
-or duplicate payloads exceed twice the unique feature bytes.
+and measured. The implemented job-local Tier 2 cache is deliberately smaller
+than those proposals: it is process local, disabled by default, and retains an
+explicit inline publication/republication path. A shared or persistent store
+still requires measured cross-process or cross-job reuse.
 
 ## Current performance boundary
 
@@ -510,12 +688,25 @@ visual modules resident. Omission mode avoids constructing or materializing
 those modules. It remains opt-in and should be enabled only after both local
 HF and live SGLang parity pass on the target node.
 
-The SGLang router now transports contiguous BF16 bytes as base64 inside the
-existing JSON envelope. This avoids nested numeric JSON but still retransmits
-one feature per distinct HTTP request and retains base64's 4/3 expansion.
-Measure request serialization, reconstruction/H2D, SGLang prefill time, actor
-time, cache hit rate, and end-to-end throughput before calling the design a
-general performance win.
+With Tier 2 disabled, the SGLang router transports contiguous BF16 bytes as
+base64 inside the existing JSON envelope. This avoids nested numeric JSON but
+retransmits one feature per distinct HTTP request and retains base64's 4/3
+expansion. With Tier 2 enabled, the first grouped request remains inline and
+later sticky-routed requests are ID-only; a marked miss republishes inline
+once. Measure request serialization, reconstruction/H2D, SGLang prefill time,
+actor time, cache hit rate, and end-to-end throughput before calling the design
+a general performance win.
+
+The measured scaling result narrows that performance claim. One CPU thread
+already supplies nearly three times peak observed feature demand, and every
+E1/E3 actor-wait mean is below 1%. More ViT CPUs can reduce request latency,
+but they do not remove the present end-to-end bottleneck; multiple replicas
+also multiply model and cache RSS. The main research value is therefore
+policy-invariant compute and transport reuse with explicit invalidation, plus
+a demand-before-supply method that identifies when extra CPU capacity should
+not be reserved. Tier 2 must still demonstrate request-byte reduction and pass
+the rollout-wall and p95-latency adoption gates before it is enabled by
+default.
 
 The local CPU smoke on 2026-07-28 successfully loaded the real refinement
 checkpoint, encoded one image, and wrote a scaling artifact. With one replica,
@@ -610,5 +801,6 @@ logit-parity evidence. See
 
 CPU capacity under a workload that actually starves the actor, replica-level
 cache routing, video, multi-image requests, context/pipeline parallelism, and
-chunked multimodal prefill remain open. A binary feature registry is deferred
-until remaining transport is observed to pace a consumer.
+chunked multimodal prefill remain open. A shared or persistent feature store
+remains deferred until cross-process or cross-job reuse is measured to justify
+it.

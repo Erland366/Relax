@@ -61,3 +61,20 @@ def test_qwen3_vl_frozen_features_build_sglang_precomputed_payload_in_stream_ord
     )
     torch.testing.assert_close(image_data["image_grid_thw"], torch.tensor([[1, 4, 4]], dtype=torch.int64))
 
+
+def test_qwen3_vl_frozen_features_propagate_schema_version_to_sglang_payload():
+    module = _vision_module()
+    base = _features()
+    features = module.Qwen3VLFrozenVisionFeatures(
+        image_grid_thw=base.image_grid_thw,
+        vision_embeds=base.vision_embeds,
+        deepstack_visual_embeds=base.deepstack_visual_embeds,
+        feature_id="feature-id",
+        vision_revision="vision-revision",
+        feature_schema_version="qwen3-vl-frozen-vision-v1",
+    )
+
+    image_data = module.build_sglang_precomputed_image_data(features)
+
+    assert features.feature_schema_version == "qwen3-vl-frozen-vision-v1"
+    assert image_data["feature_schema_version"] == "qwen3-vl-frozen-vision-v1"

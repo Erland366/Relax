@@ -14,6 +14,7 @@ import torch
 _VISUAL_STATE_PREFIX = "model.visual."
 IMAGE_GRID_THW_KEY = "image_grid_thw"
 VISION_EMBEDS_KEY = "vision_embeds"
+QWEN3_VL_FROZEN_VISION_FEATURE_SCHEMA_VERSION = "qwen3-vl-frozen-vision-v1"
 
 
 def deepstack_visual_embeds_key(index: int) -> str:
@@ -39,6 +40,7 @@ class Qwen3VLFrozenVisionFeatures:
     deepstack_visual_embeds: tuple[torch.Tensor, ...]
     feature_id: str = ""
     vision_revision: str = ""
+    feature_schema_version: str = QWEN3_VL_FROZEN_VISION_FEATURE_SCHEMA_VERSION
 
     @property
     def embedding_streams(self) -> tuple[torch.Tensor, ...]:
@@ -101,6 +103,7 @@ def build_sglang_precomputed_image_data(features: Qwen3VLFrozenVisionFeatures) -
         IMAGE_GRID_THW_KEY: features.image_grid_thw,
         "feature_id": features.feature_id,
         "vision_revision": features.vision_revision,
+        "feature_schema_version": features.feature_schema_version,
     }
 
 
@@ -169,9 +172,11 @@ def build_qwen3_vl_feature_cache_key(
     image_grid_thw: torch.Tensor,
     vision_revision: str,
     output_dtype: torch.dtype,
+    feature_schema_version: str = QWEN3_VL_FROZEN_VISION_FEATURE_SCHEMA_VERSION,
 ) -> str:
     """Address one frozen feature bundle by input, model revision, and output dtype."""
     digest = hashlib.sha256()
+    digest.update(feature_schema_version.encode("utf-8"))
     digest.update(vision_revision.encode("ascii"))
     digest.update(str(output_dtype).encode("ascii"))
     _update_hash_with_tensor(digest, "pixel_values", pixel_values)
@@ -192,6 +197,7 @@ class Qwen3VLCPUVisionBackend:
         self.visual_model = visual_model.eval()
         self.revision = revision
         self.output_dtype = output_dtype
+        self.feature_schema_version = QWEN3_VL_FROZEN_VISION_FEATURE_SCHEMA_VERSION
 
     def encode(
         self,
@@ -219,8 +225,10 @@ class Qwen3VLCPUVisionBackend:
                 image_grid_thw=image_grid_thw,
                 vision_revision=self.revision,
                 output_dtype=self.output_dtype,
+                feature_schema_version=self.feature_schema_version,
             ),
             vision_revision=self.revision,
+            feature_schema_version=self.feature_schema_version,
         )
 
 

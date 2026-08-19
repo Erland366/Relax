@@ -40,6 +40,69 @@ def test_scaling_summary_derives_throughput_capacity_and_reserved_cpus():
     assert result["gate_passed"] is True
 
 
+def test_scaling_summary_derives_efficiency_relative_to_the_one_by_one_layout():
+    summary = summarize_scaling_results(
+        [
+            _record(
+                num_replicas=1,
+                threads_per_replica=1,
+                batch_size=1,
+                num_images=100,
+                wall_time_seconds=10.0,
+            ),
+            _record(
+                num_replicas=2,
+                threads_per_replica=2,
+                batch_size=1,
+                num_images=300,
+                wall_time_seconds=10.0,
+            ),
+        ],
+        peak_unique_images_per_second=5.0,
+    )
+
+    assert summary["results"][0]["scaling_efficiency_vs_1x1"] == pytest.approx(1.0)
+    assert summary["results"][1]["scaling_efficiency_vs_1x1"] == pytest.approx(0.75)
+
+
+def test_scaling_summary_marks_layout_batching_eligible_at_twenty_percent_gain():
+    summary = summarize_scaling_results(
+        [
+            _record(batch_size=1, num_images=1000, wall_time_seconds=10.0),
+            _record(batch_size=2, num_images=1200, wall_time_seconds=10.0),
+        ],
+        peak_unique_images_per_second=40.0,
+    )
+
+    assert summary["batching_recommendations"] == [
+        {
+            "num_replicas": 1,
+            "threads_per_replica": 4,
+            "batch_size_one_images_per_second": pytest.approx(100.0),
+            "best_images_per_second": pytest.approx(120.0),
+            "best_gain_ratio": pytest.approx(0.2),
+            "eligible": True,
+            "selected_batch_size": 2,
+        }
+    ]
+
+
+def test_scaling_summary_selects_smallest_eligible_batch_within_five_percent_of_best():
+    summary = summarize_scaling_results(
+        [
+            _record(batch_size=1, num_images=1000, wall_time_seconds=10.0),
+            _record(batch_size=2, num_images=1190, wall_time_seconds=10.0),
+            _record(batch_size=4, num_images=1240, wall_time_seconds=10.0),
+            _record(batch_size=8, num_images=1300, wall_time_seconds=10.0),
+        ],
+        peak_unique_images_per_second=40.0,
+    )
+
+    recommendation = summary["batching_recommendations"][0]
+    assert recommendation["eligible"] is True
+    assert recommendation["selected_batch_size"] == 4
+
+
 @pytest.mark.parametrize(
     ("images_per_second", "expected_gate_passed"),
     [(49.999, False), (50.0, True)],

@@ -4,11 +4,145 @@
 
 import base64
 import binascii
+import json
 import math
+import os
 from types import SimpleNamespace
 from typing import Any
 
 import torch
+
+from relax.backends.vision.cache import ByteBoundedLRUCache
+
+
+SGLANG_VISION_FEATURE_CACHE_MISS_MARKER = "RELAX_SGLANG_VISION_FEATURE_CACHE_MISS:"
+
+
+class SGLangVisionFeatureCacheMiss(ValueError):
+    """An ID-only precomputed request referenced an unavailable feature."""
+
+    def __init__(self, *, feature_id: str, vision_revision: str, feature_schema_version: str) -> None:
+        self.feature_id = feature_id
+        self.vision_revision = vision_revision
+        self.feature_schema_version = feature_schema_version
+        super().__init__(
+            SGLANG_VISION_FEATURE_CACHE_MISS_MARKER
+            + json.dumps(
+                {
+                    "feature_id": feature_id,
+                    "vision_revision": vision_revision,
+                    "feature_schema_version": feature_schema_version,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+
+
+class SGLangVisionFeatureCache:
+    """Byte-bounded host cache for immutable inline precomputed features."""
+
+    def __init__(self, max_bytes: int) -> None:
+        if max_bytes < 0:
+            raise ValueError(f"max_bytes must be non-negative, got {max_bytes}")
+        self._cache = None if max_bytes == 0 else ByteBoundedLRUCache(max_bytes=max_bytes)
+
+    @staticmethod
+    def _identity(payload: dict[str, Any]) -> tuple[str, str, str]:
+        return (
+            payload.get("feature_id", ""),
+            payload.get("vision_revision", ""),
+            payload.get("feature_schema_version", ""),
+        )
+
+    @classmethod
+    def _validated_identity(cls, payload: dict[str, Any]) -> tuple[str, str, str]:
+        identity = cls._identity(payload)
+        field_names = ("feature_id", "vision_revision", "feature_schema_version")
+        for field_name, value in zip(field_names, identity, strict=True):
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                    f"SGLang cached vision feature requires a non-empty {field_name}, got {value!r}"
+                )
+        return identity
+
+    @staticmethod
+    def _validated_grid(payload: dict[str, Any]) -> torch.Tensor:
+        raw_grid = payload.get("image_grid_thw")
+        try:
+            grid = torch.as_tensor(raw_grid)
+        except (TypeError, ValueError, RuntimeError) as error:
+            raise ValueError(f"SGLang cached vision feature has invalid image_grid_thw: {raw_grid!r}") from error
+        if (
+            grid.dtype == torch.bool
+            or grid.is_floating_point()
+            or grid.is_complex()
+            or grid.ndim != 2
+            or grid.shape[0] == 0
+            or grid.shape[1] != 3
+            or bool((grid <= 0).any())
+        ):
+            raise ValueError(
+                "SGLang cached vision feature image_grid_thw must have positive shape [images, 3], "
+                f"got {raw_grid!r}"
+            )
+        return grid.to(dtype=torch.int64)
+
+    def _miss(self, payload: dict[str, Any]) -> SGLangVisionFeatureCacheMiss:
+        feature_id, vision_revision, feature_schema_version = self._identity(payload)
+        return SGLangVisionFeatureCacheMiss(
+            feature_id=feature_id,
+            vision_revision=vision_revision,
+            feature_schema_version=feature_schema_version,
+        )
+
+    def resolve(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Publish an inline feature or resolve an ID-only request."""
+        if self._cache is None:
+            return payload
+
+        payload_format = payload.get("format")
+        if payload_format == "precomputed_embedding":
+            identity = self._validated_identity(payload)
+            self._validated_grid(payload)
+            cached_payload = dict(payload)
+            feature = _materialize_inline_bf16_feature(cached_payload)
+            if feature is None:
+                feature = torch.as_tensor(cached_payload["feature"], dtype=torch.bfloat16)
+            if feature.ndim != 2 or feature.shape[0] == 0 or feature.shape[1] == 0:
+                raise ValueError(
+                    "SGLang cached vision feature must be a non-empty rank-2 tensor, "
+                    f"got shape {tuple(feature.shape)}"
+                )
+            cached_payload["feature"] = feature
+            self._cache.put(
+                identity,
+                cached_payload,
+                size_bytes=feature.numel() * feature.element_size(),
+            )
+            return payload
+
+        if payload_format != "precomputed_embedding_id":
+            return payload
+
+        identity = self._validated_identity(payload)
+        requested_grid_tensor = self._validated_grid(payload)
+        cached_payload = self._cache.get(identity)
+        if cached_payload is None:
+            raise self._miss(payload)
+        requested_grid = payload.get("image_grid_thw")
+        cached_grid = cached_payload.get("image_grid_thw")
+        if cached_grid is not None and not torch.equal(
+            requested_grid_tensor,
+            torch.as_tensor(cached_grid, dtype=torch.int64),
+        ):
+            raise ValueError(
+                "SGLang vision feature cache lookup image_grid_thw does not match the published feature: "
+                f"requested={requested_grid!r}, published={cached_grid!r}"
+            )
+        resolved = dict(cached_payload)
+        resolved["image_grid_thw"] = requested_grid
+        return resolved
 
 
 class OmittedQwen3VLVisual(torch.nn.Module):
@@ -277,7 +411,18 @@ def patch_transformers_auto_precomputed_embedding_processor(processor_cls) -> bo
     if getattr(original, "_relax_qwen3_vl_precomputed_auto_patch", False):
         return False
 
+    raw_max_bytes = os.environ.get("RELAX_SGLANG_VISION_FEATURE_CACHE_MAX_BYTES", "0")
+    try:
+        cache_max_bytes = int(raw_max_bytes)
+    except ValueError as error:
+        raise ValueError(
+            "RELAX_SGLANG_VISION_FEATURE_CACHE_MAX_BYTES must be a non-negative integer, "
+            f"got {raw_max_bytes!r}"
+        ) from error
+    feature_cache = SGLangVisionFeatureCache(max_bytes=cache_max_bytes)
+
     def _collect_precomputed(self, processor_output, modality=None):
+        processor_output = feature_cache.resolve(processor_output)
         if processor_output.get("format") == "precomputed_embedding":
             processor_output = dict(processor_output)
             packed_feature = _materialize_inline_bf16_feature(processor_output)
@@ -297,6 +442,31 @@ def patch_transformers_auto_precomputed_embedding_processor(processor_cls) -> bo
     _collect_precomputed._relax_qwen3_vl_precomputed_auto_patch = True
     _collect_precomputed._relax_original = original
     processor_cls.collect_mm_items_from_processor_output = _collect_precomputed
+    processor_cls._relax_sglang_vision_feature_cache = feature_cache
+    return True
+
+
+def patch_sglang_precomputed_embedding_id_loader(processor_cls) -> bool:
+    """Let ID-only feature references reach the processor-level host cache.
+
+    SGLang's media loader already passes its built-in precomputed embedding
+    dictionaries through without image decoding. The Relax ID-only format must
+    take the same path so ``SGLangVisionFeatureCache.resolve`` can replace it
+    with the previously published immutable feature bundle.
+    """
+    original = processor_cls._load_single_item
+    original_function = getattr(original, "__func__", original)
+    if getattr(original_function, "_relax_precomputed_embedding_id_loader_patch", False):
+        return False
+
+    def _load_single_item(cls, data, *args, **kwargs):
+        if isinstance(data, dict) and data.get("format") == "precomputed_embedding_id":
+            return data
+        return original_function(cls, data, *args, **kwargs)
+
+    _load_single_item._relax_precomputed_embedding_id_loader_patch = True
+    _load_single_item._relax_original = original_function
+    processor_cls._load_single_item = classmethod(_load_single_item)
     return True
 
 
@@ -314,6 +484,7 @@ def install_qwen3_vl_precomputed_vision_patch() -> None:
     from sglang.srt.models.transformers import MultiModalMixin
     from sglang.srt.multimodal.processors.base_processor import BaseMultimodalProcessor
 
+    patch_sglang_precomputed_embedding_id_loader(BaseMultimodalProcessor)
     patch_transformers_auto_precomputed_embedding_processor(BaseMultimodalProcessor)
     patch_qwen3_vl_transformers_precomputed_forward(MultiModalMixin)
     original = BaseMultimodalProcessor.process_and_combine_mm_data
@@ -324,7 +495,14 @@ def install_qwen3_vl_precomputed_vision_patch() -> None:
         organize_results = getattr(base_output, "organize_results", None)
         if organize_results is not None:
             for _, processor_output in organize_results():
-                if isinstance(processor_output, dict) and processor_output.get("format") == "precomputed_embedding":
+                if not isinstance(processor_output, dict):
+                    continue
+                feature_cache = type(self)._relax_sglang_vision_feature_cache
+                resolved_output = feature_cache.resolve(processor_output)
+                if resolved_output is not processor_output:
+                    processor_output.clear()
+                    processor_output.update(resolved_output)
+                if processor_output.get("format") == "precomputed_embedding":
                     packed_feature = _materialize_inline_bf16_feature(processor_output)
                     if packed_feature is not None:
                         processor_output["feature"] = packed_feature

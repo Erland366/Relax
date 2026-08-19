@@ -176,6 +176,29 @@ def test_visual_revision_and_cache_key_are_deterministic_and_content_addressed()
     )
 
 
+def test_feature_cache_key_invalidates_when_schema_version_changes():
+    module = _vision_module()
+    pixel_values = torch.arange(8, dtype=torch.float32).reshape(4, 2)
+    image_grid_thw = torch.tensor([[1, 2, 2]], dtype=torch.int64)
+
+    schema_v1_key = module.build_qwen3_vl_feature_cache_key(
+        pixel_values=pixel_values,
+        image_grid_thw=image_grid_thw,
+        vision_revision="vision-revision",
+        feature_schema_version="qwen3-vl-frozen-vision-v1",
+        output_dtype=torch.bfloat16,
+    )
+    schema_v2_key = module.build_qwen3_vl_feature_cache_key(
+        pixel_values=pixel_values,
+        image_grid_thw=image_grid_thw,
+        vision_revision="vision-revision",
+        feature_schema_version="qwen3-vl-frozen-vision-v2",
+        output_dtype=torch.bfloat16,
+    )
+
+    assert schema_v1_key != schema_v2_key
+
+
 def test_frozen_feature_byte_size_counts_all_tensor_storage():
     features = _features()
 

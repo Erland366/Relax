@@ -312,12 +312,22 @@ and guard the decoder so native PIL/media objects retain their established
 path. Preserve a legacy reader only when migration compatibility is explicit.
 
 If repeated transport across distinct requests remains material afterward,
-prefer one explicit bounded engine-local registry keyed by `feature_id` and
-`vision_revision`: upload each immutable bundle once through binary or shared
-memory, then use ID-only generation requests. Fail on missing IDs, revision or
-shape mismatches, wrong-engine routing, and eviction; never silently recompute
-raw vision. Instrument upload, registry hit/miss, fetch, reconstruction/H2D,
-prefill, and eviction before comparing throughput again.
+prefer one explicit bounded engine-local cache keyed by feature schema,
+`vision_revision`, and `feature_id`: publish each immutable bundle inline
+once, then use ID-only generation requests. Fail on missing IDs, revision,
+schema, grid, or shape mismatches and wrong-engine routing; never silently
+recompute raw vision. Use the same feature-sticky routing key for publication,
+lookup, and recovery. A marked miss may republish inline exactly once; other
+HTTP errors and a second failure must propagate. Instrument publication,
+ID-only hit/miss, republish, request bytes, reconstruction/H2D, prefill, and
+eviction before comparing throughput again.
+
+The Qwen3-VL implementation exposes this cache through
+`SGLANG_VISION_FEATURE_CACHE_MAX_BYTES`, disabled by default. It is
+process-local, job-lifetime host RAM rather than a persistent registry. The
+grouped hit path delays request serialization so ID-only hits do not rebuild
+BF16/base64 payloads. Enabled multi-engine operation requires consistent
+hashing, and the actor's tensor-only batch contract remains unchanged.
 
 For fully asynchronous VRAM comparisons, retain per-role device peaks and
 phase context. One simultaneous cluster maximum is schedule-sensitive; isolate
@@ -350,6 +360,82 @@ DeepStack streams, scatters the final stream into image-token positions, and
 passes the visual-position mask and ordered DeepStack streams to the language
 model. Native-image requests and decode keep their original path, while mixed
 native/precomputed prefill fails explicitly.
+
+### CPU offload capacity protocol
+
+Do not choose CPU threads, replicas, dynamic batching, sticky routing, or a
+feature registry from isolated encoder throughput. Apply these gates in order:
+
+```text
+representation parity
+  -> language-logit parity
+  -> live consumer demand
+  -> offline CPU supply
+  -> live topology validation
+  -> cache-locality decision
+```
+
+Measure consumer demand before supply. For grouped RL workloads, keep total
+generated responses constant while increasing unique images so that actor
+sample volume does not confound CPU demand. Compute peak demand from steady
+cycles as unique feature IDs consumed divided by the corresponding actor-cycle
+wall time. A performance-only `n=1` saturation probe must not be described as
+a meaningful GRPO learning configuration.
+
+Validate CPU topology before Ray startup. Count scheduler-affinity CPUs and
+distinct `(physical_package_id, core_id)` pairs; SMT siblings are not distinct
+physical cores. Reserve an explicit CPU budget for ViT and leave headroom for
+Ray, Serve, processor work, and control actors. The Qwen3-VL scaling protocol
+requires 16 affinity CPUs, at least eight physical cores, and at most eight
+reserved ViT CPUs.
+
+For multi-replica telemetry, do not call a load-balanced `get_metrics()` and
+present one arbitrary replica as deployment state. Each encode response should
+carry replica ID, feature ID, cache status, backend wall time, actual backend
+batch size, and a cumulative replica-local snapshot. Retain the newest
+snapshot per replica, derive intervals from prior per-replica snapshots, and
+track response-level feature IDs independently so stale out-of-order responses
+cannot corrupt cumulative counters.
+
+In the offline sweep, compare images per second, backend process CPU seconds,
+wall time, scaling efficiency, peak RSS, replica layout, and explicit batch
+size. Choose the smallest CPU reservation sustaining at least `1.25` times
+measured peak consumer demand; break ties by throughput, fewer replicas, fewer
+threads, then smaller batch size.
+
+An explicit backend batch does not prove live request coalescing. Make dynamic
+batching eligible only if a batch size above one improves throughput by at
+least 20% over batch size one at the same replica/thread layout. Select the
+smallest batch within 5% of the best batched throughput. Until that artifact
+exists, keep the live batch-wait timeout at zero and reject positive values
+rather than silently ignoring them.
+
+Validate candidate layouts live with exact image and response accounting,
+per-replica load distribution, process CPU utilization, peak RSS, service RTT
+mean/p95, actor data-wait ratio, staleness backpressure, rollout/actor overlap,
+optimizer completion, final synchronization, idle-memory recovery, and clean
+shutdown. Require actor wait below 5% and capacity of at least `1.25` times
+consumer demand. Keep weight-update time visible as a covariate, not as the
+CPU-ViT optimization objective.
+
+After selecting a live topology, restore the normal cache and compute
+aggregate backend encodes divided by unique feature IDs. A ratio above `1.25`
+justifies testing feature-sticky routing next; it does not justify jumping
+directly to a database or shared feature registry.
+
+The 2026-08-06 Qwen3-VL run explains why the ordering matters: one uncached
+one-thread CPU replica kept actor wait at `0.88%` with full rollout/actor
+overlap even though packed requests were `383.5` times larger than native
+requests. The August 11 allocation then exposed only two SMT siblings of one
+physical core, so the scaling matrix correctly remained unrun. The later E1
+allocation measured a global peak demand of `5.8588356399` images/s and a
+`7.3235445499` images/s capacity target; D2 actor wait still remained below
+1%. Read these reports before claiming a CPU layout, cache speedup, or batching
+result:
+
+- `training_reports/2026-08-06-qwen3-vl-cpu-vision-steady-state-overlap.md`
+- `training_reports/2026-08-11-qwen3-vl-cpu-vit-scaling-readiness.md`
+- `training_reports/2026-08-18-qwen3-vl-policy-invariant-representation-cache.md`
 
 ### Qwen3-VL live regression probe
 

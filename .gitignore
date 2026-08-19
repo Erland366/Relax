@@ -56,3 +56,6 @@ compiled_resources/
 
 # .github
 .github/copilot-instructions.md
+
+benchmark_results/cpu_vision/
+*.pptx

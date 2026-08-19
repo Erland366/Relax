@@ -23,6 +23,7 @@ def _stub_module(monkeypatch, name: str, **attributes):
 
 def _import_sglang_rollout(monkeypatch):
     monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising=False)
+    _stub_module(monkeypatch, "pybase64", b64decode=base64.b64decode)
     _stub_module(monkeypatch, "sglang_router", __version__="0.2.2")
     _stub_module(monkeypatch, "relax.distributed.ray.rollout", _log_rollout_data=lambda *args, **kwargs: None)
     _stub_module(
@@ -114,7 +115,13 @@ async def test_generate_uses_vision_handle_and_sends_json_precomputed_image_data
     class RemoteEncode:
         async def remote(self, **kwargs):
             encode_calls.append(kwargs)
-            return features
+            return _cpu_vision_telemetry_response(
+                "vision-replica-a",
+                features=features,
+                feature_id=features.feature_id,
+                encode_requests=1,
+                backend_encodes=1,
+            )
 
     class VisionHandle:
         encode = RemoteEncode()
@@ -210,6 +217,146 @@ async def test_generate_uses_vision_handle_and_sends_json_precomputed_image_data
     assert sample.metadata["_sizes"]["http_response_body_bytes"] == 64
 
 
+@pytest.mark.asyncio
+async def test_generate_republishes_inline_once_after_typed_sglang_feature_cache_miss(monkeypatch):
+    rollout_module = _import_sglang_rollout(monkeypatch)
+    sglang_vision_module = importlib.import_module("relax.backends.sglang.precomputed_vision")
+    monkeypatch.setenv("SGLANG_VISION_FEATURE_CACHE_MAX_BYTES", "4096")
+    grid = torch.tensor([[1, 4, 4]], dtype=torch.int64)
+    vision_embeds = torch.ones((4, 2), dtype=torch.bfloat16)
+    deepstack_visual_embeds = tuple(
+        torch.full((4, 2), value, dtype=torch.bfloat16) for value in (2.0, 3.0, 4.0)
+    )
+    features = Namespace(
+        image_grid_thw=grid,
+        vision_embeds=vision_embeds,
+        deepstack_visual_embeds=deepstack_visual_embeds,
+        embedding_streams=(vision_embeds, *deepstack_visual_embeds),
+        feature_id="feature-a",
+        vision_revision="vision-revision-a",
+        feature_schema_version="qwen3-vl-frozen-vision-v1",
+        nbytes=grid.nbytes
+        + vision_embeds.nbytes
+        + sum(feature.nbytes for feature in deepstack_visual_embeds),
+    )
+
+    class RemoteEncode:
+        async def remote(self, **kwargs):
+            return _cpu_vision_telemetry_response(
+                "vision-replica-a",
+                features=features,
+                feature_id=features.feature_id,
+                encode_requests=1,
+                backend_encodes=1,
+            )
+
+    class Tokenizer:
+        image_token_id = 99
+        pad_token_id = 0
+
+        def encode(self, text, add_special_tokens=False):
+            return [10, 11]
+
+    state = Namespace(
+        tokenizer=Tokenizer(),
+        processor=object(),
+        vision_encoder=Namespace(encode=RemoteEncode()),
+    )
+    monkeypatch.setattr(rollout_module, "GenerateState", lambda args: state)
+
+    async def fake_image_processor(state, args, prompt, multimodal_inputs):
+        return [7, 99, 99, 99, 99, 8], {"pixel_values": torch.ones((16, 2)), "image_grid_thw": grid}, 0.01
+
+    posted_formats = []
+    posted_headers = []
+
+    async def fake_post(url, payload, headers=None, request_metrics=None):
+        json.dumps(payload)
+        image_data = payload["image_data"][0]
+        posted_formats.append(image_data["format"])
+        posted_headers.append(headers)
+        request_metrics.update(
+            {
+                "attempts": 1,
+                "request_body_bytes": 256,
+                "response_body_bytes": 64,
+                "request_build_seconds": 0.01,
+                "response_wait_seconds": 0.02,
+                "response_read_seconds": 0.003,
+                "response_decode_seconds": 0.001,
+            }
+        )
+        if image_data["format"] == "precomputed_embedding_id":
+            raise sglang_vision_module.SGLangVisionFeatureCacheMiss(
+                feature_id="feature-a",
+                vision_revision="vision-revision-a",
+                feature_schema_version="qwen3-vl-frozen-vision-v1",
+            )
+        return {
+            "text": "",
+            "meta_info": {
+                "output_token_logprobs": [],
+                "finish_reason": {"type": "stop"},
+                "prompt_tokens": 6,
+                "cached_tokens": 0,
+            },
+        }
+
+    monkeypatch.setattr(rollout_module, "_run_image_processor", fake_image_processor)
+    monkeypatch.setattr(rollout_module, "post", fake_post)
+    args = Namespace(
+        ci_test=False,
+        resource={"rollout": [1, 4]},
+        rollout_num_gpus_per_engine=1,
+        sglang_router_ip="127.0.0.1",
+        sglang_router_port=30000,
+        use_rollout_routing_replay=False,
+        use_audio_in_video=False,
+        sglang_router_policy="consistent_hashing",
+        use_slime_router=False,
+        slime_router_middleware_paths=[],
+        partial_rollout=False,
+        mask_offpolicy_in_partial_rollout=False,
+        sglang_speculative_algorithm=None,
+        vision_encoder_backend="pytorch",
+    )
+    first = rollout_module.Sample(
+        prompt="look",
+        multimodal_inputs={"images": ["raw-image"], "videos": [], "audio": []},
+    )
+    second = rollout_module.Sample(
+        prompt="look",
+        multimodal_inputs={"images": ["raw-image"], "videos": [], "audio": []},
+    )
+
+    await rollout_module.generate(args, first, {"max_new_tokens": 2})
+    await rollout_module.generate(args, second, {"max_new_tokens": 2})
+
+    assert posted_formats == [
+        "precomputed_embedding",
+        "precomputed_embedding_id",
+        "precomputed_embedding",
+    ]
+    assert posted_headers == [{"X-SMG-Routing-Key": "feature-a"}] * 3
+    assert second.metadata["_sizes"]["sglang_vision_cache_id_only_requests"] == 1
+    assert second.metadata["_sizes"]["sglang_vision_cache_republish"] == 1
+
+
+def test_sglang_feature_cache_rejects_multi_engine_round_robin_routing(monkeypatch):
+    rollout_module = _import_sglang_rollout(monkeypatch)
+    args = Namespace(
+        resource={"rollout": [1, 4]},
+        rollout_num_gpus_per_engine=1,
+        sglang_router_policy="round_robin",
+    )
+
+    with pytest.raises(ValueError, match="feature.*consistent.*routing|feature-sticky"):
+        rollout_module._validate_sglang_vision_feature_cache_routing(args, cache_enabled=True)
+
+    args.sglang_router_policy = "consistent_hashing"
+    rollout_module._validate_sglang_vision_feature_cache_routing(args, cache_enabled=True)
+
+
 def test_aggregate_rollout_timing_reports_shared_stage_totals_and_percentiles(monkeypatch):
     rollout_module = _import_sglang_rollout(monkeypatch)
     samples = [
@@ -249,6 +396,31 @@ def test_aggregate_rollout_timing_reports_shared_stage_totals_and_percentiles(mo
 
 
 @pytest.mark.asyncio
+async def test_cpu_vision_encoder_rejects_legacy_raw_feature_response(monkeypatch):
+    rollout_module = _import_sglang_rollout(monkeypatch)
+    vision_module = importlib.import_module("relax.backends.vision.qwen3_vl")
+    image_grid_thw = torch.tensor([[1, 2, 2]], dtype=torch.int64)
+    features = vision_module.Qwen3VLFrozenVisionFeatures(
+        image_grid_thw=image_grid_thw,
+        vision_embeds=torch.ones((1, 2), dtype=torch.bfloat16),
+        deepstack_visual_embeds=(),
+    )
+
+    class RemoteEncode:
+        async def remote(self, **kwargs):
+            return features
+
+    state = Namespace(vision_encoder=Namespace(encode=RemoteEncode()))
+    multimodal_train_inputs = {
+        "pixel_values": torch.ones((4, 2)),
+        "image_grid_thw": image_grid_thw,
+    }
+
+    with pytest.raises(TypeError, match="VisionEncoderResponse"):
+        await rollout_module._run_cpu_vision_encoder(state, multimodal_train_inputs)
+
+
+@pytest.mark.asyncio
 async def test_generate_group_uses_one_sglang_parallel_request_and_maps_outputs(monkeypatch):
     rollout_module = _import_sglang_rollout(monkeypatch)
     vision_module = importlib.import_module("relax.backends.vision.qwen3_vl")
@@ -266,7 +438,13 @@ async def test_generate_group_uses_one_sglang_parallel_request_and_maps_outputs(
     class RemoteEncode:
         async def remote(self, **kwargs):
             encode_calls.append(kwargs)
-            return features
+            return _cpu_vision_telemetry_response(
+                "vision-replica-a",
+                features=features,
+                feature_id=features.feature_id,
+                encode_requests=1,
+                backend_encodes=1,
+            )
 
     class Tokenizer:
         image_token_id = 99
@@ -364,6 +542,193 @@ async def test_generate_group_uses_one_sglang_parallel_request_and_maps_outputs(
     assert sum("http_request_body_bytes" in sample.metadata.get("_sizes", {}) for sample in result) == 1
     assert result[0].metadata["_sizes"]["http_request_body_bytes"] == 700
     assert result[0].metadata["_sizes"]["sglang_parallel_samples"] == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_precomputed_group_reuses_cached_feature_and_republishes_once_on_miss(monkeypatch):
+    rollout_module = _import_sglang_rollout(monkeypatch)
+    sglang_vision_module = importlib.import_module("relax.backends.sglang.precomputed_vision")
+    vision_module = importlib.import_module("relax.backends.vision.qwen3_vl")
+    monkeypatch.setenv("SGLANG_VISION_FEATURE_CACHE_MAX_BYTES", "4096")
+    monkeypatch.setenv("RELAX_SGLANG_VISION_FEATURE_CACHE_MAX_BYTES", "4096")
+    grid = torch.tensor([[1, 4, 4]], dtype=torch.int64)
+    final = torch.ones((4, 2), dtype=torch.bfloat16)
+    deepstack = tuple(
+        torch.full((4, 2), value, dtype=torch.bfloat16) for value in (2.0, 3.0, 4.0)
+    )
+    features = vision_module.Qwen3VLFrozenVisionFeatures(
+        image_grid_thw=grid,
+        vision_embeds=final,
+        deepstack_visual_embeds=deepstack,
+        feature_id="feature-a",
+        vision_revision="vision-revision-a",
+        feature_schema_version="qwen3-vl-frozen-vision-v1",
+    )
+
+    class RemoteEncode:
+        async def remote(self, **kwargs):
+            return _cpu_vision_telemetry_response(
+                "vision-replica-a",
+                features=features,
+                feature_id=features.feature_id,
+                encode_requests=1,
+                backend_encodes=1,
+            )
+
+    class Tokenizer:
+        image_token_id = 99
+        pad_token_id = 0
+
+        def encode(self, text, add_special_tokens=False):
+            return [10, 11]
+
+    state = Namespace(
+        tokenizer=Tokenizer(),
+        processor=object(),
+        vision_encoder=Namespace(encode=RemoteEncode()),
+        semaphore=asyncio.Semaphore(8),
+        aborted=False,
+        dp_rank_context=lambda: nullcontext(),
+    )
+    monkeypatch.setattr(rollout_module, "GenerateState", lambda args: state)
+
+    async def fake_image_processor(state, args, prompt, multimodal_inputs):
+        return [7, 99, 99, 99, 99, 8], {"pixel_values": torch.ones((16, 2)), "image_grid_thw": grid}, 0.01
+
+    original_serializer = rollout_module.serialize_sglang_precomputed_image_data
+    serializer_calls = []
+
+    def counting_serializer(image_data):
+        serializer_calls.append(image_data["feature_id"])
+        return original_serializer(image_data)
+
+    posted_formats = []
+    posted_headers = []
+
+    async def fake_post(url, payload, headers=None, request_metrics=None):
+        json.dumps(payload)
+        image_data = payload["image_data"][0]
+        posted_formats.append(image_data["format"])
+        posted_headers.append(headers)
+        request_metrics.update(
+            {
+                "attempts": 1,
+                "request_body_bytes": 256,
+                "response_body_bytes": 128,
+                "request_build_seconds": 0.01,
+                "response_wait_seconds": 0.02,
+                "response_read_seconds": 0.003,
+                "response_decode_seconds": 0.001,
+            }
+        )
+        if len(posted_formats) == 3 and image_data["format"] == "precomputed_embedding_id":
+            raise sglang_vision_module.SGLangVisionFeatureCacheMiss(
+                feature_id="feature-a",
+                vision_revision="vision-revision-a",
+                feature_schema_version="qwen3-vl-frozen-vision-v1",
+            )
+        return [
+            {
+                "text": response,
+                "meta_info": {
+                    "output_token_logprobs": [[logprob, token_id, None]],
+                    "finish_reason": {"type": "stop"},
+                    "prompt_tokens": 6,
+                    "cached_tokens": 0,
+                },
+            }
+            for response, token_id, logprob in (("A", 21, -0.1), ("B", 22, -0.2))
+        ]
+
+    async def fake_reward(args, sample):
+        return 1.0
+
+    monkeypatch.setattr(rollout_module, "_run_image_processor", fake_image_processor)
+    monkeypatch.setattr(rollout_module, "serialize_sglang_precomputed_image_data", counting_serializer)
+    monkeypatch.setattr(rollout_module, "post", fake_post)
+    monkeypatch.setattr(rollout_module, "async_rm", fake_reward)
+    args = Namespace(
+        ci_test=False,
+        custom_generate_function_path=None,
+        group_rm=False,
+        mask_offpolicy_in_partial_rollout=False,
+        partial_rollout=False,
+        resource={"rollout": [1, 1]},
+        rollout_num_gpus_per_engine=1,
+        sglang_enable_deterministic_inference=False,
+        sglang_router_ip="127.0.0.1",
+        sglang_router_policy="consistent_hashing",
+        sglang_router_port=30000,
+        sglang_speculative_algorithm=None,
+        slime_router_middleware_paths=[],
+        use_audio_in_video=False,
+        use_opd=False,
+        use_rollout_routing_replay=False,
+        use_slime_router=False,
+        vision_encoder_backend="pytorch",
+    )
+
+    def new_group():
+        multimodal_inputs = {"images": ["raw-image"], "videos": [], "audio": []}
+        return [
+            rollout_module.Sample(prompt="look", multimodal_inputs=multimodal_inputs),
+            rollout_module.Sample(prompt="look", multimodal_inputs=multimodal_inputs),
+        ]
+
+    first = await rollout_module.generate_and_rm_group(
+        args,
+        new_group(),
+        sampling_params={"max_new_tokens": 2, "temperature": 1.0},
+    )
+    serializer_count_after_publish = len(serializer_calls)
+    second = await rollout_module.generate_and_rm_group(
+        args,
+        new_group(),
+        sampling_params={"max_new_tokens": 2, "temperature": 1.0},
+    )
+    serializer_count_after_hit = len(serializer_calls)
+    third = await rollout_module.generate_and_rm_group(
+        args,
+        new_group(),
+        sampling_params={"max_new_tokens": 2, "temperature": 1.0},
+    )
+
+    assert posted_formats == [
+        "precomputed_embedding",
+        "precomputed_embedding_id",
+        "precomputed_embedding_id",
+        "precomputed_embedding",
+    ]
+    assert posted_headers == [{"X-SMG-Routing-Key": "feature-a"}] * 4
+    assert serializer_count_after_publish == 1
+    assert serializer_count_after_hit == 1
+    first_counters = {
+        "sglang_vision_cache_inline_publish_requests": 1,
+        "sglang_vision_cache_id_only_requests": 0,
+        "sglang_vision_cache_id_only_hits": 0,
+        "sglang_vision_cache_id_only_misses": 0,
+        "sglang_vision_cache_republish": 0,
+    }
+    second_counters = {
+        "sglang_vision_cache_inline_publish_requests": 0,
+        "sglang_vision_cache_id_only_requests": 1,
+        "sglang_vision_cache_id_only_hits": 1,
+        "sglang_vision_cache_id_only_misses": 0,
+        "sglang_vision_cache_republish": 0,
+    }
+    third_counters = {
+        "sglang_vision_cache_inline_publish_requests": 1,
+        "sglang_vision_cache_id_only_requests": 1,
+        "sglang_vision_cache_id_only_hits": 0,
+        "sglang_vision_cache_id_only_misses": 1,
+        "sglang_vision_cache_republish": 1,
+    }
+    for key, value in first_counters.items():
+        assert first[0].metadata["_sizes"][key] == value
+    for key, value in second_counters.items():
+        assert second[0].metadata["_sizes"][key] == value
+    for key, value in third_counters.items():
+        assert third[0].metadata["_sizes"][key] == value
 
 
 @pytest.mark.asyncio
@@ -715,60 +1080,323 @@ async def test_eval_rollout_group_branches_share_multimodal_inputs_object(monkey
     assert second.multimodal_inputs is first.multimodal_inputs
 
 
-@pytest.mark.asyncio
-async def test_collect_cpu_vision_metrics_reports_cumulative_and_interval_counters(monkeypatch):
+def test_collect_cpu_vision_metrics_aggregates_latest_snapshot_from_every_replica(monkeypatch):
     rollout_module = _import_sglang_rollout(monkeypatch)
-    snapshots = iter(
-        (
-            {
-                "entries": 8,
-                "resident_bytes": 4096,
-                "hits": 6,
-                "misses": 2,
+
+    def response(
+        replica_id,
+        feature_id,
+        *,
+        cache_hit,
+        backend_batch_size,
+        encode_requests,
+        hits,
+        misses,
+        backend_encodes,
+        encoded_images,
+        process_cpu_seconds,
+        rss_bytes,
+    ):
+        return Namespace(
+            replica_id=replica_id,
+            feature_id=feature_id,
+            cache_hit=cache_hit,
+            backend_batch_size=backend_batch_size,
+            metrics_snapshot={
+                "entries": misses,
+                "resident_bytes": misses * 100,
+                "hits": hits,
+                "misses": misses,
                 "evictions": 0,
-                "encode_requests_total": 8,
-                "backend_encode_requests_total": 2,
-                "backend_encoded_images_total": 2,
-                "emitted_feature_bytes_total": 1024,
-                "backend_encode_seconds_total": 0.5,
-            },
-            {
-                "entries": 12,
-                "resident_bytes": 6144,
-                "hits": 14,
-                "misses": 4,
-                "evictions": 1,
-                "encode_requests_total": 18,
-                "backend_encode_requests_total": 4,
-                "backend_encoded_images_total": 4,
-                "emitted_feature_bytes_total": 2048,
-                "backend_encode_seconds_total": 1.0,
+                "encode_requests_total": encode_requests,
+                "backend_encode_requests_total": backend_encodes,
+                "backend_encoded_images_total": encoded_images,
+                "emitted_feature_bytes_total": encoded_images * 100,
+                "backend_encode_seconds_total": encoded_images / 2,
+                "process_cpu_seconds_total": process_cpu_seconds,
+                "rss_bytes": rss_bytes,
             },
         )
-    )
-
-    class RemoteMetrics:
-        async def remote(self):
-            return next(snapshots)
 
     state = Namespace(
-        vision_encoder=Namespace(get_metrics=RemoteMetrics()),
+        args=Namespace(vision_encoder_num_replicas=4),
+        vision_encoder=object(),
+        vision_encoder_metrics_previous=None,
+    )
+    idle_snapshot = response(
+        "replica-idle",
+        "",
+        cache_hit=False,
+        backend_batch_size=0,
+        encode_requests=0,
+        hits=0,
+        misses=0,
+        backend_encodes=0,
+        encoded_images=0,
+        process_cpu_seconds=0.0,
+        rss_bytes=750,
+    )
+    replica_a_latest = response(
+        "replica-a",
+        "shared-feature",
+        cache_hit=False,
+        backend_batch_size=4,
+        encode_requests=5,
+        hits=4,
+        misses=1,
+        backend_encodes=1,
+        encoded_images=4,
+        process_cpu_seconds=3.0,
+        rss_bytes=1_000,
+    )
+    replica_b = response(
+        "replica-b",
+        "shared-feature",
+        cache_hit=False,
+        backend_batch_size=1,
+        encode_requests=1,
+        hits=0,
+        misses=1,
+        backend_encodes=1,
+        encoded_images=1,
+        process_cpu_seconds=1.0,
+        rss_bytes=2_000,
+    )
+    replica_a_stale = response(
+        "replica-a",
+        "cached-feature",
+        cache_hit=True,
+        backend_batch_size=0,
+        encode_requests=4,
+        hits=2,
+        misses=2,
+        backend_encodes=2,
+        encoded_images=2,
+        process_cpu_seconds=2.0,
+        rss_bytes=900,
+    )
+
+    # Replica A's older request finishes last. Its feature was consumed, but its
+    # stale cumulative snapshot must not replace the newer replica-A snapshot.
+    for encode_response in (idle_snapshot, replica_a_latest, replica_b, replica_a_stale):
+        rollout_module._record_cpu_vision_response(state, encode_response)
+
+    metrics = asyncio.run(rollout_module._collect_cpu_vision_metrics(state, phase="rollout_0"))
+
+    assert metrics["vision_encoder/replicas/expected"] == 4
+    assert metrics["vision_encoder/replicas/observed"] == 3
+    assert metrics["vision_encoder/replicas/active"] == 2
+    assert metrics["vision_encoder/replicas/idle"] == 1
+    assert metrics["vision_encoder/replicas/unobserved"] == 1
+    assert metrics["vision_encoder/replica/replica-a/requests_total"] == 5
+    assert metrics["vision_encoder/replica/replica-b/requests_total"] == 1
+    assert metrics["vision_encoder/replica/replica-a/request_fraction_total"] == pytest.approx(5 / 6)
+    assert metrics["vision_encoder/replica/replica-b/request_fraction_total"] == pytest.approx(1 / 6)
+    assert metrics["vision_encoder/replica/replica-a/process_cpu_seconds_total"] == pytest.approx(3.0)
+    assert metrics["vision_encoder/replica/replica-a/rss_bytes"] == 1_000
+    assert metrics["vision_encoder/requests_total"] == 6
+    assert metrics["vision_encoder/cache/hits_total"] == 4
+    assert metrics["vision_encoder/cache/misses_total"] == 2
+    assert metrics["vision_encoder/backend/encode_requests_total"] == 2
+    assert metrics["vision_encoder/backend/encoded_images_total"] == 5
+    assert metrics["vision_encoder/features/unique_total"] == 2
+    assert metrics["vision_encoder/backend/duplicate_encode_ratio"] == pytest.approx(2.0)
+    assert metrics["vision_encoder/backend/batch_size_mean"] == pytest.approx(2.5)
+    assert metrics["vision_encoder/backend/batch_size_p95"] == pytest.approx(4.0)
+    assert metrics["vision_encoder/backend/batch_size_max"] == 4
+
+
+def _cpu_vision_telemetry_response(
+    replica_id,
+    *,
+    features=None,
+    feature_id="",
+    cache_hit=False,
+    backend_batch_size=0,
+    encode_requests=0,
+    backend_encodes=0,
+    process_cpu_seconds=0.0,
+    snapshot_monotonic_seconds=0.0,
+):
+    return Namespace(
+        features=features,
+        replica_id=replica_id,
+        feature_id=feature_id,
+        cache_hit=cache_hit,
+        backend_batch_size=backend_batch_size,
+        metrics_snapshot={
+            "entries": 0,
+            "resident_bytes": 0,
+            "hits": 0,
+            "misses": backend_encodes,
+            "evictions": 0,
+            "encode_requests_total": encode_requests,
+            "backend_encode_requests_total": backend_encodes,
+            "backend_encoded_images_total": backend_encodes,
+            "emitted_feature_bytes_total": backend_encodes * 100,
+            "backend_encode_seconds_total": backend_encodes / 2,
+            "process_cpu_seconds_total": process_cpu_seconds,
+            "snapshot_monotonic_seconds": snapshot_monotonic_seconds,
+            "rss_bytes": 1_000,
+        },
+    )
+
+
+def _cpu_vision_telemetry_state(*, replicas=2):
+    return Namespace(
+        args=Namespace(vision_encoder_num_replicas=replicas),
+        vision_encoder=object(),
         vision_encoder_metrics_previous=None,
     )
 
-    first = await rollout_module._collect_cpu_vision_metrics(state, phase="baseline_eval")
-    second = await rollout_module._collect_cpu_vision_metrics(state, phase="rollout_0")
 
-    assert first["vision_encoder/cache/hits_total"] == 6
-    assert first["vision_encoder/cache/hits_interval"] == 6
-    assert first["vision_encoder/cache/hit_rate_interval"] == pytest.approx(0.75)
-    assert first["vision_encoder/backend/images_per_second_interval"] == pytest.approx(4.0)
-    assert second["vision_encoder/cache/hits_total"] == 14
-    assert second["vision_encoder/cache/hits_interval"] == 8
-    assert second["vision_encoder/cache/misses_interval"] == 2
-    assert second["vision_encoder/cache/hit_rate_interval"] == pytest.approx(0.8)
-    assert second["vision_encoder/backend/encode_seconds_interval"] == pytest.approx(0.5)
-    assert second["vision_encoder/backend/images_per_second_interval"] == pytest.approx(4.0)
+def test_collect_cpu_vision_metrics_reports_per_replica_interval_request_distribution(monkeypatch):
+    rollout_module = _import_sglang_rollout(monkeypatch)
+    state = _cpu_vision_telemetry_state()
+
+    rollout_module._record_cpu_vision_response(
+        state,
+        _cpu_vision_telemetry_response("replica-a", encode_requests=2),
+    )
+    rollout_module._record_cpu_vision_response(
+        state,
+        _cpu_vision_telemetry_response("replica-b", encode_requests=2),
+    )
+    asyncio.run(rollout_module._collect_cpu_vision_metrics(state, phase="rollout_0"))
+
+    rollout_module._record_cpu_vision_response(
+        state,
+        _cpu_vision_telemetry_response("replica-a", encode_requests=5),
+    )
+    rollout_module._record_cpu_vision_response(
+        state,
+        _cpu_vision_telemetry_response("replica-b", encode_requests=3),
+    )
+    metrics = asyncio.run(rollout_module._collect_cpu_vision_metrics(state, phase="rollout_1"))
+
+    assert metrics["vision_encoder/replica/replica-a/requests_interval"] == 3
+    assert metrics["vision_encoder/replica/replica-b/requests_interval"] == 1
+    assert metrics["vision_encoder/replica/replica-a/request_fraction_interval"] == pytest.approx(0.75)
+    assert metrics["vision_encoder/replica/replica-b/request_fraction_interval"] == pytest.approx(0.25)
+
+
+def test_collect_cpu_vision_metrics_derives_per_replica_process_cpu_utilization(monkeypatch):
+    rollout_module = _import_sglang_rollout(monkeypatch)
+    state = _cpu_vision_telemetry_state()
+
+    rollout_module._record_cpu_vision_response(
+        state,
+        _cpu_vision_telemetry_response(
+            "replica-a",
+            encode_requests=1,
+            process_cpu_seconds=1.0,
+            snapshot_monotonic_seconds=10.0,
+        ),
+    )
+    rollout_module._record_cpu_vision_response(
+        state,
+        _cpu_vision_telemetry_response(
+            "replica-b",
+            encode_requests=1,
+            process_cpu_seconds=0.5,
+            snapshot_monotonic_seconds=20.0,
+        ),
+    )
+    asyncio.run(rollout_module._collect_cpu_vision_metrics(state, phase="rollout_0"))
+
+    rollout_module._record_cpu_vision_response(
+        state,
+        _cpu_vision_telemetry_response(
+            "replica-a",
+            encode_requests=2,
+            process_cpu_seconds=3.0,
+            snapshot_monotonic_seconds=14.0,
+        ),
+    )
+    rollout_module._record_cpu_vision_response(
+        state,
+        _cpu_vision_telemetry_response(
+            "replica-b",
+            encode_requests=2,
+            process_cpu_seconds=1.0,
+            snapshot_monotonic_seconds=22.0,
+        ),
+    )
+    metrics = asyncio.run(rollout_module._collect_cpu_vision_metrics(state, phase="rollout_1"))
+
+    assert metrics[
+        "vision_encoder/replica/replica-a/process_cpu_utilization_percent_interval"
+    ] == pytest.approx(50.0)
+    assert metrics[
+        "vision_encoder/replica/replica-b/process_cpu_utilization_percent_interval"
+    ] == pytest.approx(25.0)
+
+
+def test_collect_cpu_vision_metrics_counts_recurring_feature_ids_in_each_interval(monkeypatch):
+    rollout_module = _import_sglang_rollout(monkeypatch)
+    state = _cpu_vision_telemetry_state()
+
+    for replica_id in ("replica-a", "replica-b"):
+        rollout_module._record_cpu_vision_response(
+            state,
+            _cpu_vision_telemetry_response(
+                replica_id,
+                feature_id="shared-feature",
+                encode_requests=1,
+                backend_encodes=1,
+            ),
+        )
+    first = asyncio.run(rollout_module._collect_cpu_vision_metrics(state, phase="rollout_0"))
+
+    for replica_id in ("replica-a", "replica-b"):
+        rollout_module._record_cpu_vision_response(
+            state,
+            _cpu_vision_telemetry_response(
+                replica_id,
+                feature_id="shared-feature",
+                encode_requests=2,
+                backend_encodes=2,
+            ),
+        )
+    second = asyncio.run(rollout_module._collect_cpu_vision_metrics(state, phase="rollout_1"))
+
+    assert first["vision_encoder/features/unique_interval"] == 1
+    assert first["vision_encoder/backend/duplicate_encode_ratio_interval"] == pytest.approx(2.0)
+    assert second["vision_encoder/features/unique_interval"] == 1
+    assert second["vision_encoder/backend/duplicate_encode_ratio_interval"] == pytest.approx(2.0)
+
+
+def test_collect_cpu_vision_metrics_reports_backend_batch_sizes_for_current_interval_only(monkeypatch):
+    rollout_module = _import_sglang_rollout(monkeypatch)
+    state = _cpu_vision_telemetry_state(replicas=1)
+
+    for request_count, batch_size in enumerate((1, 16), start=1):
+        rollout_module._record_cpu_vision_response(
+            state,
+            _cpu_vision_telemetry_response(
+                "replica-a",
+                backend_batch_size=batch_size,
+                encode_requests=request_count,
+                backend_encodes=request_count,
+            ),
+        )
+    asyncio.run(rollout_module._collect_cpu_vision_metrics(state, phase="rollout_0"))
+
+    for request_count, batch_size in enumerate((2, 4, 4, 8), start=3):
+        rollout_module._record_cpu_vision_response(
+            state,
+            _cpu_vision_telemetry_response(
+                "replica-a",
+                backend_batch_size=batch_size,
+                encode_requests=request_count,
+                backend_encodes=request_count,
+            ),
+        )
+    metrics = asyncio.run(rollout_module._collect_cpu_vision_metrics(state, phase="rollout_1"))
+
+    assert metrics["vision_encoder/backend/batch_size_mean_interval"] == pytest.approx(4.5)
+    assert metrics["vision_encoder/backend/batch_size_p95_interval"] == pytest.approx(8.0)
+    assert metrics["vision_encoder/backend/batch_size_max_interval"] == 8
 
 
 @pytest.mark.asyncio

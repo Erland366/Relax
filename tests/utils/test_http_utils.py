@@ -44,6 +44,25 @@ def test_post_does_not_retry_non_retryable_400():
     assert client.calls == 1
 
 
+def test_post_translates_only_marked_sglang_vision_feature_cache_miss_400():
+    from relax.backends.sglang.precomputed_vision import SGLangVisionFeatureCacheMiss
+
+    server_error = SGLangVisionFeatureCacheMiss(
+        feature_id="feature-a",
+        vision_revision="revision-a",
+        feature_schema_version="schema-a",
+    )
+    client = _StubClient([_response(400, body={"error": {"message": str(server_error)}})])
+
+    with pytest.raises(SGLangVisionFeatureCacheMiss) as raised:
+        asyncio.run(_post(client, "http://test/post", {}, max_retries=5))
+
+    assert raised.value.feature_id == "feature-a"
+    assert raised.value.vision_revision == "revision-a"
+    assert raised.value.feature_schema_version == "schema-a"
+    assert client.calls == 1
+
+
 def test_post_retries_retryable_503_then_succeeds():
     client = _StubClient(
         [

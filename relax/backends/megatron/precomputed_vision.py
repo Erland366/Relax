@@ -2,6 +2,7 @@
 
 """Megatron input adapter for frozen Qwen3-VL vision features."""
 
+import math
 from types import MethodType
 from typing import Any
 
@@ -22,6 +23,40 @@ class OmittedQwen3VLVisionModel(torch.nn.Module):
         raise RuntimeError(
             "Qwen3-VL GPU vision weights were omitted; provide precomputed vision features"
         )
+
+
+def measure_actor_feature_deduplication(
+    *,
+    feature_uses: int,
+    unique_feature_ids: int,
+    transported_feature_bytes: int,
+    unique_feature_bytes: int,
+    h2d_seconds: float,
+    actor_compute_seconds: float,
+    staging_rss_bytes: int,
+) -> dict[str, int | float | bool]:
+    """Measure whether actor feature deduplication passes either adoption gate."""
+    if unique_feature_bytes <= 0:
+        raise ValueError(f"unique_feature_bytes must be positive, got {unique_feature_bytes}")
+    if not math.isfinite(actor_compute_seconds) or actor_compute_seconds <= 0:
+        raise ValueError(
+            "actor_compute_seconds must be finite and positive, "
+            f"got {actor_compute_seconds}"
+        )
+    transport_duplication_ratio = transported_feature_bytes / unique_feature_bytes
+    h2d_actor_compute_ratio = h2d_seconds / actor_compute_seconds
+    return {
+        "feature_uses": feature_uses,
+        "unique_feature_ids": unique_feature_ids,
+        "transported_feature_bytes": transported_feature_bytes,
+        "unique_feature_bytes": unique_feature_bytes,
+        "transport_duplication_ratio": transport_duplication_ratio,
+        "h2d_seconds": h2d_seconds,
+        "actor_compute_seconds": actor_compute_seconds,
+        "h2d_actor_compute_ratio": h2d_actor_compute_ratio,
+        "staging_rss_bytes": staging_rss_bytes,
+        "deduplication_eligible": transport_duplication_ratio > 2.0 or h2d_actor_compute_ratio > 0.10,
+    }
 
 
 def build_qwen3_vl_precomputed_forward_kwargs(

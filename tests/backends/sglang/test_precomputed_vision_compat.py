@@ -33,6 +33,44 @@ def _packed_bf16_processor_output(feature_bits: torch.Tensor) -> dict:
     }
 
 
+def test_sglang_media_loader_passes_id_only_precomputed_payload_to_processor_cache():
+    module = importlib.import_module("relax.backends.sglang.precomputed_vision")
+    id_only_payload = {
+        "format": "precomputed_embedding_id",
+        "feature_id": "feature-a",
+        "vision_revision": "vision-revision-a",
+        "feature_schema_version": "qwen3-vl-frozen-vision-v1",
+        "image_grid_thw": [[1, 2, 2]],
+    }
+
+    class BaseMultimodalProcessor:
+        @classmethod
+        def _load_single_item(cls, data, modality, **kwargs):
+            raise ValueError(f"Invalid image: {data}")
+
+    assert module.patch_sglang_precomputed_embedding_id_loader(BaseMultimodalProcessor)
+    assert BaseMultimodalProcessor._load_single_item(id_only_payload, modality="image") is id_only_payload
+    assert not module.patch_sglang_precomputed_embedding_id_loader(BaseMultimodalProcessor)
+
+
+def test_sglang_media_loader_leaves_other_inputs_on_original_path():
+    module = importlib.import_module("relax.backends.sglang.precomputed_vision")
+    calls = []
+
+    class BaseMultimodalProcessor:
+        @classmethod
+        def _load_single_item(cls, data, modality, **kwargs):
+            calls.append((cls, data, modality, kwargs))
+            return "original"
+
+    module.patch_sglang_precomputed_embedding_id_loader(BaseMultimodalProcessor)
+
+    assert BaseMultimodalProcessor._load_single_item("image.png", modality="image", discard_alpha_channel=True) == (
+        "original"
+    )
+    assert calls == [(BaseMultimodalProcessor, "image.png", "image", {"discard_alpha_channel": True})]
+
+
 def test_transformers_auto_patch_maps_feature_and_preserves_grid_for_mrope(monkeypatch):
     module = importlib.import_module("relax.backends.sglang.precomputed_vision")
 
@@ -48,6 +86,10 @@ def test_transformers_auto_patch_maps_feature_and_preserves_grid_for_mrope(monke
     )
 
     class BaseMultimodalProcessor:
+        @classmethod
+        def _load_single_item(cls, data, modality, **kwargs):
+            return data
+
         def collect_mm_items_from_processor_output(self, processor_output, modality=None):
             return processor_output
 
@@ -88,17 +130,32 @@ def test_transformers_auto_patch_maps_feature_and_preserves_grid_for_mrope(monke
 
 def test_install_patch_materializes_inline_bf16_before_original_process_reads_feature(monkeypatch):
     module = importlib.import_module("relax.backends.sglang.precomputed_vision")
+    monkeypatch.setenv("RELAX_SGLANG_VISION_FEATURE_CACHE_MAX_BYTES", "4096")
     feature_bits = torch.tensor(
         [0x0000, 0x0001, 0x3F80, 0x7F80, 0x7FC1, 0x8000, 0xBF80, 0xFFFF],
         dtype=torch.uint16,
     ).reshape(2, 4)
-    organized_results = [("image", _packed_bf16_processor_output(feature_bits))]
+    organized_results = [
+        (
+            "image",
+            {
+                **_packed_bf16_processor_output(feature_bits),
+                "feature_id": "feature-a",
+                "vision_revision": "revision-a",
+                "feature_schema_version": "schema-a",
+            },
+        )
+    ]
     original_process_features = []
 
     class MultimodalInputFormat:
         PRECOMPUTED_EMBEDDING = object()
 
     class BaseMultimodalProcessor:
+        @classmethod
+        def _load_single_item(cls, data, modality, **kwargs):
+            return data
+
         def collect_mm_items_from_processor_output(self, processor_output, modality=None):
             return processor_output
 
@@ -133,11 +190,24 @@ def test_install_patch_materializes_inline_bf16_before_original_process_reads_fe
     base_output = SimpleNamespace(organize_results=lambda: organized_results)
 
     items, _, _ = BaseMultimodalProcessor().process_and_combine_mm_data(base_output, object())
+    organized_results[0] = (
+        "image",
+        {
+            "format": "precomputed_embedding_id",
+            "feature_id": "feature-a",
+            "vision_revision": "revision-a",
+            "feature_schema_version": "schema-a",
+            "image_grid_thw": [[1, 2, 2]],
+        },
+    )
+    cached_items, _, _ = BaseMultimodalProcessor().process_and_combine_mm_data(base_output, object())
 
-    assert len(original_process_features) == 1
+    assert len(original_process_features) == 2
     assert original_process_features[0].dtype == torch.bfloat16
     assert torch.equal(original_process_features[0].view(torch.uint16), feature_bits)
+    assert torch.equal(original_process_features[1].view(torch.uint16), feature_bits)
     assert torch.equal(items[0].precomputed_embeddings.view(torch.uint16), feature_bits)
+    assert torch.equal(cached_items[0].precomputed_embeddings.view(torch.uint16), feature_bits)
 
 
 def test_install_patch_leaves_native_media_output_untouched(monkeypatch):
@@ -157,6 +227,10 @@ def test_install_patch_leaves_native_media_output_untouched(monkeypatch):
     raw_item = SimpleNamespace(format=MultimodalInputFormat.RAW_IMAGE)
 
     class BaseMultimodalProcessor:
+        @classmethod
+        def _load_single_item(cls, data, modality, **kwargs):
+            return data
+
         def collect_mm_items_from_processor_output(self, processor_output, modality=None):
             return processor_output
 
@@ -211,6 +285,180 @@ def test_transformers_auto_patch_decodes_inline_bf16_without_changing_bits():
     assert "feature_b64" not in collected
     assert "feature_dtype" not in collected
     assert "feature_shape" not in collected
+
+
+def test_sglang_vision_feature_cache_disabled_preserves_legacy_inline_payload():
+    module = importlib.import_module("relax.backends.sglang.precomputed_vision")
+    cache = module.SGLangVisionFeatureCache(max_bytes=0)
+    inline_payload = _packed_bf16_processor_output(
+        torch.tensor([[0x3F80, 0x4000]], dtype=torch.uint16)
+    )
+
+    resolved = cache.resolve(inline_payload)
+
+    assert resolved == inline_payload
+
+
+def test_sglang_vision_feature_cache_publishes_inline_feature_for_id_only_lookup():
+    module = importlib.import_module("relax.backends.sglang.precomputed_vision")
+    cache = module.SGLangVisionFeatureCache(max_bytes=4096)
+    feature_bits = torch.tensor(
+        [0x0000, 0x0001, 0x3F80, 0x7F80, 0x7FC1, 0x8000, 0xBF80, 0xFFFF],
+        dtype=torch.uint16,
+    ).reshape(2, 4)
+    inline_payload = {
+        **_packed_bf16_processor_output(feature_bits),
+        "feature_id": "feature-a",
+        "vision_revision": "vision-revision-a",
+        "feature_schema_version": "qwen3-vl-frozen-vision-v1",
+    }
+
+    assert cache.resolve(inline_payload) == inline_payload
+    resolved = cache.resolve(
+        {
+            "format": "precomputed_embedding_id",
+            "feature_id": "feature-a",
+            "vision_revision": "vision-revision-a",
+            "feature_schema_version": "qwen3-vl-frozen-vision-v1",
+            "image_grid_thw": [[1, 2, 2]],
+        }
+    )
+
+    assert resolved["format"] == "precomputed_embedding"
+    assert resolved["feature_id"] == "feature-a"
+    assert resolved["vision_revision"] == "vision-revision-a"
+    assert resolved["feature_schema_version"] == "qwen3-vl-frozen-vision-v1"
+    assert resolved["image_grid_thw"] == [[1, 2, 2]]
+    assert resolved["feature"].dtype == torch.bfloat16
+    assert torch.equal(resolved["feature"].view(torch.uint16), feature_bits)
+
+
+def test_transformers_processor_patch_publishes_inline_and_resolves_id_only_from_host_cache(monkeypatch):
+    module = importlib.import_module("relax.backends.sglang.precomputed_vision")
+    monkeypatch.setenv("RELAX_SGLANG_VISION_FEATURE_CACHE_MAX_BYTES", "4096")
+    feature_bits = torch.tensor(
+        [0x0000, 0x0001, 0x3F80, 0x7F80, 0x7FC1, 0x8000, 0xBF80, 0xFFFF],
+        dtype=torch.uint16,
+    ).reshape(2, 4)
+    inline_payload = {
+        **_packed_bf16_processor_output(feature_bits),
+        "feature_id": "feature-a",
+        "vision_revision": "vision-revision-a",
+        "feature_schema_version": "qwen3-vl-frozen-vision-v1",
+    }
+    id_only_payload = {
+        "format": "precomputed_embedding_id",
+        "feature_id": "feature-a",
+        "vision_revision": "vision-revision-a",
+        "feature_schema_version": "qwen3-vl-frozen-vision-v1",
+        "image_grid_thw": [[1, 2, 2]],
+    }
+
+    class BaseMultimodalProcessor:
+        def collect_mm_items_from_processor_output(self, processor_output, modality=None):
+            return processor_output
+
+    module.patch_transformers_auto_precomputed_embedding_processor(BaseMultimodalProcessor)
+    processor = BaseMultimodalProcessor()
+
+    published = processor.collect_mm_items_from_processor_output(inline_payload, modality="image")
+    resolved = processor.collect_mm_items_from_processor_output(id_only_payload, modality="image")
+
+    assert torch.equal(published["precomputed_embeddings"].view(torch.uint16), feature_bits)
+    assert torch.equal(resolved["precomputed_embeddings"].view(torch.uint16), feature_bits)
+    torch.testing.assert_close(
+        resolved["image_grid_thw"],
+        torch.tensor([[1, 2, 2]], dtype=torch.int64),
+    )
+
+
+def test_sglang_vision_feature_cache_raises_typed_miss_for_unknown_identity():
+    module = importlib.import_module("relax.backends.sglang.precomputed_vision")
+    cache = module.SGLangVisionFeatureCache(max_bytes=4096)
+
+    with pytest.raises(module.SGLangVisionFeatureCacheMiss) as raised:
+        cache.resolve(
+            {
+                "format": "precomputed_embedding_id",
+                "feature_id": "missing-feature",
+                "vision_revision": "vision-revision-a",
+                "feature_schema_version": "qwen3-vl-frozen-vision-v1",
+                "image_grid_thw": [[1, 2, 2]],
+            }
+        )
+
+    assert raised.value.feature_id == "missing-feature"
+    assert raised.value.vision_revision == "vision-revision-a"
+    assert raised.value.feature_schema_version == "qwen3-vl-frozen-vision-v1"
+
+
+@pytest.mark.parametrize(
+    ("identity_update", "missing_value"),
+    [
+        ({"vision_revision": "vision-revision-b"}, "vision-revision-b"),
+        ({"feature_schema_version": "qwen3-vl-frozen-vision-v2"}, "qwen3-vl-frozen-vision-v2"),
+    ],
+    ids=["revision", "schema"],
+)
+def test_sglang_vision_feature_cache_does_not_reuse_mismatched_identity(identity_update, missing_value):
+    module = importlib.import_module("relax.backends.sglang.precomputed_vision")
+    cache = module.SGLangVisionFeatureCache(max_bytes=4096)
+    inline_payload = {
+        **_packed_bf16_processor_output(torch.tensor([[0x3F80, 0x4000]], dtype=torch.uint16)),
+        "feature_id": "feature-a",
+        "vision_revision": "vision-revision-a",
+        "feature_schema_version": "qwen3-vl-frozen-vision-v1",
+    }
+    cache.resolve(inline_payload)
+    lookup = {
+        "format": "precomputed_embedding_id",
+        "feature_id": "feature-a",
+        "vision_revision": "vision-revision-a",
+        "feature_schema_version": "qwen3-vl-frozen-vision-v1",
+        "image_grid_thw": [[1, 2, 2]],
+        **identity_update,
+    }
+
+    with pytest.raises(module.SGLangVisionFeatureCacheMiss, match=missing_value):
+        cache.resolve(lookup)
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ["feature_id", "vision_revision", "feature_schema_version"],
+)
+def test_sglang_vision_feature_cache_rejects_incomplete_inline_identity(missing_field):
+    module = importlib.import_module("relax.backends.sglang.precomputed_vision")
+    cache = module.SGLangVisionFeatureCache(max_bytes=4096)
+    payload = {
+        **_packed_bf16_processor_output(torch.tensor([[0x3F80, 0x4000]], dtype=torch.uint16)),
+        "feature_id": "feature-a",
+        "vision_revision": "vision-revision-a",
+        "feature_schema_version": "qwen3-vl-frozen-vision-v1",
+    }
+    payload.pop(missing_field)
+
+    with pytest.raises(ValueError, match=missing_field):
+        cache.resolve(payload)
+
+
+@pytest.mark.parametrize(
+    "invalid_grid",
+    [[], [[1, 2]], [[1, 0, 2]], [[1, 2, 2, 2]]],
+)
+def test_sglang_vision_feature_cache_rejects_invalid_grid_before_admission(invalid_grid):
+    module = importlib.import_module("relax.backends.sglang.precomputed_vision")
+    cache = module.SGLangVisionFeatureCache(max_bytes=4096)
+    payload = {
+        **_packed_bf16_processor_output(torch.tensor([[0x3F80, 0x4000]], dtype=torch.uint16)),
+        "feature_id": "feature-a",
+        "vision_revision": "vision-revision-a",
+        "feature_schema_version": "qwen3-vl-frozen-vision-v1",
+        "image_grid_thw": invalid_grid,
+    }
+
+    with pytest.raises(ValueError, match="image_grid_thw"):
+        cache.resolve(payload)
 
 
 @pytest.mark.parametrize(

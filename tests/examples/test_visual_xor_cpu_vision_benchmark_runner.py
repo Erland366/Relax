@@ -28,6 +28,44 @@ def test_build_benchmark_matrix_returns_deterministic_cartesian_product():
     ]
 
 
+def test_build_benchmark_matrix_excludes_layouts_over_the_default_eight_cpu_budget():
+    matrix = benchmark.build_benchmark_matrix(
+        [1, 2, 4],
+        [1, 2, 4, 8],
+        [1],
+    )
+
+    assert matrix == [
+        {"num_replicas": 1, "threads_per_replica": 1, "batch_size": 1},
+        {"num_replicas": 1, "threads_per_replica": 2, "batch_size": 1},
+        {"num_replicas": 1, "threads_per_replica": 4, "batch_size": 1},
+        {"num_replicas": 1, "threads_per_replica": 8, "batch_size": 1},
+        {"num_replicas": 2, "threads_per_replica": 1, "batch_size": 1},
+        {"num_replicas": 2, "threads_per_replica": 2, "batch_size": 1},
+        {"num_replicas": 2, "threads_per_replica": 4, "batch_size": 1},
+        {"num_replicas": 4, "threads_per_replica": 1, "batch_size": 1},
+        {"num_replicas": 4, "threads_per_replica": 2, "batch_size": 1},
+    ]
+
+
+def test_build_benchmark_matrix_honors_an_explicit_smaller_cpu_budget():
+    matrix = benchmark.build_benchmark_matrix(
+        [1, 2],
+        [2, 4],
+        [1, 2],
+        max_total_cpus=4,
+    )
+
+    assert matrix == [
+        {"num_replicas": 1, "threads_per_replica": 2, "batch_size": 1},
+        {"num_replicas": 1, "threads_per_replica": 2, "batch_size": 2},
+        {"num_replicas": 1, "threads_per_replica": 4, "batch_size": 1},
+        {"num_replicas": 1, "threads_per_replica": 4, "batch_size": 2},
+        {"num_replicas": 2, "threads_per_replica": 2, "batch_size": 1},
+        {"num_replicas": 2, "threads_per_replica": 2, "batch_size": 2},
+    ]
+
+
 @pytest.mark.parametrize(
     ("replica_counts", "thread_counts", "batch_sizes", "error_pattern"),
     [
@@ -134,6 +172,15 @@ def test_parse_args_accepts_required_paths_and_comma_separated_matrix_dimensions
     assert args.batch_sizes == [8, 16]
     assert args.num_images == 256
     assert args.repeats == 3
+    assert args.max_total_cpus == 8
+
+
+def test_parse_args_accepts_an_explicit_maximum_total_cpu_budget():
+    argv = [*_complete_cli_argv(), "--max-total-cpus", "4"]
+
+    args = benchmark.parse_args(argv)
+
+    assert args.max_total_cpus == 4
 
 
 @pytest.mark.parametrize(
@@ -218,6 +265,61 @@ def test_main_builds_and_measures_the_requested_matrix_with_one_factory(tmp_path
     assert artifact == json.loads(output_path.read_text())
     assert artifact["schema_version"] == 1
     assert artifact["passed"] is True
+
+
+def test_local_measurement_reuses_one_layout_pool_and_closes_it_before_starting_another(
+    monkeypatch,
+):
+    events = []
+
+    class FakePool:
+        def __init__(self, layout):
+            self.layout = layout
+
+        def map(self, _function, batches, chunksize):
+            assert chunksize == 1
+            events.append(("measure", self.layout, tuple(batches)))
+            return [
+                {
+                    "completed_images": len(batch),
+                    "backend_encode_seconds": 0.01,
+                    "emitted_feature_bytes": 10,
+                }
+                for batch in batches
+            ]
+
+        def close(self):
+            events.append(("close", self.layout))
+
+        def join(self):
+            events.append(("join", self.layout))
+
+    measurement = benchmark._LocalCPUVisionMeasurement(
+        "/models/qwen3-vl",
+        "/data/visual-xor.jsonl",
+        num_images=4,
+        repeats=1,
+    )
+
+    def create_pool(num_replicas, threads_per_replica):
+        layout = (num_replicas, threads_per_replica)
+        events.append(("create", layout))
+        return FakePool(layout)
+
+    monkeypatch.setattr(measurement, "_create_pool", create_pool)
+    try:
+        measurement({"num_replicas": 1, "threads_per_replica": 2, "batch_size": 1})
+        measurement({"num_replicas": 1, "threads_per_replica": 2, "batch_size": 2})
+        measurement({"num_replicas": 2, "threads_per_replica": 1, "batch_size": 1})
+    finally:
+        measurement.close()
+
+    first_create = events.index(("create", (1, 2)))
+    second_create = events.index(("create", (2, 1)))
+    first_close = events.index(("close", (1, 2)))
+    first_join = events.index(("join", (1, 2)))
+    assert sum(event == ("create", (1, 2)) for event in events) == 1
+    assert first_create < first_close < first_join < second_create
 
 
 def test_module_execution_delegates_to_main():

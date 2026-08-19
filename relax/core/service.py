@@ -42,6 +42,36 @@ def build_service_runtime_env(role: str, config: Namespace, runtime_env: Optiona
         if getattr(config, "vision_encoder_omit_gpu_weights", False):
             service_runtime_env["env_vars"]["RELAX_SGLANG_QWEN3_VL_OMIT_GPU_WEIGHTS"] = "1"
 
+    cache_max_bytes = int(getattr(config, "sglang_vision_feature_cache_max_bytes", 0))
+    if cache_max_bytes < 0:
+        raise ValueError(
+            "sglang_vision_feature_cache_max_bytes must be non-negative, "
+            f"got {cache_max_bytes}"
+        )
+    if role == "rollout" and cache_max_bytes > 0:
+        if getattr(config, "vision_encoder_backend", "disabled") != "pytorch":
+            raise ValueError("SGLang vision feature caching requires vision_encoder_backend='pytorch'")
+        if getattr(config, "sglang_model_impl", "").lower() != "transformers":
+            raise ValueError("SGLang vision feature caching requires sglang_model_impl='transformers'")
+        tokenizer_worker_num = int(getattr(config, "sglang_tokenizer_worker_num", 1))
+        if tokenizer_worker_num != 1:
+            raise ValueError(
+                "Process-local SGLang vision feature caching requires sglang_tokenizer_worker_num=1; "
+                f"got {tokenizer_worker_num}"
+            )
+        rollout_num_gpus = int(getattr(config, "rollout_num_gpus", 0))
+        rollout_num_gpus_per_engine = int(
+            getattr(config, "rollout_num_gpus_per_engine", rollout_num_gpus or 1)
+        )
+        engine_count = rollout_num_gpus // rollout_num_gpus_per_engine if rollout_num_gpus else 1
+        if engine_count > 1 and getattr(config, "sglang_router_policy", "") != "consistent_hashing":
+            raise ValueError(
+                "Multi-engine SGLang vision feature caching requires feature-sticky consistent_hashing routing"
+            )
+        service_runtime_env["env_vars"]["RELAX_SGLANG_VISION_FEATURE_CACHE_MAX_BYTES"] = str(
+            cache_max_bytes
+        )
+
     return service_runtime_env
 
 

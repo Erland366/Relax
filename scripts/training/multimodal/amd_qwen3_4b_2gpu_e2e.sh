@@ -227,6 +227,8 @@ configure_megatron_parallelism() {
 
 configure_vision_encoder() {
     VISION_ENCODER_NUM_REPLICAS="${VISION_ENCODER_NUM_REPLICAS:-1}"
+    VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS="${VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS:-0}"
+    SGLANG_VISION_FEATURE_CACHE_MAX_BYTES="${SGLANG_VISION_FEATURE_CACHE_MAX_BYTES:-0}"
     VISION_ENCODER_OMIT_GPU_WEIGHTS="${VISION_ENCODER_OMIT_GPU_WEIGHTS:-0}"
     FREEZE_VISION_MODEL="${FREEZE_VISION_MODEL:-0}"
 
@@ -235,6 +237,7 @@ configure_vision_encoder() {
     fi
 
     require_positive_integer VISION_ENCODER_NUM_REPLICAS
+    require_nonnegative_integer SGLANG_VISION_FEATURE_CACHE_MAX_BYTES
     require_boolean_flag VISION_ENCODER_OMIT_GPU_WEIGHTS
     require_boolean_flag FREEZE_VISION_MODEL
 }
@@ -1062,7 +1065,7 @@ log_launch_config() {
     echo "  transfer_queue: num_data_storage_units=${NUM_DATA_STORAGE_UNITS}" >&2
     echo "  sequence: seq_length=${SEQ_LENGTH}, rollout_max_response_len=${ROLLOUT_MAX_RESPONSE_LEN}, rollout_max_context_len=${ROLLOUT_MAX_CONTEXT_LEN:-unset}, rollout_max_prompt_len=${ROLLOUT_MAX_PROMPT_LEN:-unset}" >&2
     echo "  sglang: gpus_per_engine=${ROLLOUT_NUM_GPUS_PER_ENGINE}, pp=${SGLANG_PIPELINE_PARALLEL_SIZE}, dp=${SGLANG_DATA_PARALLEL_SIZE}, ep=${SGLANG_EXPERT_PARALLEL_SIZE}, attention_backend=${SGLANG_ATTENTION_BACKEND}, server_concurrency=${SGLANG_SERVER_CONCURRENCY}, max_running_requests=${SGLANG_MAX_RUNNING_REQUESTS:-unset}, max_total_tokens=${SGLANG_MAX_TOTAL_TOKENS:-unset}" >&2
-    echo "  vision_encoder: backend=${VISION_ENCODER_BACKEND:-disabled}, num_cpus=${VISION_ENCODER_NUM_CPUS:-8}, replicas=${VISION_ENCODER_NUM_REPLICAS}, cache_max_bytes=${VISION_ENCODER_CACHE_MAX_BYTES:-4294967296}, max_batch_size=${VISION_ENCODER_MAX_BATCH_SIZE:-8}, omit_gpu_weights=${VISION_ENCODER_OMIT_GPU_WEIGHTS}, freeze_gpu_model=${FREEZE_VISION_MODEL}" >&2
+    echo "  vision_encoder: backend=${VISION_ENCODER_BACKEND:-disabled}, num_cpus=${VISION_ENCODER_NUM_CPUS:-8}, replicas=${VISION_ENCODER_NUM_REPLICAS}, cache_max_bytes=${VISION_ENCODER_CACHE_MAX_BYTES:-4294967296}, sglang_feature_cache_max_bytes=${SGLANG_VISION_FEATURE_CACHE_MAX_BYTES}, max_batch_size=${VISION_ENCODER_MAX_BATCH_SIZE:-8}, batch_wait_timeout_ms=${VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS}, omit_gpu_weights=${VISION_ENCODER_OMIT_GPU_WEIGHTS}, freeze_gpu_model=${FREEZE_VISION_MODEL}" >&2
 }
 
 submit_training_job() {
@@ -1080,7 +1083,9 @@ submit_training_job() {
         --vision-encoder-num-cpus "${VISION_ENCODER_NUM_CPUS:-8}" \
         --vision-encoder-num-replicas "${VISION_ENCODER_NUM_REPLICAS}" \
         --vision-encoder-cache-max-bytes "${VISION_ENCODER_CACHE_MAX_BYTES:-4294967296}" \
+        --sglang-vision-feature-cache-max-bytes "${SGLANG_VISION_FEATURE_CACHE_MAX_BYTES}" \
         --vision-encoder-max-batch-size "${VISION_ENCODER_MAX_BATCH_SIZE:-8}" \
+        --vision-encoder-batch-wait-timeout-ms "${VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS}" \
         "${VISION_ENCODER_ARGS[@]}" \
         "${MODEL_ARGS[@]}" \
         "${CKPT_ARGS[@]}" \

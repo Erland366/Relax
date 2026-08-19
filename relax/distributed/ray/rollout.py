@@ -465,6 +465,9 @@ class EngineGroup:
         if value := os.environ.get("AMD_SERIALIZE_KERNEL"):
             env_vars["AMD_SERIALIZE_KERNEL"] = value
 
+        if value := os.environ.get("RELAX_SGLANG_VISION_FEATURE_CACHE_MAX_BYTES"):
+            env_vars["RELAX_SGLANG_VISION_FEATURE_CACHE_MAX_BYTES"] = value
+
         return env_vars
 
     def start_engines(self, port_cursors: dict[int, int] | None = None) -> tuple[list, dict[int, int]]:

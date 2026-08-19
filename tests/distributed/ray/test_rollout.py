@@ -47,6 +47,21 @@ def test_engine_group_preserves_pythonpath_for_non_transformers(monkeypatch):
     assert env_vars[_MEGATRON_ISOLATION_ENV_VAR] == "0"
 
 
+def test_engine_group_forwards_sglang_vision_feature_cache_to_engine_process(monkeypatch):
+    monkeypatch.setenv("RELAX_SGLANG_VISION_FEATURE_CACHE_MAX_BYTES", "4096")
+    group = EngineGroup(
+        args=SimpleNamespace(sglang_model_impl="transformers", num_gpus_per_node=2),
+        pg=None,
+        all_engines=[],
+        num_gpus_per_engine=1,
+        num_new_engines=0,
+    )
+
+    env_vars = group._build_engine_runtime_env_vars()
+
+    assert env_vars["RELAX_SGLANG_VISION_FEATURE_CACHE_MAX_BYTES"] == "4096"
+
+
 def test_importing_rollout_module_does_not_import_sglang():
     script = """
 import builtins

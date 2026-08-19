@@ -33,6 +33,8 @@ class ByteBoundedLRUCache:
         """Insert an entry and evict least-recently-used values as necessary."""
         if size_bytes < 0:
             raise ValueError(f"size_bytes must be non-negative, got {size_bytes}")
+        if size_bytes > self.max_bytes:
+            return
         previous = self._entries.pop(key, None)
         if previous is not None:
             self._resident_bytes -= previous[1]

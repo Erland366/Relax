@@ -18,6 +18,16 @@ from relax.utils.training.eval_config import EvalDatasetConfig, build_eval_datas
 logger = get_logger(__name__)
 
 
+def _nonnegative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(f"expected a non-negative integer, got {value!r}") from error
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"expected a non-negative integer, got {value!r}")
+    return parsed
+
+
 def reset_arg(parser, name, **kwargs):
     """Reset the default value of a Megatron argument.
 
@@ -133,10 +143,28 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Maximum resident bytes for the CPU vision feature LRU cache.",
             )
             parser.add_argument(
+                "--sglang-vision-feature-cache-max-bytes",
+                type=_nonnegative_int,
+                default=0,
+                help=(
+                    "Maximum bytes for the process-local SGLang host cache of immutable precomputed vision "
+                    "features. Zero disables ID-only feature requests."
+                ),
+            )
+            parser.add_argument(
                 "--vision-encoder-max-batch-size",
                 type=int,
                 default=8,
                 help="Maximum number of images accepted by one CPU vision encoder request.",
+            )
+            parser.add_argument(
+                "--vision-encoder-batch-wait-timeout-ms",
+                type=float,
+                default=0.0,
+                help=(
+                    "Reserved maximum wait for conditional CPU vision dynamic batching. "
+                    "Only 0 (one request per backend forward) is currently supported."
+                ),
             )
 
             return parser

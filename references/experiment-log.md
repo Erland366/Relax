@@ -4582,3 +4582,278 @@ Report and artifacts:
 - `benchmark_results/cpu_vision/20260806_overlap_native_grouped/`
 - `log/visual-xor-refinement-cpu-omitted-20260806_081340.log`
 - `log/visual-xor-refinement-native-gpu-20260806_083125.log`
+
+## 2026-08-11: CPU-ViT scaling instrumentation and allocation gate
+
+**General description:** Prepare the replica-aware telemetry, offline topology
+sweep, and live launch controls required to measure CPU-ViT capacity without
+claiming results from an allocation that cannot expose meaningful CPU scaling.
+
+### What changed
+
+- Every CPU vision response now carries its immutable feature bundle together
+  with replica and feature identity, cache status, backend-forward time and
+  actual batch size, and a cumulative replica-local resource snapshot.
+- The rollout manager retains the newest snapshot from every observed replica.
+  It reports cumulative and interval request/cache/backend work, feature
+  identity and duplicate encoding, real backend batch-size distributions,
+  per-replica CPU utilization, and peak RSS without querying one arbitrary
+  load-balanced replica.
+- The offline runner excludes layouts above `--max-total-cpus=8`, keeps only
+  one replica/thread process layout alive at a time, reuses that layout across
+  explicit batch sizes, and records process CPU time and peak RSS by worker.
+- The four E1 demand fanouts can be selected through launcher environment
+  overrides while preserving 64 responses per rollout. Capacity mode runs a
+  topology preflight before Ray startup.
+- `VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS=0` preserves the existing one-request,
+  one-forward path. Invalid values fail validation, and positive values fail
+  explicitly until E2 establishes the required 20% explicit-batching gain.
+
+### Local evidence
+
+- Unit coverage exercises response envelopes, out-of-order and stale replica
+  snapshots, uneven utilization, cache and duplicate identities, interval
+  resets, actual backend batch distributions, process resource evidence,
+  matrix filtering, process-pool lifecycle, topology preflight, launcher
+  propagation, and the staged batch-wait contract.
+- The current allocation exposes scheduler-affinity CPUs `8,72`. Linux
+  topology maps both to package zero, core 16, so they are two SMT threads of
+  one physical core.
+- The preflight requires at least 16 scheduler-affinity CPUs and at least eight
+  distinct physical cores, and permits at most eight reserved ViT CPUs. This
+  allocation therefore fails before Ray startup as intended.
+
+### Decision
+
+- Do not infer an E1 peak demand, select an E2 topology, or implement live
+  dynamic batching from this allocation. No E0-E4 hardware run was performed.
+- Acquire four MI210 GPUs, 16 scheduler CPUs, and at least eight distinct
+  physical cores. Rerun E0 representation parity, execute E1, and feed its
+  measured peak demand into E2.
+- If E2 does not show at least a 20% gain for explicit batch size above one at
+  the same replica/thread layout, record the negative result and stop the E4
+  batching branch.
+- Keep asynchronous weight-update time visible only as a timing covariate; it
+  is not an optimization target in this experiment.
+
+Report:
+
+- `training_reports/2026-08-11-qwen3-vl-cpu-vit-scaling-readiness.md`
+
+## 2026-08-17: Submit node-exclusive CPU-ViT E0-E1 Slurm job
+
+**General description:** Move the next CPU-ViT parity and live-demand gates
+from the inadequate one-core interactive allocation into a scheduler-managed
+MI210 allocation without bypassing the E1-to-E2 decision boundary.
+
+### What changed
+
+- Added `scripts/slurm/qwen3_vl_cpu_vit_e0_e1.sbatch` for the `faculty`
+  partition using account `faculty-acc` and QoS `qirong_qos`.
+- The job requests one node, four MI210 GPUs, one 16-core non-SMT task,
+  128 GiB, a 12-hour limit, and node-exclusive access. Exclusivity is required
+  because the existing single-node Relax launcher uses dashboard port 8265
+  and broad local Ray cleanup.
+- The wrapper validates the maximum planned eight-CPU ViT layout, runs the
+  local full-vocabulary E0 parity gate, and runs the live scalar/grouped E0
+  probe. The known grouped-native result is recorded but does not block E1
+  when scalar CPU and grouped CPU parity pass.
+- D0-D3 then run sequentially with 12 rollouts, cache disabled, one encoder
+  replica and thread, no evaluation or checkpoints, and deterministic outer
+  console logs. Ray Serve and Ray are stopped after each successful profile
+  and on batch exit.
+- The wrapper sanitizes Python selection to `relaxrl_rocm_after_fix`, retains
+  inherited proxy variables for online W&B, and refuses broad cleanup if an
+  unexpected same-user job shares the allocated node.
+
+### Submission
+
+- Slurm job: `141944`
+- Submitted: `2026-08-17T07:23:01Z`
+- Initial state: `PENDING (Priority)`
+- Requested TRES: 16 CPUs, 128 GiB, and four MI210 GPUs; node sharing is
+  disabled.
+- Slurm log: `log/slurm-cpu-vit-e0-e1-141944.log`
+- Artifact directory after startup:
+  `benchmark_results/cpu_vision/slurm_141944_e0_e1/`
+
+### Decision boundary
+
+- Do not submit E2 until job `141944` completes and ten steady E1 cycles per
+  profile yield a measured peak consumer-demand scalar.
+- Do not submit E3 until E2 selects a capacity layout and the D2 actor-wait
+  result determines whether D3 is needed as the saturation profile.
+- Keep `VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS=0`; this submission does not
+  authorize or imply live dynamic batching.
+
+## 2026-08-14: CPU-ViT scaling retrospective
+
+**General description:** Distill the August 6 live-overlap result and August 11
+scaling-readiness work into a reusable CPU-offload capacity protocol without
+claiming an unmeasured topology or batching result.
+
+### Reusable findings
+
+- Semantic parity, live consumer demand, offline CPU supply, live topology,
+  batching eligibility, and cache locality are separate ordered gates.
+- Scalar native versus CPU and grouped CPU versus scalar CPU passed their
+  feature/logit gates. Grouped native `n=8` remained an independent qualified
+  performance counterfactual because its strict branch-score gates failed.
+- One uncached one-thread CPU replica kept steady actor wait at `0.88%` and all
+  rollout time overlapped actor work. D0 therefore proved useful overlap but
+  could not select a CPU topology because it did not saturate the producer.
+- Packed CPU requests were `383.5` times larger than native requests without
+  pacing the actor. Large transport volume alone does not justify a registry.
+- Multi-replica service state must be aggregated from response-carried latest
+  snapshots per replica; load-balanced metric queries cannot represent the
+  deployment.
+- Explicit offline batches justify a live batching implementation only after
+  a same-layout gain of at least 20%. Live adoption still requires actor-wait,
+  capacity, parity, rollout-wall or CPU-reservation, and p95 RTT gates.
+- CPU topology is part of the experiment. The affinity CPUs `8,72` were SMT
+  siblings of one physical core, so rejecting the local scaling matrix before
+  Ray startup preserved the validity of the result.
+
+### Knowledge-capture decision
+
+- Updated the existing `model-integration` skill with a CPU-offload capacity
+  protocol covering demand-before-supply measurement, topology preflight,
+  response-carried replica telemetry, `1.25`-times capacity headroom,
+  conditional batching, live acceptance, and the cache-locality boundary.
+- Did not create an “optimal CPU-ViT scaling” result skill because E1-E4 have
+  not measured a winning layout or batch-wait timeout.
+- Did not add a troubleshooting entry. The SMT-only rejection is an intended,
+  actionable preflight guard rather than a runtime failure pattern.
+
+Inputs:
+
+- `training_reports/2026-08-06-qwen3-vl-cpu-vision-steady-state-overlap.md`
+- `training_reports/2026-08-11-qwen3-vl-cpu-vit-scaling-readiness.md`
+
+## 2026-08-18: Complete E0-E1 and submit the gated E2 sweep
+
+**General description:** Convert the completed Slurm demand run into a checked
+consumer-demand artifact and advance only the next experiment gate.
+
+### Evidence
+
+- Slurm job `141944` completed E0 and all 12 cycles of D0-D3 with exit code
+  zero, 24 optimizer intervals per profile, final synchronization, valid-action
+  rate 1.0, no checkpoint write, and Ray shutdown.
+- Scalar native versus scalar CPU and grouped CPU versus scalar CPU passed.
+  Grouped native remained the known independent failure with maximum
+  log-probability, margin, and probability drift of `0.0393803`, `0.0625000`,
+  and `0.0145715`.
+- `examples.visual_xor.analyze_cpu_vision_demand` now pairs CPU-vision and actor
+  cycles, rejects incomplete pairings, discards cycles 0-1, reports request
+  accounting, and writes a versioned artifact.
+- D0-D3 peak demands were `0.810161`, `1.614181`, `3.240455`, and `5.858836`
+  images/s. D2 maximum steady actor wait was `0.655000%`, below the 5%
+  saturation gate.
+- D0-D2 have exact image/request accounting. D3 accepted the planned 64
+  responses per cycle but encoded 29 extra refill/filter candidates in cycle
+  11; the analyzer marks the profile non-exact.
+- The E2 capacity target is `7.3235445499` images/s.
+
+### Submission
+
+- E2 job `142800` was cancelled before accepting results because the
+  node-exclusive batch shell exposed all 128 logical CPUs.
+- The corrected script ran the measured commands inside an explicit 16-core
+  Slurm step. E2 job `142801` completed all 36 valid layouts in 7m58s with no
+  more than eight total ViT worker threads.
+- One replica by one thread already sustains `17.433295` images/s at batch one,
+  `2.975` times peak demand. Batch eight gains only `7.955%` at that winning
+  layout, below the 20% dynamic-batching gate.
+- Four-to-eight-CPU layouts show larger explicit-batch gains, but they reserve
+  CPUs the measured workload does not need. Do not implement live dynamic
+  batching for the selected `1x1` layout.
+
+Artifacts and report:
+
+- `benchmark_results/cpu_vision/slurm_141944_e0_e1/e1_demand.json`
+- `benchmark_results/cpu_vision/slurm_142801_e2/e2_scaling.json`
+- `scripts/slurm/qwen3_vl_cpu_vit_e2.sbatch`
+- `training_reports/2026-08-18-qwen3-vl-policy-invariant-representation-cache.md`
+
+## 2026-08-18: Add the opt-in policy-invariant representation cache
+
+**General description:** Add a second bounded cache at the SGLang consumer
+boundary while preserving the established tensor representation and explicit
+inline path.
+
+### What changed
+
+- The feature schema version now participates in producer identity and travels
+  with encoder responses and packed SGLang payloads.
+- Oversized producer entries bypass admission without evicting resident data.
+- `SGLANG_VISION_FEATURE_CACHE_MAX_BYTES=0` preserves inline behavior. A
+  positive value enables a job-local SGLang host LRU.
+- The first scalar or grouped request publishes inline. Later requests use
+  identity-only payloads with feature-sticky routing. Grouped hits skip packed
+  BF16/base64 serialization.
+- A stable marked HTTP 400 is translated into one explicit inline republish.
+  Other failures and identity/grid mismatches propagate.
+- Client metrics distinguish inline publications, ID-only hits, ID-only
+  misses, and republishes.
+- Actor-side deduplication remains measurement-only because its real
+  implementation requires a new unique-feature-table batch schema.
+
+### Local evidence and decision
+
+- The initial combined focused suite passed 193 tests. After the two E4 live
+  integration fixes, the targeted cache/loader/Slurm slice passed 56 tests and
+  the broader CPU-vision regression slice passed 191 tests. Compilation,
+  shell syntax, and diff checks passed; Ruff is unavailable in the existing
+  environment.
+- Do not claim a live cache speedup from unit tests. Run a Tier 1/Tier 2
+  ablation after E2 selects the layout and retain representation/logit parity,
+  request accounting, p95 RTT, actor-wait, and rollout-wall adoption gates.
+- Frame the research result as schema-safe policy-invariant representation
+  reuse across inference and training, not only as VRAM savings from a small
+  visual tower.
+
+Report:
+
+- `training_reports/2026-08-18-qwen3-vl-policy-invariant-representation-cache.md`
+
+## 2026-08-18: Complete E3 topology and submit corrected E4 cache ablation
+
+**General description:** Advance the measured `1x1` E2 winner into a live
+equal-ViT-CPU topology comparison, then isolate producer compute reuse from
+SGLang representation-transport reuse.
+
+### Execution boundary
+
+- E3 reuses the completed E1 D2 `1x1` control and runs only `1x4`, `2x2`, and
+  `4x1`, each with four reserved ViT CPUs, cache disabled, and live batching
+  disabled.
+- Initial job `142802` was cancelled without accepting a result. With Ray
+  advertising 16 CPUs, VisionEncoder was alive but Rollout remained
+  `PENDING_CREATION`; live cluster state showed one unschedulable CPU demand.
+- Corrected E3 job `142804` requested and advertised 20 CPUs. The additional
+  four CPUs are control-plane headroom; every compared ViT layout remains
+  fixed at four CPUs and the eight-CPU ViT ceiling is unchanged.
+- Job `142804` completed all 12 cycles for `1x4`, `2x2`, and `4x1`. Mean
+  rollout walls were `1.613`, `1.405`, and `1.454` seconds; all mean actor wait
+  remained below `0.62%`. `2x2` was the fastest equal-four-CPU layout, while
+  `4x1` used `8.58 GiB` aggregate RSS without beating it.
+- The system recommendation remains `1x1`: E2 measured `2.975` times peak
+  demand at batch one, so reserving four ViT CPUs reduces rollout latency but
+  does not solve actor starvation.
+- E4 job `142805` exposed a tensor-valued grid in the ID-only JSON payload.
+  Job `142809` exposed a second boundary: SGLang's early media loader rejected
+  the ID-only dictionary before the processor cache could resolve it. No
+  partial result from either attempt is accepted.
+- Regression tests now cover JSON-safe IDs and early-loader pass-through. The
+  Slurm wrapper rejects missing vision, rollout, or actor cycles and invokes
+  the checked cache analyzer before reporting success.
+- Pending E4 job `142817` runs Tier 1 only and Tier 1 plus Tier 2 with 1 GiB
+  per enabled tier at `1x1`. Job `142816` was cancelled before allocation and
+  replaced with a one-hour backfill request; no experiment setting changed.
+- `examples.visual_xor.analyze_cpu_vision_cache` requires complete paired
+  steady cycles and computes request-byte, serialization, RTT, rollout-wall,
+  actor-wait, cache-hit, republish, backend-forward, and valid-action results.
+
+E3 is accepted. No live Tier 2 performance claim is accepted until job
+`142817` and its checked artifact complete.

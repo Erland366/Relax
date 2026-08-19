@@ -3,9 +3,10 @@
 import asyncio
 import copy
 import inspect
+import os
 import uuid
 from argparse import Namespace
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from math import ceil
 from time import monotonic
@@ -19,11 +20,13 @@ import torch
 from packaging.version import parse
 from tqdm import tqdm
 
+from relax.backends.sglang.precomputed_vision import SGLangVisionFeatureCacheMiss
 from relax.distributed.ray.rollout import _log_rollout_data
 from relax.engine.filters.base_types import MetricGatherer, call_dynamic_filter
 from relax.engine.rewards import async_rm, batched_async_rm
 from relax.engine.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from relax.engine.rollout.precomputed_vision import (
+    build_sglang_precomputed_image_id_data,
     prepare_qwen3_vl_precomputed_rollout_inputs,
     serialize_sglang_precomputed_image_data,
 )
@@ -67,7 +70,15 @@ class GenerateState(metaclass=SingletonMeta):
             from ray import serve
 
             self.vision_encoder = serve.get_app_handle("vision_encoder")
-        self.vision_encoder_metrics_previous = None
+        self.vision_encoder_previous_cumulative_metrics = None
+        self.vision_encoder_cumulative_replica_snapshots = {}
+        self.vision_encoder_previous_cumulative_replica_snapshots = {}
+        self.vision_encoder_cumulative_feature_ids = set()
+        self.vision_encoder_interval_feature_ids = set()
+        self.vision_encoder_cumulative_backend_feature_ids = set()
+        self.vision_encoder_interval_backend_feature_ids = set()
+        self.vision_encoder_cumulative_backend_batch_sizes = []
+        self.vision_encoder_interval_backend_batch_sizes = []
 
         # Process pool for running HuggingFace processor without GIL contention.
         # Controlled by --mm-processor-pool-size (0 = disabled).
@@ -259,15 +270,24 @@ async def _run_cpu_vision_encoder(
             "Qwen3-VL CPU vision requires processor outputs 'pixel_values' and 'image_grid_thw'; "
             f"got keys {sorted(multimodal_train_inputs)}"
         )
-    return await state.vision_encoder.encode.remote(
+    response = await state.vision_encoder.encode.remote(
         pixel_values=multimodal_train_inputs["pixel_values"],
         image_grid_thw=multimodal_train_inputs["image_grid_thw"],
     )
+    if not hasattr(response, "features"):
+        raise TypeError(
+            "CPU vision encoder must return VisionEncoderResponse with replica telemetry; "
+            f"got {type(response).__name__}"
+        )
+    _record_cpu_vision_response(state, response)
+    return response.features
 
 
 async def _prepare_cpu_vision_rollout_inputs(
     state: GenerateState,
     multimodal_train_inputs: dict[str, Any],
+    *,
+    serialize_image_data: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, float], dict[str, int]]:
     """Build one shared CPU-vision bundle and record client-side stage costs."""
     vision_service_started_at = monotonic()
@@ -283,7 +303,9 @@ async def _prepare_cpu_vision_rollout_inputs(
     prepare_elapsed = monotonic() - prepare_started_at
 
     to_list_started_at = monotonic()
-    sglang_image_data = serialize_sglang_precomputed_image_data(prepared_payload["image_data"][0])
+    sglang_image_data = prepared_payload["image_data"][0]
+    if serialize_image_data:
+        sglang_image_data = serialize_sglang_precomputed_image_data(sglang_image_data)
     to_list_elapsed = monotonic() - to_list_started_at
     return (
         sglang_image_data,
@@ -308,43 +330,306 @@ _VISION_ENCODER_COUNTER_METRICS = {
     "backend_encode_seconds_total": "backend/encode_seconds",
 }
 
+_VISION_ENCODER_AGGREGATE_METRICS = (
+    "entries",
+    "resident_bytes",
+    *_VISION_ENCODER_COUNTER_METRICS,
+)
+
+
+def _get_or_create_cpu_vision_telemetry(state: GenerateState, name: str, factory: Callable) -> Any:
+    telemetry = getattr(state, name, None)
+    if telemetry is None:
+        telemetry = factory()
+        setattr(state, name, telemetry)
+    return telemetry
+
+
+def _record_cpu_vision_response(state: GenerateState, response: Any) -> None:
+    """Record one response while retaining each replica's newest cumulative snapshot."""
+    cumulative_replica_snapshots = _get_or_create_cpu_vision_telemetry(
+        state, "vision_encoder_cumulative_replica_snapshots", dict
+    )
+    cumulative_feature_ids = _get_or_create_cpu_vision_telemetry(
+        state, "vision_encoder_cumulative_feature_ids", set
+    )
+    interval_feature_ids = _get_or_create_cpu_vision_telemetry(
+        state, "vision_encoder_interval_feature_ids", set
+    )
+    cumulative_backend_feature_ids = _get_or_create_cpu_vision_telemetry(
+        state, "vision_encoder_cumulative_backend_feature_ids", set
+    )
+    interval_backend_feature_ids = _get_or_create_cpu_vision_telemetry(
+        state, "vision_encoder_interval_backend_feature_ids", set
+    )
+    cumulative_backend_batch_sizes = _get_or_create_cpu_vision_telemetry(
+        state, "vision_encoder_cumulative_backend_batch_sizes", list
+    )
+    interval_batch_sizes = _get_or_create_cpu_vision_telemetry(
+        state, "vision_encoder_interval_backend_batch_sizes", list
+    )
+
+    if response.feature_id:
+        cumulative_feature_ids.add(response.feature_id)
+        interval_feature_ids.add(response.feature_id)
+        if not response.cache_hit:
+            cumulative_backend_feature_ids.add(response.feature_id)
+            interval_backend_feature_ids.add(response.feature_id)
+    if response.backend_batch_size > 0:
+        cumulative_backend_batch_sizes.append(response.backend_batch_size)
+        interval_batch_sizes.append(response.backend_batch_size)
+
+    cumulative_snapshot = response.metrics_snapshot
+    newest_snapshot = cumulative_replica_snapshots.get(response.replica_id)
+    if (
+        newest_snapshot is None
+        or cumulative_snapshot["encode_requests_total"] >= newest_snapshot["encode_requests_total"]
+    ):
+        cumulative_replica_snapshots[response.replica_id] = dict(cumulative_snapshot)
+
+
+def _aggregate_cpu_vision_snapshots(
+    snapshots: Mapping[str, Mapping[str, float | int]],
+) -> dict[str, float | int]:
+    return {
+        name: sum(snapshot[name] for snapshot in snapshots.values())
+        for name in _VISION_ENCODER_AGGREGATE_METRICS
+    }
+
+
+def _cpu_vision_batch_size_metrics(
+    batch_sizes: list[int] | tuple[int, ...], *, interval: bool
+) -> dict[str, float | int]:
+    metric_suffix = "_interval" if interval else ""
+    if not batch_sizes:
+        mean: float = 0.0
+        p95: float | int = 0.0
+        maximum = 0
+    else:
+        sorted_batch_sizes = sorted(batch_sizes)
+        mean = sum(batch_sizes) / len(batch_sizes)
+        p95 = sorted_batch_sizes[ceil(0.95 * len(sorted_batch_sizes)) - 1]
+        maximum = sorted_batch_sizes[-1]
+
+    return {
+        f"vision_encoder/backend/batch_size_mean{metric_suffix}": mean,
+        f"vision_encoder/backend/batch_size_p95{metric_suffix}": p95,
+        f"vision_encoder/backend/batch_size_max{metric_suffix}": maximum,
+    }
+
+
+def _sglang_vision_feature_cache_enabled(args: Namespace | None = None) -> bool:
+    configured_bytes = getattr(args, "sglang_vision_feature_cache_max_bytes", None)
+    if configured_bytes is not None:
+        return int(configured_bytes) > 0
+    return int(
+        os.environ.get(
+            "SGLANG_VISION_FEATURE_CACHE_MAX_BYTES",
+            os.environ.get("RELAX_SGLANG_VISION_FEATURE_CACHE_MAX_BYTES", "0"),
+        )
+    ) > 0
+
+
+def _validate_sglang_vision_feature_cache_routing(args: Namespace, *, cache_enabled: bool) -> None:
+    """Require feature-sticky routing when cached features can reach multiple engines."""
+    if not cache_enabled:
+        return
+    rollout_resource = getattr(args, "resource", {}).get("rollout", [1, 1])
+    rollout_gpus = rollout_resource[1]
+    gpus_per_engine = getattr(args, "rollout_num_gpus_per_engine", rollout_gpus)
+    engine_count = rollout_gpus // gpus_per_engine
+    if engine_count > 1 and getattr(args, "sglang_router_policy", None) != "consistent_hashing":
+        raise ValueError(
+            "SGLang vision feature caching across multiple engines requires consistent feature-sticky routing"
+        )
+
+
+def _sglang_vision_feature_identity(image_data: Mapping[str, Any]) -> tuple[str, str, str]:
+    return (
+        image_data["feature_id"],
+        image_data["vision_revision"],
+        image_data["feature_schema_version"],
+    )
+
+
+def _published_sglang_vision_features(state: GenerateState) -> set[tuple[str, str, str]]:
+    published_features = getattr(state, "sglang_published_vision_features", None)
+    if published_features is None:
+        published_features = set()
+        state.sglang_published_vision_features = published_features
+    return published_features
+
+
+def _merge_request_metrics(
+    first: Mapping[str, float | int], second: Mapping[str, float | int]
+) -> dict[str, float | int]:
+    return {key: first.get(key, 0) + second.get(key, 0) for key in first.keys() | second.keys()}
+
+
+def _sglang_vision_cache_request_sizes(
+    *, cache_enabled: bool, used_feature_id: bool, republished: bool
+) -> dict[str, int]:
+    return {
+        "sglang_vision_cache_inline_publish_requests": int(
+            cache_enabled and (not used_feature_id or republished)
+        ),
+        "sglang_vision_cache_id_only_requests": int(used_feature_id),
+        "sglang_vision_cache_id_only_hits": int(used_feature_id and not republished),
+        "sglang_vision_cache_id_only_misses": int(republished),
+        "sglang_vision_cache_republish": int(republished),
+    }
+
+
+async def _post_with_sglang_vision_cache_recovery(
+    *,
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str] | None,
+    used_feature_id: bool,
+    feature_identity: tuple[str, str, str] | None,
+    build_inline_image_data: Callable[[], dict[str, Any]],
+) -> tuple[Any, dict[str, float | int], bool, float]:
+    """Post once and republish inline exactly once after a matching typed miss."""
+    request_metrics: dict[str, float | int] = {}
+    try:
+        output = await post(url, payload, headers=headers, request_metrics=request_metrics)
+        return output, request_metrics, False, 0.0
+    except SGLangVisionFeatureCacheMiss as error:
+        error_identity = (error.feature_id, error.vision_revision, error.feature_schema_version)
+        if not used_feature_id or error_identity != feature_identity:
+            raise
+
+    first_request_metrics = request_metrics
+    request_metrics = {}
+    inline_build_started_at = monotonic()
+    payload["image_data"] = [build_inline_image_data()]
+    inline_build_elapsed = monotonic() - inline_build_started_at
+    output = await post(url, payload, headers=headers, request_metrics=request_metrics)
+    return output, _merge_request_metrics(first_request_metrics, request_metrics), True, inline_build_elapsed
+
 
 async def _collect_cpu_vision_metrics(state: GenerateState, *, phase: str) -> dict[str, float | int]:
     """Snapshot cumulative and interval CPU-vision service metrics."""
     if state.vision_encoder is None:
         return {}
 
-    current = await state.vision_encoder.get_metrics.remote()
-    previous = state.vision_encoder_metrics_previous or {}
-    state.vision_encoder_metrics_previous = current.copy()
+    cumulative_replica_snapshots = getattr(state, "vision_encoder_cumulative_replica_snapshots", {})
+    cumulative_metrics = _aggregate_cpu_vision_snapshots(cumulative_replica_snapshots)
+    previous_cumulative_metrics = getattr(state, "vision_encoder_previous_cumulative_metrics", None) or {}
+    state.vision_encoder_previous_cumulative_metrics = cumulative_metrics.copy()
+    previous_cumulative_replica_snapshots = getattr(
+        state, "vision_encoder_previous_cumulative_replica_snapshots", {}
+    )
+    state.vision_encoder_previous_cumulative_replica_snapshots = {
+        replica_id: dict(snapshot) for replica_id, snapshot in cumulative_replica_snapshots.items()
+    }
 
     metrics: dict[str, float | int] = {
-        "vision_encoder/cache/entries": current["entries"],
-        "vision_encoder/cache/resident_bytes": current["resident_bytes"],
+        "vision_encoder/cache/entries": cumulative_metrics["entries"],
+        "vision_encoder/cache/resident_bytes": cumulative_metrics["resident_bytes"],
     }
-    intervals = {}
+    interval_metrics = {}
     for source_name, metric_name in _VISION_ENCODER_COUNTER_METRICS.items():
-        current_value = current[source_name]
-        interval_value = current_value - previous.get(source_name, 0)
-        metrics[f"vision_encoder/{metric_name}_total"] = current_value
+        cumulative_value = cumulative_metrics[source_name]
+        interval_value = cumulative_value - previous_cumulative_metrics.get(source_name, 0)
+        metrics[f"vision_encoder/{metric_name}_total"] = cumulative_value
         metrics[f"vision_encoder/{metric_name}_interval"] = interval_value
-        intervals[source_name] = interval_value
+        interval_metrics[source_name] = interval_value
 
-    total_lookups = current["hits"] + current["misses"]
-    interval_lookups = intervals["hits"] + intervals["misses"]
-    metrics["vision_encoder/cache/hit_rate_total"] = current["hits"] / total_lookups if total_lookups else 0.0
+    total_lookups = cumulative_metrics["hits"] + cumulative_metrics["misses"]
+    interval_lookups = interval_metrics["hits"] + interval_metrics["misses"]
+    metrics["vision_encoder/cache/hit_rate_total"] = (
+        cumulative_metrics["hits"] / total_lookups if total_lookups else 0.0
+    )
     metrics["vision_encoder/cache/hit_rate_interval"] = (
-        intervals["hits"] / interval_lookups if interval_lookups else 0.0
+        interval_metrics["hits"] / interval_lookups if interval_lookups else 0.0
     )
 
-    interval_backend_seconds = intervals["backend_encode_seconds_total"]
-    interval_backend_requests = intervals["backend_encode_requests_total"]
+    interval_backend_seconds = interval_metrics["backend_encode_seconds_total"]
+    interval_backend_requests = interval_metrics["backend_encode_requests_total"]
     metrics["vision_encoder/backend/images_per_second_interval"] = (
-        intervals["backend_encoded_images_total"] / interval_backend_seconds if interval_backend_seconds else 0.0
+        interval_metrics["backend_encoded_images_total"] / interval_backend_seconds
+        if interval_backend_seconds
+        else 0.0
     )
     metrics["vision_encoder/backend/seconds_per_request_interval"] = (
         interval_backend_seconds / interval_backend_requests if interval_backend_requests else 0.0
     )
+    expected_replicas = getattr(getattr(state, "args", None), "vision_encoder_num_replicas", 1)
+    active_replicas = sum(
+        snapshot["encode_requests_total"] > 0 for snapshot in cumulative_replica_snapshots.values()
+    )
+    total_requests = cumulative_metrics["encode_requests_total"]
+    replica_request_intervals = {
+        replica_id: snapshot["encode_requests_total"]
+        - previous_cumulative_replica_snapshots.get(replica_id, {}).get("encode_requests_total", 0)
+        for replica_id, snapshot in cumulative_replica_snapshots.items()
+    }
+    total_requests_interval = sum(replica_request_intervals.values())
+    interval_feature_ids = getattr(state, "vision_encoder_interval_feature_ids", set())
+    metrics.update(
+        {
+            "vision_encoder/replicas/expected": expected_replicas,
+            "vision_encoder/replicas/observed": len(cumulative_replica_snapshots),
+            "vision_encoder/replicas/active": active_replicas,
+            "vision_encoder/replicas/idle": len(cumulative_replica_snapshots) - active_replicas,
+            "vision_encoder/replicas/unobserved": max(
+                expected_replicas - len(cumulative_replica_snapshots), 0
+            ),
+            "vision_encoder/features/unique_total": len(
+                getattr(state, "vision_encoder_cumulative_feature_ids", ())
+            ),
+            "vision_encoder/features/unique_interval": len(interval_feature_ids),
+        }
+    )
+    for replica_id, snapshot in cumulative_replica_snapshots.items():
+        request_count = snapshot["encode_requests_total"]
+        request_count_interval = replica_request_intervals[replica_id]
+        metrics[f"vision_encoder/replica/{replica_id}/requests_total"] = request_count
+        metrics[f"vision_encoder/replica/{replica_id}/request_fraction_total"] = (
+            request_count / total_requests if total_requests else 0.0
+        )
+        metrics[f"vision_encoder/replica/{replica_id}/requests_interval"] = request_count_interval
+        metrics[f"vision_encoder/replica/{replica_id}/request_fraction_interval"] = (
+            request_count_interval / total_requests_interval if total_requests_interval else 0.0
+        )
+        metrics[f"vision_encoder/replica/{replica_id}/process_cpu_seconds_total"] = snapshot[
+            "process_cpu_seconds_total"
+        ]
+        previous_replica_snapshot = previous_cumulative_replica_snapshots.get(replica_id, {})
+        elapsed_seconds = snapshot.get("snapshot_monotonic_seconds", 0.0) - previous_replica_snapshot.get(
+            "snapshot_monotonic_seconds", 0.0
+        )
+        process_cpu_seconds_interval = snapshot["process_cpu_seconds_total"] - previous_replica_snapshot.get(
+            "process_cpu_seconds_total", 0.0
+        )
+        metrics[
+            f"vision_encoder/replica/{replica_id}/process_cpu_utilization_percent_interval"
+        ] = process_cpu_seconds_interval / elapsed_seconds * 100 if elapsed_seconds > 0 else 0.0
+        metrics[f"vision_encoder/replica/{replica_id}/rss_bytes"] = snapshot["rss_bytes"]
+
+    backend_feature_count = len(getattr(state, "vision_encoder_cumulative_backend_feature_ids", ()))
+    metrics["vision_encoder/backend/duplicate_encode_ratio"] = (
+        cumulative_metrics["backend_encode_requests_total"] / backend_feature_count
+        if backend_feature_count
+        else 0.0
+    )
+    interval_backend_feature_count = len(
+        getattr(state, "vision_encoder_interval_backend_feature_ids", ())
+    )
+    metrics["vision_encoder/backend/duplicate_encode_ratio_interval"] = (
+        interval_backend_requests / interval_backend_feature_count
+        if interval_backend_feature_count
+        else 0.0
+    )
+    cumulative_batch_sizes = getattr(state, "vision_encoder_cumulative_backend_batch_sizes", ())
+    interval_batch_sizes = getattr(state, "vision_encoder_interval_backend_batch_sizes", ())
+    metrics.update(_cpu_vision_batch_size_metrics(cumulative_batch_sizes, interval=False))
+    metrics.update(_cpu_vision_batch_size_metrics(interval_batch_sizes, interval=True))
+
+    state.vision_encoder_interval_feature_ids = set()
+    state.vision_encoder_interval_backend_feature_ids = set()
+    state.vision_encoder_interval_backend_batch_sizes = []
     logger.info("CPU vision metrics %s: %s", phase, metrics)
     return metrics
 
@@ -452,6 +737,8 @@ async def generate(
 
     state = GenerateState(args)
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
+    vision_feature_cache_enabled = _sglang_vision_feature_cache_enabled(args)
+    _validate_sglang_vision_feature_cache_routing(args, cache_enabled=vision_feature_cache_enabled)
 
     assert sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED, (
         f"Sample status is {sample.status}"
@@ -525,8 +812,18 @@ async def generate(
         payload["return_routed_experts"] = True
 
     _t_mm_encode: float | None = None
+    use_feature_id = False
+    feature_identity = None
+    published_features = None
     if precomputed_sglang_image_data is not None:
-        payload["image_data"] = [precomputed_sglang_image_data]
+        published_features = _published_sglang_vision_features(state)
+        feature_identity = _sglang_vision_feature_identity(precomputed_sglang_image_data)
+        use_feature_id = vision_feature_cache_enabled and feature_identity in published_features
+        payload["image_data"] = [
+            build_sglang_precomputed_image_id_data(precomputed_sglang_image_data)
+            if use_feature_id
+            else precomputed_sglang_image_data
+        ]
         _t_mm_encode = 0.0
     elif _has_media:
         # Use pre-encoded data from group-level de-dup if available; otherwise encode inline.
@@ -555,12 +852,22 @@ async def generate(
 
     # Use session_id for consistent hashing routing if router uses consistent_hashing policy
     headers = None
-    if args.sglang_router_policy == "consistent_hashing" and sample.session_id:
+    if vision_feature_cache_enabled and precomputed_sglang_image_data is not None:
+        headers = {"X-SMG-Routing-Key": precomputed_sglang_image_data["feature_id"]}
+    elif args.sglang_router_policy == "consistent_hashing" and sample.session_id:
         headers = {"X-SMG-Routing-Key": sample.session_id}
 
-    request_metrics: dict[str, float | int] = {}
     _t_generate_start = monotonic()
-    output = await post(url, payload, headers=headers, request_metrics=request_metrics)
+    output, request_metrics, vision_cache_republish, _ = await _post_with_sglang_vision_cache_recovery(
+        url=url,
+        payload=payload,
+        headers=headers,
+        used_feature_id=use_feature_id,
+        feature_identity=feature_identity,
+        build_inline_image_data=lambda: precomputed_sglang_image_data,
+    )
+    if vision_feature_cache_enabled and published_features is not None:
+        published_features.add(feature_identity)
     _t_generate = monotonic() - _t_generate_start
 
     _timing: dict[str, float] = {"generate": _t_generate}
@@ -585,6 +892,11 @@ async def generate(
         timing=_timing,
         sizes={
             **_precomputed_sizes,
+            **_sglang_vision_cache_request_sizes(
+                cache_enabled=vision_feature_cache_enabled and precomputed_sglang_image_data is not None,
+                used_feature_id=use_feature_id,
+                republished=vision_cache_republish,
+            ),
             "http_attempts": int(request_metrics["attempts"]),
             "http_request_body_bytes": int(request_metrics["request_body_bytes"]),
             "http_response_body_bytes": int(request_metrics["response_body_bytes"]),
@@ -817,9 +1129,32 @@ async def _generate_precomputed_group(
         "sampling_params": parallel_sampling_params,
         "return_logprob": not evaluation,
     }
+    feature_identity = None
+    published_features = None
     if sglang_multimodal_payload is None:
-        payload["image_data"] = [sglang_image_data]
+        vision_feature_cache_enabled = _sglang_vision_feature_cache_enabled(args)
+        _validate_sglang_vision_feature_cache_routing(
+            args, cache_enabled=vision_feature_cache_enabled
+        )
+        use_feature_id = False
+        serialization_elapsed = 0.0
+        request_image_data = sglang_image_data
+        if vision_feature_cache_enabled:
+            published_features = _published_sglang_vision_features(state)
+            feature_identity = _sglang_vision_feature_identity(sglang_image_data)
+            use_feature_id = feature_identity in published_features
+            serialization_started_at = monotonic()
+            request_image_data = (
+                build_sglang_precomputed_image_id_data(sglang_image_data)
+                if use_feature_id
+                else serialize_sglang_precomputed_image_data(sglang_image_data)
+            )
+            serialization_elapsed = monotonic() - serialization_started_at
+        payload["image_data"] = [request_image_data]
     else:
+        vision_feature_cache_enabled = False
+        use_feature_id = False
+        serialization_elapsed = 0.0
         payload.update(sglang_multimodal_payload)
 
     for sample in group:
@@ -827,13 +1162,24 @@ async def _generate_precomputed_group(
         sample.tokens = list(processor_prompt_ids)
         sample.rollout_tokens = list(payload["input_ids"])
 
-    request_metrics: dict[str, float | int] = {}
+    headers = None
+    if vision_feature_cache_enabled:
+        headers = {"X-SMG-Routing-Key": sglang_image_data["feature_id"]}
     generate_started_at = monotonic()
-    output = await post(
-        f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate",
-        payload,
-        request_metrics=request_metrics,
+    url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
+    output, request_metrics, vision_cache_republish, republish_serialization_elapsed = (
+        await _post_with_sglang_vision_cache_recovery(
+            url=url,
+            payload=payload,
+            headers=headers,
+            used_feature_id=use_feature_id,
+            feature_identity=feature_identity,
+            build_inline_image_data=lambda: serialize_sglang_precomputed_image_data(sglang_image_data),
+        )
     )
+    serialization_elapsed += republish_serialization_elapsed
+    if vision_feature_cache_enabled and published_features is not None:
+        published_features.add(feature_identity)
     generate_elapsed = monotonic() - generate_started_at
     if not isinstance(output, list):
         raise TypeError(
@@ -847,6 +1193,8 @@ async def _generate_precomputed_group(
 
     request_timing = {
         **shared_timing,
+        "precomputed_to_list": shared_timing.get("precomputed_to_list", 0.0)
+        + serialization_elapsed,
         "generate": generate_elapsed,
         "http_request_build": float(request_metrics["request_build_seconds"]),
         "http_response_wait": float(request_metrics["response_wait_seconds"]),
@@ -857,6 +1205,11 @@ async def _generate_precomputed_group(
     }
     request_sizes = {
         **shared_sizes,
+        **_sglang_vision_cache_request_sizes(
+            cache_enabled=vision_feature_cache_enabled,
+            used_feature_id=use_feature_id,
+            republished=vision_cache_republish,
+        ),
         "http_attempts": int(request_metrics["attempts"]),
         "http_request_body_bytes": int(request_metrics["request_body_bytes"]),
         "http_response_body_bytes": int(request_metrics["response_body_bytes"]),
@@ -910,6 +1263,12 @@ async def generate_and_rm_group(
             group[0].prompt,
             first_mm,
         )
+        parallel_sampling_skip_reason = _sglang_parallel_sampling_skip_reason(
+            args,
+            group,
+            shared_multimodal_input=shared_multimodal_input,
+        )
+        vision_feature_cache_enabled = _sglang_vision_feature_cache_enabled(args)
         (
             sglang_image_data,
             actor_inputs,
@@ -918,11 +1277,9 @@ async def generate_and_rm_group(
         ) = await _prepare_cpu_vision_rollout_inputs(
             state,
             multimodal_train_inputs,
-        )
-        parallel_sampling_skip_reason = _sglang_parallel_sampling_skip_reason(
-            args,
-            group,
-            shared_multimodal_input=shared_multimodal_input,
+            serialize_image_data=(
+                parallel_sampling_skip_reason is not None or not vision_feature_cache_enabled
+            ),
         )
         if parallel_sampling_skip_reason is None:
             used_parallel_sampling = True

@@ -172,6 +172,34 @@ def _accumulate_request_metric(metrics: dict, name: str, value: float | int) -> 
     metrics[name] = metrics.get(name, 0) + value
 
 
+def _sglang_vision_feature_cache_miss_from_message(message: object) -> Exception | None:
+    marker = "RELAX_SGLANG_VISION_FEATURE_CACHE_MISS:"
+    if not isinstance(message, str) or marker not in message:
+        return None
+    encoded_identity = message.split(marker, 1)[1].lstrip()
+    try:
+        identity, _ = json.JSONDecoder().raw_decode(encoded_identity)
+    except json.JSONDecodeError:
+        return None
+    required_fields = ("feature_id", "vision_revision", "feature_schema_version")
+    if not isinstance(identity, dict) or not all(isinstance(identity.get(field), str) for field in required_fields):
+        return None
+
+    from relax.backends.sglang.precomputed_vision import SGLangVisionFeatureCacheMiss
+
+    return SGLangVisionFeatureCacheMiss(**{field: identity[field] for field in required_fields})
+
+
+def _sglang_vision_feature_cache_miss_from_400(response_text: str) -> Exception | None:
+    try:
+        response_payload = json.loads(response_text)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    error = response_payload.get("error") if isinstance(response_payload, dict) else None
+    message = error.get("message") if isinstance(error, dict) else error
+    return _sglang_vision_feature_cache_miss_from_message(message)
+
+
 async def _post(client, url, payload, max_retries=MAX_RETRIES, headers=None, request_metrics=None):
     retry_count = 0
     while retry_count < max_retries:
@@ -223,6 +251,10 @@ async def _post(client, url, payload, max_retries=MAX_RETRIES, headers=None, req
             if isinstance(e, httpx.HTTPStatusError):
                 response_text = e.response.text
                 status_code = e.response.status_code
+                if status_code == 400:
+                    cache_miss = _sglang_vision_feature_cache_miss_from_400(response_text)
+                    if cache_miss is not None:
+                        raise cache_miss from e
                 is_retryable_http_error = status_code >= 500 or status_code in {408, 409, 425, 429}
                 if not is_retryable_http_error:
                     logger.info(
@@ -364,6 +396,9 @@ async def post(url, payload, max_retries=MAX_RETRIES, headers=None, request_metr
                     return output
                 return result
         except Exception as e:
+            cache_miss = _sglang_vision_feature_cache_miss_from_message(str(e))
+            if cache_miss is not None:
+                raise cache_miss from e
             logger.info(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
             # fall through to local
 

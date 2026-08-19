@@ -97,3 +97,79 @@ def test_megatron_adapter_fails_loudly_for_video_input():
 
     with pytest.raises(NotImplementedError, match="video"):
         _build_forward_kwargs(actor_inputs)
+
+
+@pytest.mark.parametrize(
+    (
+        "transported_feature_bytes",
+        "unique_feature_bytes",
+        "h2d_seconds",
+        "actor_compute_seconds",
+        "expected_eligible",
+    ),
+    [
+        (200, 100, 0.10, 1.0, False),
+        (201, 100, 0.05, 1.0, True),
+        (100, 100, 0.11, 1.0, True),
+    ],
+    ids=["at-thresholds", "transport-gate", "h2d-gate"],
+)
+def test_actor_feature_deduplication_measurements_apply_transport_and_h2d_gates(
+    transported_feature_bytes,
+    unique_feature_bytes,
+    h2d_seconds,
+    actor_compute_seconds,
+    expected_eligible,
+):
+    module = importlib.import_module("relax.backends.megatron.precomputed_vision")
+
+    metrics = module.measure_actor_feature_deduplication(
+        feature_uses=8,
+        unique_feature_ids=2,
+        transported_feature_bytes=transported_feature_bytes,
+        unique_feature_bytes=unique_feature_bytes,
+        h2d_seconds=h2d_seconds,
+        actor_compute_seconds=actor_compute_seconds,
+        staging_rss_bytes=4096,
+    )
+
+    assert metrics["feature_uses"] == 8
+    assert metrics["unique_feature_ids"] == 2
+    assert metrics["transported_feature_bytes"] == transported_feature_bytes
+    assert metrics["unique_feature_bytes"] == unique_feature_bytes
+    assert metrics["transport_duplication_ratio"] == pytest.approx(
+        transported_feature_bytes / unique_feature_bytes
+    )
+    assert metrics["h2d_seconds"] == pytest.approx(h2d_seconds)
+    assert metrics["actor_compute_seconds"] == pytest.approx(actor_compute_seconds)
+    assert metrics["h2d_actor_compute_ratio"] == pytest.approx(h2d_seconds / actor_compute_seconds)
+    assert metrics["staging_rss_bytes"] == 4096
+    assert metrics["deduplication_eligible"] is expected_eligible
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"unique_feature_bytes": 0}, "unique_feature_bytes must be positive"),
+        ({"unique_feature_bytes": -1}, "unique_feature_bytes must be positive"),
+        ({"actor_compute_seconds": 0.0}, "actor_compute_seconds must be finite and positive"),
+        ({"actor_compute_seconds": float("nan")}, "actor_compute_seconds must be finite and positive"),
+        ({"actor_compute_seconds": float("inf")}, "actor_compute_seconds must be finite and positive"),
+    ],
+    ids=["zero-feature-bytes", "negative-feature-bytes", "zero-compute", "nan-compute", "infinite-compute"],
+)
+def test_actor_feature_deduplication_measurements_reject_invalid_denominators(override, message):
+    module = importlib.import_module("relax.backends.megatron.precomputed_vision")
+    measurements = {
+        "feature_uses": 8,
+        "unique_feature_ids": 2,
+        "transported_feature_bytes": 200,
+        "unique_feature_bytes": 100,
+        "h2d_seconds": 0.1,
+        "actor_compute_seconds": 1.0,
+        "staging_rss_bytes": 4096,
+    }
+    measurements.update(override)
+
+    with pytest.raises(ValueError, match=message):
+        module.measure_actor_feature_deduplication(**measurements)

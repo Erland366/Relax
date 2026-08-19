@@ -70,6 +70,7 @@ def test_sglang_serializer_emits_compact_lossless_inline_bf16_payload():
             "image_grid_thw": grid,
             "feature_id": "feature-id",
             "vision_revision": "vision-revision",
+            "feature_schema_version": "qwen3-vl-frozen-vision-v1",
         }
     )
 
@@ -79,6 +80,7 @@ def test_sglang_serializer_emits_compact_lossless_inline_bf16_payload():
     assert serialized["image_grid_thw"] == [[1, 8, 8]]
     assert serialized["feature_id"] == "feature-id"
     assert serialized["vision_revision"] == "vision-revision"
+    assert serialized["feature_schema_version"] == "qwen3-vl-frozen-vision-v1"
     assert "feature" not in serialized
 
     feature_bytes = base64.b64decode(serialized["feature_b64"], validate=True)
@@ -95,7 +97,27 @@ def test_sglang_serializer_emits_compact_lossless_inline_bf16_payload():
             "image_grid_thw": grid.tolist(),
             "feature_id": "feature-id",
             "vision_revision": "vision-revision",
+            "feature_schema_version": "qwen3-vl-frozen-vision-v1",
         },
         separators=(",", ":"),
     )
     assert len(packed_json) < len(legacy_json)
+
+
+def test_sglang_id_payload_from_unserialized_feature_is_json_safe():
+    rollout_module = importlib.import_module("relax.engine.rollout.precomputed_vision")
+
+    identity_payload = rollout_module.build_sglang_precomputed_image_id_data(
+        {
+            "format": "precomputed_embedding",
+            "feature": torch.ones((4, 8), dtype=torch.bfloat16),
+            "image_grid_thw": torch.tensor([[1, 4, 4]], dtype=torch.int64),
+            "feature_id": "feature-id",
+            "vision_revision": "vision-revision",
+            "feature_schema_version": "qwen3-vl-frozen-vision-v1",
+        }
+    )
+
+    assert identity_payload["image_grid_thw"] == [[1, 4, 4]]
+    assert "feature" not in identity_payload
+    json.dumps(identity_payload)
