@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from examples.visual_xor import benchmark_cpu_vision_scaling as benchmark
+from examples.visual_xor import measure_cpu_vision_scaling as scaling
 
 
 def test_encode_prepared_batch_records_worker_resource_evidence(monkeypatch):
@@ -27,17 +27,17 @@ def test_encode_prepared_batch_records_worker_resource_evidence(monkeypatch):
     process_times = iter([2.0, 2.125])
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "resource", fake_resource)
-    monkeypatch.setattr(benchmark, "_WORKER_BACKEND", FakeBackend())
+    monkeypatch.setattr(scaling, "_WORKER_BACKEND", FakeBackend())
     monkeypatch.setattr(
-        benchmark,
+        scaling,
         "_WORKER_INPUTS",
         (("pixels-0", "grid-0"), ("pixels-1", "grid-1")),
     )
-    monkeypatch.setattr(benchmark.time, "perf_counter", lambda: next(wall_times))
-    monkeypatch.setattr(benchmark.time, "process_time", lambda: next(process_times))
-    monkeypatch.setattr(benchmark.os, "getpid", lambda: 4_321)
+    monkeypatch.setattr(scaling.time, "perf_counter", lambda: next(wall_times))
+    monkeypatch.setattr(scaling.time, "process_time", lambda: next(process_times))
+    monkeypatch.setattr(scaling.os, "getpid", lambda: 4_321)
 
-    result = benchmark._encode_prepared_batch((0, 1))
+    result = scaling._encode_prepared_batch((0, 1))
 
     assert result == {
         "completed_images": 2,
@@ -108,7 +108,7 @@ def test_local_measurement_sums_backend_times_and_reports_peak_rss_per_replica(m
         def join(self):
             pass
 
-    measurement = benchmark._LocalCPUVisionMeasurement(
+    measurement = scaling._LocalCPUVisionMeasurement(
         "/models/qwen3-vl",
         "/data/visual-xor.jsonl",
         num_images=4,
@@ -116,7 +116,7 @@ def test_local_measurement_sums_backend_times_and_reports_peak_rss_per_replica(m
     )
     monkeypatch.setattr(measurement, "_create_pool", lambda _replicas, _threads: FakePool())
     wall_times = iter([50.0, 51.5])
-    monkeypatch.setattr(benchmark.time, "perf_counter", lambda: next(wall_times))
+    monkeypatch.setattr(scaling.time, "perf_counter", lambda: next(wall_times))
 
     try:
         result = measurement(

@@ -63,6 +63,10 @@ configs/env.yaml         运行时环境配置
 | Reward 函数 | `engine/rewards/xxx.py` | `deepscaler.py`, `math_utils.py`      |
 | 数据源      | `XxxDataSource`         | `RolloutDataSource`                   |
 
+Research code and experiment artifacts follow [docs/naming.md](docs/naming.md). In particular, use explicit device,
+cache-owner, and parameter names. Do not introduce numbered experiment labels (`M0`, `D2`, `E4`), use `native` as a
+synonym for GPU, call a fixed precomputed plan adaptive, or use `mock` merely to mean small.
+
 ## Hard Rules
 
 CRITICAL: 以下规则不可违反。

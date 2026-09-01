@@ -11,7 +11,7 @@
 The live Qwen3-VL CPU-vision correctness blocker is closed for the tested
 single-image, PP1/CP1 path.
 
-Native GPU vision and CPU-precomputed final plus DeepStack features produced
+GPU vision and CPU-precomputed final plus DeepStack features produced
 the same decision on all eight fixed images inside the real SGLang
 transformers backend:
 
@@ -23,7 +23,7 @@ transformers backend:
 | Maximum A-vs-B margin absolute delta | `1.043081283569336e-07` | `0.01` |
 | Maximum normalized action-probability delta | `1.7429432036530912e-08` | `0.01` |
 
-The subsequent omitted-GPU-weight Relax run completed evaluation, rollout,
+The subsequent skipped-GPU-weight Relax run completed evaluation, rollout,
 Megatron actor-forward, two optimizer updates, final weight synchronization,
 and clean shutdown. Actor-forward and SGLang agreed on the sampled-token
 log-probabilities to below `5e-7` mean absolute error at both optimizer
@@ -43,27 +43,27 @@ but did not consume `item.precomputed_embeddings`. The CPU feature payload was
 therefore parsed and transported while the language model still received its
 ordinary image-token embeddings. This explains the earlier chance-level CPU
 evaluation and action bias without implicating the CPU encoder or GPU-weight
-omission.
+skipping the GPU encoder.
 
 The Relax compatibility patch now detects an all-precomputed Qwen3-VL prefill
 batch, validates the packed width, splits the final and three DeepStack
 streams, scatters final visual embeddings into the processor-expanded image
 token positions, and calls the Qwen3-VL language model with both
-`visual_pos_masks` and `deepstack_visual_embeds`. Decode and native-image
-requests retain the original SGLang path. Mixed native/precomputed batches
+`visual_pos_masks` and `deepstack_visual_embeds`. Decode and raw-image
+requests retain the original SGLang path. Mixed GPU/CPU-precomputed batches
 fail explicitly rather than silently selecting one representation.
 
-## Live omitted-weight Relax gate
+## Live skipped-weight Relax gate
 
 - **Log:**
-  `log/visual-xor-refinement-cpu-omitted-20260731_115759.log`
+  `log/visual-xor-refinement-cpu-skip-gpu-encoder-20260731_115759.log`
 - **Ray job:** `raysubmit_MS2w23VJ8shDwHtP`
 - **Offline W&B:**
   `log/wandb/wandb/offline-run-20260731_115848-4ril6b79`
 - **Workload:** one fully asynchronous rollout, two optimizer updates
 - **Resources:** actor DP2, SGLang one GPU, actor-forward one GPU, CPU vision
   one replica
-- **GPU visual weights:** omitted in SGLang, actor-forward, and actor
+- **GPU visual weights:** skipped in SGLang, actor-forward, and actor
 
 ### Baseline evaluation
 
@@ -75,10 +75,10 @@ fail explicitly rather than silently selecting one representation.
 | Permuted control | `0.5234375` |
 | Constant-image control | `0.5` |
 
-The earlier native GPU run scored `0.6816` on the held-out set. These are
+The earlier GPU run scored `0.6816` on the held-out set. These are
 separate stochastic evaluations, so their difference is not a parity metric;
 the important change is that the corrected CPU path recovered from `0.5000`
-and the `0.7148` action-A collapse to native-like behavior. The deterministic
+and the `0.7148` action-A collapse to GPU-like behavior. The deterministic
 SGLang artifact below is the actual parity gate.
 
 ### Cache evidence
@@ -107,12 +107,12 @@ The final rollout aggregates also differed by only
 This proves that the precomputed feature representation used for rollout is
 compatible with the Megatron actor-forward/training boundary for the actual
 sample batch. It is a cross-backend sampled-token gate, not a second
-within-Megatron native-versus-precomputed full-vocabulary comparison.
+within-Megatron GPU-versus-CPU-precomputed full-vocabulary comparison.
 
 ## Deterministic live SGLang gate
 
 The reusable probe launches one SGLang server with the visual weights
-resident, sends every fixed image once through native GPU vision and once
+resident, sends every fixed image once through GPU vision and once
 through CPU-precomputed vision, flushes the cache between paths, and requests
 the exact next-token scores for action tokens A and B:
 
@@ -138,7 +138,7 @@ process before writing the final result.
 - Deterministic server log:
   `log/sglang-cpu-vision-parity-20260731.log`
 - Live Relax log:
-  `log/visual-xor-refinement-cpu-omitted-20260731_115759.log`
+  `log/visual-xor-refinement-cpu-skip-gpu-encoder-20260731_115759.log`
 - Local HF parity artifact:
   `benchmark_results/cpu_vision/20260730_hf_parity/parity.json`
 
@@ -146,7 +146,7 @@ process before writing the final result.
 
 This result does not validate video, multiple images per request, context
 parallelism, pipeline parallelism greater than one, chunked multimodal
-prefill, mixed native/precomputed batching, or throughput scaling. SGLang
+prefill, mixed GPU/CPU-precomputed batching, or throughput scaling. SGLang
 disabled chunked prefill for this multimodal transformers run. Those remain
 separate gates; none should weaken the now-passing single-image PP1/CP1
 correctness result.

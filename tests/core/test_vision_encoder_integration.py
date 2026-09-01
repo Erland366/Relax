@@ -57,7 +57,7 @@ def test_controller_combines_genrm_and_enabled_vision_encoder_roles(monkeypatch)
     _install_lightweight_controller_stubs(monkeypatch)
     controller_module = importlib.import_module("relax.core.controller")
     algo = {}
-    config = Namespace(genrm_model_path="/models/judge", vision_encoder_backend="pytorch")
+    config = Namespace(genrm_model_path="/models/judge", vision_encoder_device="cpu")
 
     roles = controller_module.register_extra_roles(config, algo)
 

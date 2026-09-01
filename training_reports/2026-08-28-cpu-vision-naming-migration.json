@@ -1,0 +1,2316 @@
+{
+  "all_numeric_values_preserved": true,
+  "applied": true,
+  "artifact_root": "/vast/users/qirong.ho/erland/Python_project/Relax-rocm-megatron_root/Relax-rocm-megatron_after_fix_profiled_20260610/benchmark_results/cpu_vision",
+  "file_count": 169,
+  "files": [
+    {
+      "content_replacements": [],
+      "new_path": "20260728_local_smoke/scaling.json",
+      "new_sha256": "7bd17c21c658e7790fd6823136d5a94592e22409b1e999552a2a52664998ad1c",
+      "numeric_values_preserved": true,
+      "old_path": "20260728_local_smoke/scaling.json",
+      "old_sha256": "7bd17c21c658e7790fd6823136d5a94592e22409b1e999552a2a52664998ad1c"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "20260730_hf_parity/parity.json",
+      "new_sha256": "c70d78e297c90b4d2695ba8c691cffb0936c08e57a1d8708dce31af51d6c91bb",
+      "numeric_values_preserved": true,
+      "old_path": "20260730_hf_parity/parity.json",
+      "old_sha256": "2d1c3db63cf67f3396649147a6cddf1ff8d98774ea432630b2bdfc408723490e"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "20260731_sglang_live_parity/parity.json",
+      "new_sha256": "e4e7d5297ed6979f1583b0cb0415bfb5e0aa05ccd5b317e39ed5f730aeaa6709",
+      "numeric_values_preserved": true,
+      "old_path": "20260731_sglang_live_parity/parity.json",
+      "old_sha256": "eec3eb21ff2c25a72a620972f3a580fd4908ed5429af1961401d66d520378071"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "20260731_three_mode_two_cycle/cpu_skip_gpu_encoder_vram.json",
+      "new_sha256": "b30379e043eb6f093443ae439b016b0c1a3976559061df2e7d6c223acbd61f4c",
+      "numeric_values_preserved": true,
+      "old_path": "20260731_three_mode_two_cycle/cpu_omitted_vram.json",
+      "old_sha256": "193e19c406136076a1b193d84c470ae65f60ccc412620f8b028cf1cc6a38c4b9"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "20260731_three_mode_two_cycle/cpu_vram.json",
+      "new_sha256": "f3cba1fa68b3df0b95bf016ac527099650fc864f7346fbba9584592ca9d6c699",
+      "numeric_values_preserved": true,
+      "old_path": "20260731_three_mode_two_cycle/cpu_resident_vram.json",
+      "old_sha256": "56d87dd8626736b709a8c5a36d8daa300d3e5c7170f031caaca87bc1dd4a3202"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "20260731_three_mode_two_cycle/gpu_vram.json",
+      "new_sha256": "5053b55b35acdfc99d0109a9e3381c5f8679ede27839e1eb4bdf3da485ac1ba1",
+      "numeric_values_preserved": true,
+      "old_path": "20260731_three_mode_two_cycle/native_gpu_vram.json",
+      "old_sha256": "d42ddbaf2224ea06729bf83fbab80d2fe40d1f97666215a1da20c09b43f8199f"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "20260801_corrected_three_mode/cpu_skip_gpu_encoder_vram.json",
+      "new_sha256": "7a0e132566a56ffd82e42666a38b129d9af5c0532f14968b3c16e09080efc9ba",
+      "numeric_values_preserved": true,
+      "old_path": "20260801_corrected_three_mode/cpu_omitted_vram.json",
+      "old_sha256": "0a9455e32152c85b9c506d2e7350f0777bcd5b9a3cf2cbb32ad9036b00ca582c"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "20260801_corrected_three_mode/cpu_vram.json",
+      "new_sha256": "3a5341696c9c1492cc85c53665b8943a2ec48dd9c020a44ec64b8121ada51cdf",
+      "numeric_values_preserved": true,
+      "old_path": "20260801_corrected_three_mode/cpu_resident_vram.json",
+      "old_sha256": "8d75cfb955d1c221adae11026879fbef5463038cce68401518320e1ac0b7ba80"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "20260801_corrected_three_mode/gpu_vram.json",
+      "new_sha256": "bd2dacf61063e90f06a05a6dbd7575e230902597939378d59bed2fb9b623cebd",
+      "numeric_values_preserved": true,
+      "old_path": "20260801_corrected_three_mode/native_gpu_vram.json",
+      "old_sha256": "7d0ce1a9f915d5e4c28d30d3e4fd3e4b9bab1308ac7486f6b1bee37c0b4f63bb"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "20260801_corrected_three_mode/gpu_vram_retry1.json",
+      "new_sha256": "3defbd2b6afd4e48c3e07d482f3ba00dbe73d23b97ab3ecb6ac0507a521bf5c7",
+      "numeric_values_preserved": true,
+      "old_path": "20260801_corrected_three_mode/native_gpu_vram_retry1.json",
+      "old_sha256": "7a29b99801acfe4b260335ee45fc113d1e0116917c470c14d1f7af311751bb2a"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "20260803_sglang_parallel_n8/cpu_skip_gpu_encoder_two_rollout_vram.json",
+      "new_sha256": "15969ae9fdcb98eb47c401837caa0a79934b6ac82f134bdc0e248de9b2b71bc6",
+      "numeric_values_preserved": true,
+      "old_path": "20260803_sglang_parallel_n8/cpu_omitted_two_rollout_vram.json",
+      "old_sha256": "15d59a8afc26d5e8fce242a9981d9d7ac7693e89b3352082d298863292d80fba"
+    },
+    {
+      "content_replacements": [
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "20260803_sglang_parallel_n8/probe.json",
+      "new_sha256": "d7b4d9adefb1fcfdfaaa80e8e055023f74f1047c0e81565ec78274aa91e9cec9",
+      "numeric_values_preserved": true,
+      "old_path": "20260803_sglang_parallel_n8/probe.json",
+      "old_sha256": "261c53c5caf55778fd6b2eb02b5f13e0779f09ec5361dfab8571fb540917c314"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "20260804_eval_grouped_json/cpu_skip_gpu_encoder_eval_grouped_json_retry1_vram.json",
+      "new_sha256": "a98ff7f6dc3b3ed10a5dc835b33e7357d916f7a6b8d1aa74a137a26ac920b00d",
+      "numeric_values_preserved": true,
+      "old_path": "20260804_eval_grouped_json/cpu_omitted_eval_grouped_json_retry1_vram.json",
+      "old_sha256": "3d1a7a48d7a29bb8e6b6c10f5dedb69a6341438b9124d84ab91dadc7a7a09a86"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "20260804_eval_grouped_json/cpu_skip_gpu_encoder_eval_grouped_json_vram.json",
+      "new_sha256": "4773bbf55c6cc61171ab28974048f15f0dd786b27d6c2cf48e950609ea397da7",
+      "numeric_values_preserved": true,
+      "old_path": "20260804_eval_grouped_json/cpu_omitted_eval_grouped_json_vram.json",
+      "old_sha256": "276bb079092f7fcc0b62a9cf76cfa1f0ebcb2ff048dd61c2af402b55bdd451ee"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "20260804_packed_transport/cpu_skip_gpu_encoder_packed_two_rollout_vram.json",
+      "new_sha256": "d93b437009dab3ac10aa4b1f4dabe0d426c59e205e212413208ba9a6d632172d",
+      "numeric_values_preserved": true,
+      "old_path": "20260804_packed_transport/cpu_omitted_packed_two_rollout_vram.json",
+      "old_sha256": "82b0911f83b1838bef4575c8f68e0e585f5bf67531f42bf9c6048a8a0799fe29"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260804_packed_transport/serialization.json",
+      "new_sha256": "0e60aaa6caae01d58e7f34832638158115b050a401f6fee6ecf906f9765ce4f2",
+      "numeric_values_preserved": true,
+      "old_path": "20260804_packed_transport/serialization.json",
+      "old_sha256": "0e60aaa6caae01d58e7f34832638158115b050a401f6fee6ecf906f9765ce4f2"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "20260804_packed_transport/sglang_live_parity.json",
+      "new_sha256": "8669aac9f86598d162178a791609811e22112e3a8ad03e5ee9338e668bb18d6b",
+      "numeric_values_preserved": true,
+      "old_path": "20260804_packed_transport/sglang_live_parity.json",
+      "old_sha256": "716b1a58a801dc09bf8ab200d6393d0447bdb02ec96c71edb80c469cd61db2cf"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "native_parallel_sampling->gpu_parallel_sampling"
+      ],
+      "new_path": "20260806_gpu_grouped_n8/probe.json",
+      "new_sha256": "2ff7d4928041a8e71e066e2b495bb4337471537de23cd72514c203adb357c55b",
+      "numeric_values_preserved": true,
+      "old_path": "20260806_native_grouped_n8/probe.json",
+      "old_sha256": "f3c22a50038229dabafffa11a15100d2a29be03c50849d3ea8b1bfaf3123c4da"
+    },
+    {
+      "content_replacements": [
+        "rollout_wall_seconds->rollout_seconds"
+      ],
+      "new_path": "20260806_overlap_cpu_skip_gpu_encoder_no_cache/timeline.json",
+      "new_sha256": "dd3839248553a6b7d1ac408fe3e30ce9ab49b04ba5c09e27a147cf3fd22f84a5",
+      "numeric_values_preserved": true,
+      "old_path": "20260806_overlap_cpu_omitted_nocache/timeline.json",
+      "old_sha256": "49353d5745598f59b510b9595aac38fa6ff881f18e4d9a0870e93b5b2087d3df"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "20260806_overlap_cpu_skip_gpu_encoder_no_cache/vram.json",
+      "new_sha256": "56f9ae9cf652fd0c347e5821bdd620d1846a878ac4b605b63f082761f324437f",
+      "numeric_values_preserved": true,
+      "old_path": "20260806_overlap_cpu_omitted_nocache/vram.json",
+      "old_sha256": "20580b0ab69772d8aa83e9f43a30ce732e1880c2c36db174dfa11da9f85f15aa"
+    },
+    {
+      "content_replacements": [
+        "rollout_wall_seconds->rollout_seconds"
+      ],
+      "new_path": "20260806_overlap_gpu_grouped/timeline.json",
+      "new_sha256": "cce192a1dafbf66894032f7544911d4e34625fd9c2f64d78892adb76f57bf854",
+      "numeric_values_preserved": true,
+      "old_path": "20260806_overlap_native_grouped/timeline.json",
+      "old_sha256": "a0747975f9563a954fd4a638c4aaa4e668fd9abb380d2ca855ef580a57a454f3"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "20260806_overlap_gpu_grouped/vram.json",
+      "new_sha256": "12458b49bb58e640444efed4d92e85617f04ed2062aeb7794714b3ceec4c2a42",
+      "numeric_values_preserved": true,
+      "old_path": "20260806_overlap_native_grouped/vram.json",
+      "old_sha256": "c27629099641ac7b8360ff02e1e0d7f55f3a1f547f1b8ee603590c7d2f78052c"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/repeat_1_none.console.log",
+      "new_sha256": "4da1a0fd4b0a1c9b08094d31ed9184f81004faf458b2285a23bb0f84137f65ed",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_foreground_20260827_074149/B0_U.console.log",
+      "old_sha256": "7bddf63f2f704fc2bf8f00a727faac67dbfd10086a3eabaf46971baf1691bb61"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/repeat_1_none.internal.log",
+      "new_sha256": "ed76f01d8305525dd114e8b0a949ff454d611243043640ff69a96fdde6503bc5",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_foreground_20260827_074149/B0_U.internal.log",
+      "old_sha256": "65c1d2bb864b58a7b12cfbb82537d67786962eaaf2742f657a4715a0fdc65cbe"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/cpu-topology.txt",
+      "new_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_foreground_20260827_074149/cpu-topology.txt",
+      "old_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8"
+      ],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/git-head.txt",
+      "new_sha256": "806698c0cead4cc875ccd32b7020e30611a03cdaef1b50d114b5b58228af24cc",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_foreground_20260827_074149/git-head.txt",
+      "old_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496"
+    },
+    {
+      "content_replacements": [
+        "cache-oracle->full-dataset preload",
+        "cache_oracle->full_dataset_preload",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/git-status.txt",
+      "new_sha256": "a8183b6639b0d8396703cdb8e5975ff2d82b89a8782f95ffac93f2dbd60323ff",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_foreground_20260827_074149/git-status.txt",
+      "old_sha256": "6f755c5910a98ae6153d114b68b1f989dcf86f7fac1594882e66c4c0e180b41f"
+    },
+    {
+      "content_replacements": [
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2"
+      ],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/input-sha256.txt",
+      "new_sha256": "46b1a9679fe38038835be0bbf391be9e874228b99cfcd5a21aad9646d5a4a993",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_foreground_20260827_074149/input-sha256.txt",
+      "old_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a"
+    },
+    {
+      "content_replacements": [
+        "prewarm_enabled->preload_enabled",
+        "prewarm_metrics->preload_artifact"
+      ],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/manifest.tsv",
+      "new_sha256": "f1f06eaeae7ee0abf99130e7edbf44204e5245618197ccfde85aaccb973930b1",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_foreground_20260827_074149/manifest.tsv",
+      "old_sha256": "6dfdc51196f9cc8efb8fe7a601e6d032fca689667642902e68f321f324ad4548"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/vram-before.csv",
+      "new_sha256": "b5b6ca376a6b9b652314b8aa913baf4922db3b1eed185df44052219115a9d83b",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_foreground_20260827_074149/vram-before.csv",
+      "old_sha256": "fbd53cc156f98e49883c80254488819a6f9c86a94ee3d801420a514164463869"
+    },
+    {
+      "content_replacements": [
+        "PREWARM->PRELOAD",
+        "adaptive->automatic",
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_20260827_074743/repeat_1_full_dataset.console.log",
+      "new_sha256": "c38975e3851dd6c0a8eb1a385607b2c3f074f5ce6bc617ec61ea0d817132e9e7",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_20260827_074743/B0_O.console.log",
+      "old_sha256": "614f9ec4b0d1ece720fc012c7cb168ecb77ad6641ee19c5cbe4ab71c9812392e"
+    },
+    {
+      "content_replacements": [
+        "PREWARM->PRELOAD",
+        "adaptive->automatic",
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_20260827_074743/repeat_1_full_dataset.internal.log",
+      "new_sha256": "137ea8baab455504c5ca5fa77861331ef5c543b2ce734103c59f86e3aa3af9a2",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_20260827_074743/B0_O.internal.log",
+      "old_sha256": "b462f563661d3be936bf176fb67957dccd0d14faaa0b599b916975c1716491c5"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_20260827_074743/repeat_1_none.console.log",
+      "new_sha256": "374d835e4ca095466666ceb9f5dc1dec428d8bd209528786e6b9a4ec0e127c2a",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_20260827_074743/B0_U.console.log",
+      "old_sha256": "25f8e18a19c3e29f934a8da1fbed261146e666969683861d98840267c03da1ec"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_20260827_074743/repeat_1_none.internal.log",
+      "new_sha256": "bb16c7b1027694c2ce0a7cde5d273d7166eb753ff72381911180844129a007bf",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_20260827_074743/B0_U.internal.log",
+      "old_sha256": "953672c9ec6567f4bc9d9da14878a2ffb47054e736e4e928860607e0835f04fd"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_full_20260827_074743/cpu-topology.txt",
+      "new_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_20260827_074743/cpu-topology.txt",
+      "old_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0"
+    },
+    {
+      "content_replacements": [
+        "B0->repeat_1",
+        "PREWARM->PRELOAD",
+        "adaptive->automatic",
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "cache oracle->full-dataset preload",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_20260827_074743/driver.log",
+      "new_sha256": "1ffaebdf4fcec7a4ff2eb72e167d6bb43c34eda77434da4b7969e03df97aafcd",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_20260827_074743/driver.log",
+      "old_sha256": "ff008230ee20d57aecc918c6796aa914ce65f210ffb4dcc4593e7f0fb0861dfa"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8"
+      ],
+      "new_path": "full_dataset_preload_full_20260827_074743/git-head.txt",
+      "new_sha256": "806698c0cead4cc875ccd32b7020e30611a03cdaef1b50d114b5b58228af24cc",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_20260827_074743/git-head.txt",
+      "old_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496"
+    },
+    {
+      "content_replacements": [
+        "cache-oracle->full-dataset preload",
+        "cache_oracle->full_dataset_preload",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_20260827_074743/git-status.txt",
+      "new_sha256": "a8183b6639b0d8396703cdb8e5975ff2d82b89a8782f95ffac93f2dbd60323ff",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_20260827_074743/git-status.txt",
+      "old_sha256": "6f755c5910a98ae6153d114b68b1f989dcf86f7fac1594882e66c4c0e180b41f"
+    },
+    {
+      "content_replacements": [
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2"
+      ],
+      "new_path": "full_dataset_preload_full_20260827_074743/input-sha256.txt",
+      "new_sha256": "46b1a9679fe38038835be0bbf391be9e874228b99cfcd5a21aad9646d5a4a993",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_20260827_074743/input-sha256.txt",
+      "old_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a"
+    },
+    {
+      "content_replacements": [
+        "B0->repeat_1",
+        "cache_oracle->full_dataset_preload",
+        "prewarm_enabled->preload_enabled",
+        "prewarm_metrics->preload_artifact"
+      ],
+      "new_path": "full_dataset_preload_full_20260827_074743/manifest.tsv",
+      "new_sha256": "f42d67b4bacee89b8755ca378bb13e211826c5626254d7099d2c5fd96dab3315",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_20260827_074743/manifest.tsv",
+      "old_sha256": "7677e1ac32e149d6d85d33389d26b0e177e6c9ef34a0984a18a140f3d8e34bc9"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "full_dataset_preload_full_20260827_074743/vram-before.csv",
+      "new_sha256": "b5b6ca376a6b9b652314b8aa913baf4922db3b1eed185df44052219115a9d83b",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_20260827_074743/vram-before.csv",
+      "old_sha256": "fbd53cc156f98e49883c80254488819a6f9c86a94ee3d801420a514164463869"
+    },
+    {
+      "content_replacements": [
+        "PREWARM->PRELOAD",
+        "adaptive->automatic",
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_1_full_dataset.console.log",
+      "new_sha256": "42121c98ce70f66dd2c3a3e7530433de6d3d8cba7d9f7be67e74dba57799102e",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B0_O.console.log",
+      "old_sha256": "b8f44837d8068bc6af249a31297369a84b75e66f0fa64cec806d683a18a2b289"
+    },
+    {
+      "content_replacements": [
+        "PREWARM->PRELOAD",
+        "adaptive->automatic",
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_1_full_dataset.internal.log",
+      "new_sha256": "2feabe64bbb98d024a90b2c1210a8bb79866cf2f5ef60b22cbe5b6cbb8865d9f",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B0_O.internal.log",
+      "old_sha256": "61eb99fc9f9fe54acd7f35cedc89e347decfae83a16f853493c2ed801953d25c"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_1_none.console.log",
+      "new_sha256": "af96fd6eec9163bc7b2ece26d6d4e1fe0f1f9a7797872bf91c0f5b0909068302",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B0_U.console.log",
+      "old_sha256": "9c0e9e1795b18d0f4d811ce2e5f52b43aa2da53dadeb213b16634f4a3616daa4"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_1_none.internal.log",
+      "new_sha256": "d1fa36e607b19d24b39dd6de2ebd058202c2a65d00b1ce451f5e2897e422791d",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B0_U.internal.log",
+      "old_sha256": "4c979d7751f86762328fb887cfefb74c353305d7da4e5e151e3762d33f21b8c3"
+    },
+    {
+      "content_replacements": [
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_1_preload.json",
+      "new_sha256": "4447bce32eda48f82f94fec73147e3c0c0ae924db30b6d38fdc90b4967dec397",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B0_prewarm.json",
+      "old_sha256": "0dc51e622bc61f77798a29900f368fa46e4d8658128e81a83762ca8e11d617d5"
+    },
+    {
+      "content_replacements": [
+        "PREWARM->PRELOAD",
+        "adaptive->automatic",
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_2_full_dataset.console.log",
+      "new_sha256": "2a0a4ea70b4ec5ba59260f1ce6c0a2698549f6466423856cdde3d2e342894d04",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B1_O.console.log",
+      "old_sha256": "407964b1a4f5dfa0b386458c998c6ecf85bb13d86a28dc8a20d033d0e7c0dbe7"
+    },
+    {
+      "content_replacements": [
+        "PREWARM->PRELOAD",
+        "adaptive->automatic",
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_2_full_dataset.internal.log",
+      "new_sha256": "9374ed6991ea82f36118a8a073f9dc9445de933f82db56c711dd3b638bdafafc",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B1_O.internal.log",
+      "old_sha256": "9969949a135f1f6ea00314ca1b76d118986b1e5947c40e437e96eec6a0031e1a"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_2_none.console.log",
+      "new_sha256": "337235a79b0170b90973337c28db213879d6412cf34089ee35e8f3b81bb29648",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B1_U.console.log",
+      "old_sha256": "43d5451a0f4f93807743b4e54cd29598f4d001ffeb2318f55311a14c2cf2eacc"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_2_none.internal.log",
+      "new_sha256": "58fd653d2094abffa67b798c7dc051c17fca07a07aa63bdb280a31a4f1d0f989",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B1_U.internal.log",
+      "old_sha256": "c9064492c7d3acea771904b8985d0d3979dde1abdb36e666d2c0157663a32a2b"
+    },
+    {
+      "content_replacements": [
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_2_preload.json",
+      "new_sha256": "4cb020afb6bd1bb086c3f5849d706100a45dcf9274e86c450d2a64f5c08eb17e",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B1_prewarm.json",
+      "old_sha256": "1eac35559a983e5143156da0ad78cd632244353106181e4d28dc866064f43118"
+    },
+    {
+      "content_replacements": [
+        "D2->prompts32_samples2",
+        "PREWARM->PRELOAD",
+        "adaptive->automatic",
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_3_full_dataset.console.log",
+      "new_sha256": "d088c87b01e486eebbc719ef33f6479f185c6133bb3c36e1b135c942e7745120",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B2_O.console.log",
+      "old_sha256": "a496bc158d519ccb424f598139106670b76ad2ac8ace17f7b688795f93988b57"
+    },
+    {
+      "content_replacements": [
+        "D2->prompts32_samples2",
+        "PREWARM->PRELOAD",
+        "adaptive->automatic",
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_3_full_dataset.internal.log",
+      "new_sha256": "0aa39481540c862a125885d76ffcc1e49d794367c94a3392113134bc2a9b2bdf",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B2_O.internal.log",
+      "old_sha256": "7dfa51b9a32f78c7dde1f10b14a65e67d5ae5d3663fdfd40f3e48b0cf6b58d12"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_3_none.console.log",
+      "new_sha256": "4914fb0b6373c0e72d55759505cf30e17b509a2044233d5655fa493fe38a4ebd",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B2_U.console.log",
+      "old_sha256": "65a73b50ad2b2ce25b9d3dd4befdf2a7cd3e341f90d5005ac18c08f81c8638f7"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_3_none.internal.log",
+      "new_sha256": "3a517e4e717ee323b3f9b98e4db9b938bb9dc0b489198915c2d95abab1d54ee7",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B2_U.internal.log",
+      "old_sha256": "8322121ad2e415371ddc5d09f14395996cf2daf0e28c3142350b5591133a4ccd"
+    },
+    {
+      "content_replacements": [
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_3_preload.json",
+      "new_sha256": "a11bca3e91656db50905935e926a9ea82dd8196d4216ce0e36e541e645509e7c",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B2_prewarm.json",
+      "old_sha256": "ad9493bc564f78db5ab0582e7818bfbadfc51755f7f8e20ce099816294a1a7c8"
+    },
+    {
+      "content_replacements": [
+        "PREWARM->PRELOAD",
+        "adaptive->automatic",
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_4_full_dataset.console.log",
+      "new_sha256": "ef942417f1dee56ff14d7bbf59a165457eafda032574a699e257032c920f486a",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B3_O.console.log",
+      "old_sha256": "caca8c7cde34417a1ede220a60f6fef17a7c33ae53dc3700908b1174702da772"
+    },
+    {
+      "content_replacements": [
+        "PREWARM->PRELOAD",
+        "adaptive->automatic",
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_4_full_dataset.internal.log",
+      "new_sha256": "0e36d1f9961bb16f0702e129ea7a0060e4846a6399b56a4032a2d2e6fd88eb0b",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B3_O.internal.log",
+      "old_sha256": "02c75fbcb47c9c398a9649455d37da7944d627bfd232237d5540d89b39439bd6"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_4_none.console.log",
+      "new_sha256": "e35b98253d94ce2d1509bb5a98072ff3548c4b81ea5787fd2d2f1fcc38ec7d03",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B3_U.console.log",
+      "old_sha256": "9742a6d1722a166f31823439e4add445d46381be037271301cb2db63d80aec3f"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_4_none.internal.log",
+      "new_sha256": "966917601f1375038460427d240d4ef1c2da10baf5a3d1830232a9ff4019ed5e",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B3_U.internal.log",
+      "old_sha256": "b4073aa9fad3077449210ef01d923aa667cfb90d950f1f885e363953d8076280"
+    },
+    {
+      "content_replacements": [
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/repeat_4_preload.json",
+      "new_sha256": "bcb2999b327f8f97c296d7c9bdb256749947695f11829044c67e08759ec538a0",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/B3_prewarm.json",
+      "old_sha256": "6f461fc957da0a230cf5068916ae0136b453f5e6472ddae4481d03176bb67825"
+    },
+    {
+      "content_replacements": [
+        "B0->repeat_1",
+        "B1->repeat_2",
+        "B2->repeat_3",
+        "B3->repeat_4",
+        "actor_cycle_seconds->training_cycle_seconds",
+        "actor_cycles_per_hour->training_cycles_per_hour",
+        "admissions->stores",
+        "admitted_feature_bytes->cached_feature_bytes",
+        "amortized_effect_22->speedup_including_preload",
+        "block_effects->repeat_speedups",
+        "break_even_cycles->cycles_to_recover_preload_time",
+        "cache-oracle->full-dataset preload",
+        "cache_oracle->full_dataset_preload",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "measured_actor_seconds->measured_training_seconds",
+        "num_blocks->repeat_count",
+        "oracle_effect->training_only_speedup",
+        "prewarm->preload",
+        "prewarm_inclusive_actor_cycle_seconds->training_cycle_seconds_including_preload",
+        "prewarm_seconds->preload_seconds",
+        "rollout_wall_seconds->rollout_seconds",
+        "tier1->cpu_cache",
+        "tier2->sglang_cache"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/full_dataset_preload_analysis.json",
+      "new_sha256": "039d7105e03529f2c5a5f35df0dceac16e5b6e4c8bc4365b9778126349cba858",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/cache_oracle_analysis.json",
+      "old_sha256": "4ee4bde6f2c68d7b5f7db471745fe44dcc33f94aaceffaba0c76b4b9f5f4cc1d"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/cpu-topology.txt",
+      "new_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/cpu-topology.txt",
+      "old_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/git-head.txt",
+      "new_sha256": "806698c0cead4cc875ccd32b7020e30611a03cdaef1b50d114b5b58228af24cc",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/git-head.txt",
+      "old_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496"
+    },
+    {
+      "content_replacements": [
+        "cache-oracle->full-dataset preload",
+        "cache_oracle->full_dataset_preload",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/git-status.txt",
+      "new_sha256": "a8183b6639b0d8396703cdb8e5975ff2d82b89a8782f95ffac93f2dbd60323ff",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/git-status.txt",
+      "old_sha256": "6f755c5910a98ae6153d114b68b1f989dcf86f7fac1594882e66c4c0e180b41f"
+    },
+    {
+      "content_replacements": [
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/input-sha256.txt",
+      "new_sha256": "46b1a9679fe38038835be0bbf391be9e874228b99cfcd5a21aad9646d5a4a993",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/input-sha256.txt",
+      "old_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a"
+    },
+    {
+      "content_replacements": [
+        "B0->repeat_1",
+        "B1->repeat_2",
+        "B2->repeat_3",
+        "B3->repeat_4",
+        "cache_oracle->full_dataset_preload",
+        "prewarm->preload",
+        "prewarm_enabled->preload_enabled",
+        "prewarm_metrics->preload_artifact"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/manifest.tsv",
+      "new_sha256": "4db8e33ea71ae8579a31e2fd84f2ff6680e016fb06a960f78bd9eb02e28f478e",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/manifest.tsv",
+      "old_sha256": "a8bd45ed640c41965f3abff6f973c2530e15ab98a9d71efaca63c586a6d2c8bc"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/vram-after.csv",
+      "new_sha256": "4075376bc6315f19e81234291cd816a73a3bec4791f703cec89fcb05df2e2ce9",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/vram-after.csv",
+      "old_sha256": "56e5563a354e27e255e70307624a402fc4622ea57429a33c7102a072160ddd20"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "full_dataset_preload_full_retry2_20260827_081348/vram-before.csv",
+      "new_sha256": "4075376bc6315f19e81234291cd816a73a3bec4791f703cec89fcb05df2e2ce9",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry2_20260827_081348/vram-before.csv",
+      "old_sha256": "56e5563a354e27e255e70307624a402fc4622ea57429a33c7102a072160ddd20"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_retry_20260827_081032/repeat_1_none.console.log",
+      "new_sha256": "73d64ae5ac6983e3f86e653d0a8592dcbde8da4b22821fab82213faa0eaa5e4a",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry_20260827_081032/B0_U.console.log",
+      "old_sha256": "9fbe165b0de8c014b2b435e6ee8aff4b7e5c976d1c419e85792357532e21aafe"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_retry_20260827_081032/repeat_1_none.internal.log",
+      "new_sha256": "7ec8581d41353246ec0818e3344c6d3e08cfb50b4398bcf542f61d3ed1c79463",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry_20260827_081032/B0_U.internal.log",
+      "old_sha256": "5b807ca987d3b1fc6502ae88ff6e96dcbdc0cdd2ed247a754868677388a81a68"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_full_retry_20260827_081032/cpu-topology.txt",
+      "new_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry_20260827_081032/cpu-topology.txt",
+      "old_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8"
+      ],
+      "new_path": "full_dataset_preload_full_retry_20260827_081032/git-head.txt",
+      "new_sha256": "806698c0cead4cc875ccd32b7020e30611a03cdaef1b50d114b5b58228af24cc",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry_20260827_081032/git-head.txt",
+      "old_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496"
+    },
+    {
+      "content_replacements": [
+        "cache-oracle->full-dataset preload",
+        "cache_oracle->full_dataset_preload",
+        "prewarm->preload"
+      ],
+      "new_path": "full_dataset_preload_full_retry_20260827_081032/git-status.txt",
+      "new_sha256": "a8183b6639b0d8396703cdb8e5975ff2d82b89a8782f95ffac93f2dbd60323ff",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry_20260827_081032/git-status.txt",
+      "old_sha256": "6f755c5910a98ae6153d114b68b1f989dcf86f7fac1594882e66c4c0e180b41f"
+    },
+    {
+      "content_replacements": [
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2"
+      ],
+      "new_path": "full_dataset_preload_full_retry_20260827_081032/input-sha256.txt",
+      "new_sha256": "46b1a9679fe38038835be0bbf391be9e874228b99cfcd5a21aad9646d5a4a993",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry_20260827_081032/input-sha256.txt",
+      "old_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a"
+    },
+    {
+      "content_replacements": [
+        "prewarm_enabled->preload_enabled",
+        "prewarm_metrics->preload_artifact"
+      ],
+      "new_path": "full_dataset_preload_full_retry_20260827_081032/manifest.tsv",
+      "new_sha256": "f1f06eaeae7ee0abf99130e7edbf44204e5245618197ccfde85aaccb973930b1",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry_20260827_081032/manifest.tsv",
+      "old_sha256": "6dfdc51196f9cc8efb8fe7a601e6d032fca689667642902e68f321f324ad4548"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "full_dataset_preload_full_retry_20260827_081032/vram-before.csv",
+      "new_sha256": "b5b6ca376a6b9b652314b8aa913baf4922db3b1eed185df44052219115a9d83b",
+      "numeric_values_preserved": true,
+      "old_path": "cache_oracle_full_retry_20260827_081032/vram-before.csv",
+      "old_sha256": "fbd53cc156f98e49883c80254488819a6f9c86a94ee3d801420a514164463869"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/prompts8_samples8.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/D0.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/prompts16_samples4.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/D1.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/prompts32_samples2.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/D2.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/prompts64_samples1.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/D3.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "slurm_141944_cpu_vision_demand/hf_gpu_cpu_parity.json",
+      "new_sha256": "a2070dbbc4c4b817e7af6880c17defc47bb16014b8f22e9550df2874f2923644",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/e0_hf_parity.json",
+      "old_sha256": "2deea6e2fd510024508065501838890df33234d7434d7d2ae7e361d75ce32d66"
+    },
+    {
+      "content_replacements": [
+        "d2->prompts32_samples2",
+        "native->gpu"
+      ],
+      "new_path": "slurm_141944_cpu_vision_demand/hf_gpu_cpu_parity.log",
+      "new_sha256": "af1b23cf68c765456f62c90d36debfb4f3995d830a98aa933e0c4f5dae04836a",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/e0_hf_parity.log",
+      "old_sha256": "59d7cb91237f4666c4bdb75d9b982ba3e0151b7b05dc04bc0e880d12771939d5"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "native_parallel_sampling->gpu_parallel_sampling"
+      ],
+      "new_path": "slurm_141944_cpu_vision_demand/sglang_gpu_cpu_parity.json",
+      "new_sha256": "007763e26d6812af9e66051ef01e76c46f00fb2cd708daa8e78e4ab7140a64f8",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/e0_sglang_parity.json",
+      "old_sha256": "8aecdb89796e9e42ade491fb1314a6c912d6153eac50a815a78926e5b9b6cd76"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d2->prompts32_samples2",
+        "e0_sglang_parity->sglang_gpu_cpu_parity",
+        "native->gpu"
+      ],
+      "new_path": "slurm_141944_cpu_vision_demand/sglang_gpu_cpu_parity.log",
+      "new_sha256": "56e1a08cc2e42425feae51aed69bccd617d7f9c2b9bf1ff2da7a7064437277b4",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/e0_sglang_parity.log",
+      "old_sha256": "b2b03a39069194877695cfcda4a403fe8c35a48e8df84b61afdc740ede886a2b"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_141944_cpu_vision_demand/e1_prompts8_samples8.console.log",
+      "new_sha256": "1fb81a3b00f0a692d7004928e32a5ff1df0a77b77484ea79fcdba1462dfef5d8",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/e1_d0.console.log",
+      "old_sha256": "c9e7a1d0fe64ebe4c4f64df14f470839cf3a20c4cb510d5b7b39dd5e0774f847"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_141944_cpu_vision_demand/e1_prompts16_samples4.console.log",
+      "new_sha256": "122ca26686a4253b5882bdb672ed764796ca1de12c2f950b2994783a6b7e2615",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/e1_d1.console.log",
+      "old_sha256": "ca49236279a6b470f9f4891d25c54887e9de6e17f7fa9f2afa6e9c3ac17d7a81"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_141944_cpu_vision_demand/e1_prompts32_samples2.console.log",
+      "new_sha256": "2090b4339d61c22d9c52240086da3d092815a52254e55c14ce08f36e6899e4a6",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/e1_d2.console.log",
+      "old_sha256": "df81dd54d135890ee2f77af586d358a4aee0cb744b9a40320cb24662ee05d705"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_141944_cpu_vision_demand/e1_prompts64_samples1.console.log",
+      "new_sha256": "f5534a5308073bee676c6344ff42f639ba533894e46dbbd7de1f8e224855db79",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/e1_d3.console.log",
+      "old_sha256": "1df29f1a24a2b44ac92d1b7c665fcd9b9af818c8b7f3844a8e23a740e0b81027"
+    },
+    {
+      "content_replacements": [
+        "D0->prompts8_samples8",
+        "D1->prompts16_samples4",
+        "D2->prompts32_samples2",
+        "D3->prompts64_samples1",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "slurm_141944_cpu_vision_demand/cpu_vision_demand.json",
+      "new_sha256": "3ffbb12446bfa73f263410f49f048bd0aef2b1fbcb3dfa1c205c50f8f4ef0208",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/e1_demand.json",
+      "old_sha256": "6b3c5db0a9b7a69b9a95c094c65785b0ffbba35df45d33569cbf8a6c5aac98b6"
+    },
+    {
+      "content_replacements": [
+        "D0->prompts8_samples8",
+        "D1->prompts16_samples4",
+        "D2->prompts32_samples2",
+        "D3->prompts64_samples1",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "slurm_141944_cpu_vision_demand/manifest.tsv",
+      "new_sha256": "947a5052bb8537eab52e78475b28418a6f324d1e9c7a61c3965ffebf57b4d7d7",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_e0_e1/manifest.tsv",
+      "old_sha256": "0145227e0de7c05d4b09e56ffd6b5043003faa1ae1841e21c7f8a76371fe0934"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142801_cpu_vision_scaling/cpu_vision_scaling.json",
+      "new_sha256": "c7027f3c98f6ab9e2f1ce901fea408e14a5eef937cdc5a402e75c6f552c677f3",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142801_e2/e2_scaling.json",
+      "old_sha256": "c7027f3c98f6ab9e2f1ce901fea408e14a5eef937cdc5a402e75c6f552c677f3"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142802_cpu_worker_layouts/replicas1_threads4.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142802_e3/D2_1x4.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d2->prompts32_samples2",
+        "native->gpu"
+      ],
+      "new_path": "slurm_142802_cpu_worker_layouts/replicas1_threads4.console.log",
+      "new_sha256": "ecece551322b962ad428e8fc325bbfe45e066308ed1ea6e51ac59968ba7324b9",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142802_e3/d2_1x4.console.log",
+      "old_sha256": "e4bce9613c3f45b839d25a7564c3b663f51a6033d057a05f35825a8672aec2c7"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142802_cpu_worker_layouts/manifest.tsv",
+      "new_sha256": "090882f65a88f97af33e3df97bab47be5e0d1576c87b7ec668fe436d1111e7f2",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142802_e3/manifest.tsv",
+      "old_sha256": "090882f65a88f97af33e3df97bab47be5e0d1576c87b7ec668fe436d1111e7f2"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas1_threads4.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_e3/D2_1x4.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas2_threads2.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_e3/D2_2x2.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas4_threads1.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_e3/D2_4x1.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [
+        "M2->cpu_cache",
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas1_threads4.console.log",
+      "new_sha256": "e09b8012b49eb3e1fb8a6e06ec681b57ce3d18d47cb1f0bb7d42e1a56d6451db",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_e3/d2_1x4.console.log",
+      "old_sha256": "d77194951c82c4a8c3eb321e4d1c87ed1a0475e92360af81b5de32fec0c585cf"
+    },
+    {
+      "content_replacements": [
+        "D2_1x4->replicas1_threads4",
+        "d2_1x4->replicas1_threads4"
+      ],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas1_threads4_demand.json",
+      "new_sha256": "d87c2e36d5c4d7f14f20418b9fd1ef52d3c8949616c093e77a0b0691006ba9b1",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_e3/d2_1x4_demand.json",
+      "old_sha256": "3eafec142796ec0bb56496f0954771aa13550cde2d9d7fca8e6ee6531547559f"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas2_threads2.console.log",
+      "new_sha256": "716d49da12a000f6dfdd0c52ca690499d1300ae4994c80931e0e93a2450762c4",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_e3/d2_2x2.console.log",
+      "old_sha256": "3b00d2251f438501a10eb2e4594d815edcb1cb80d0aae6f3b8fb3cf3392e927b"
+    },
+    {
+      "content_replacements": [
+        "D2_2x2->replicas2_threads2",
+        "d2_2x2->replicas2_threads2"
+      ],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas2_threads2_demand.json",
+      "new_sha256": "2512ba9786109b01b2205d4ca5e840df761297155e253a7e86bf338f18f2693c",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_e3/d2_2x2_demand.json",
+      "old_sha256": "09ff931d3d62b0a00b4b3f1455d022ad529d31ab90f06eef8fa4d6d7b2b6260e"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas4_threads1.console.log",
+      "new_sha256": "bc483e7a1ad6ed86e55b5ffcd29eb586fda708c5ccb3a90a97734dfed53a5490",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_e3/d2_4x1.console.log",
+      "old_sha256": "15ac116fd418d6412ddfabc2151d6ed487bcadb8e32ddff6f76f312df0ccad52"
+    },
+    {
+      "content_replacements": [
+        "D2_4x1->replicas4_threads1",
+        "d2_4x1->replicas4_threads1"
+      ],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas4_threads1_demand.json",
+      "new_sha256": "fcf6553ba3b3d322d4563013c83215ebc14e108e6e360cf131e890dbcecee561",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_e3/d2_4x1_demand.json",
+      "old_sha256": "bb924f0cb60b00467e0657444d6e89ba2d1d41be1e78074a1500014931130dad"
+    },
+    {
+      "content_replacements": [
+        "D2_1x4->replicas1_threads4",
+        "D2_2x2->replicas2_threads2",
+        "D2_4x1->replicas4_threads1",
+        "d2_1x4->replicas1_threads4",
+        "d2_2x2->replicas2_threads2",
+        "d2_4x1->replicas4_threads1"
+      ],
+      "new_path": "slurm_142804_cpu_worker_layouts/manifest.tsv",
+      "new_sha256": "f32eee8e576adcf5f6f04ea284d9012a31058c0459b39234ea1f10471a3299fa",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_e3/manifest.tsv",
+      "old_sha256": "8f19aa94a4f5732e0ffdefa4b1261a85ffe07625ebc0e171228885af0eca93be"
+    },
+    {
+      "content_replacements": [
+        "e4_cache->vision_cache_reuse",
+        "tier1_only->cpu_cache_only"
+      ],
+      "new_path": "slurm_142805_vision_cache_reuse/manifest.tsv",
+      "new_sha256": "d0f7a43b24ae8a135433484ceeabd2f3edd468fd7d60a1f4911781a9b0074f1f",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142805_e4_cache/manifest.tsv",
+      "old_sha256": "3260fb8157a63d39fa89cc826cf399a40a518de57770248e0276850cd919a558"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_142805_vision_cache_reuse/cpu_cache_only.console.log",
+      "new_sha256": "8b6a2f08e4bc9b14d6d353f853245ec1176041a99f2a91e8fd53e13b875debed",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142805_e4_cache/tier1_only.console.log",
+      "old_sha256": "49757f892be251b3c16098ebfe6cdb1bd40e8d3e1250ada7e3dc3107163d23ca"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142805_vision_cache_reuse/cpu_cache_only.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142805_e4_cache/tier1_only.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_142805_vision_cache_reuse/cpu_and_sglang_cache.console.log",
+      "new_sha256": "cda2fde31e136f766f5d6789bb049a0221cfdd5545125ef0c9bc6dee55e31908",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142805_e4_cache/tier1_tier2.console.log",
+      "old_sha256": "1a0b0a8086aa65fe0de322dfdf727934646c7f3bac76f995a4269fd1771beb77"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142805_vision_cache_reuse/cpu_and_sglang_cache.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142805_e4_cache/tier1_tier2.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [
+        "e4_cache->vision_cache_reuse",
+        "tier1_only->cpu_cache_only",
+        "tier1_tier2->cpu_and_sglang_cache"
+      ],
+      "new_path": "slurm_142809_vision_cache_reuse/manifest.tsv",
+      "new_sha256": "1153ad0cfd7e4e04fd255376361d0267ed1556144484a16328faf6b85ae4fa7d",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142809_e4_cache/manifest.tsv",
+      "old_sha256": "6f33885a29b2773106b3ea7939054fa7844f1b36e5aae3ce72784479e35ce0ac"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_142809_vision_cache_reuse/cpu_cache_only.console.log",
+      "new_sha256": "647cc611a422a0a9bebfe7d2d56bb1dac36de376ffc1120d8996b878c7c8e7db",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142809_e4_cache/tier1_only.console.log",
+      "old_sha256": "250142e5fc310815507dc2ee7abc4fc0de396037a2fe59d860b7eceb4d74ac97"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142809_vision_cache_reuse/cpu_cache_only.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142809_e4_cache/tier1_only.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_142809_vision_cache_reuse/cpu_and_sglang_cache.console.log",
+      "new_sha256": "7600de2860c78f15f7346c1bf49f7f1a50f269b5238fcd2fa1c86c2f6958d44d",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142809_e4_cache/tier1_tier2.console.log",
+      "old_sha256": "484fc5a8fffa8a60d1edbc88b9c38a7dccfeaddd390f8ada3ae4840b09dcb040"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142809_vision_cache_reuse/cpu_and_sglang_cache.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142809_e4_cache/tier1_tier2.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [
+        "e4_cache->vision_cache_reuse",
+        "rollout_wall_reduction->rollout_time_reduction",
+        "rollout_wall_seconds->rollout_seconds",
+        "tier1_only->cpu_cache_only",
+        "tier1_tier2->cpu_and_sglang_cache"
+      ],
+      "new_path": "slurm_142817_vision_cache_reuse/vision_cache_reuse.json",
+      "new_sha256": "7b7b42ca4aeeedc5f5006ca90ea519251a04416a2b3372b25df446f24bd31155",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142817_e4_cache/e4_cache.json",
+      "old_sha256": "ead3d00539a31364c3e733b43a3f5b7a1cd0682576155f07892c2de88b0c5808"
+    },
+    {
+      "content_replacements": [
+        "e4_cache->vision_cache_reuse",
+        "tier1_only->cpu_cache_only",
+        "tier1_tier2->cpu_and_sglang_cache"
+      ],
+      "new_path": "slurm_142817_vision_cache_reuse/manifest.tsv",
+      "new_sha256": "a017c3619266765845f27ff1d85bf0bcae2009ab630a549119b1db9aaea9aed8",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142817_e4_cache/manifest.tsv",
+      "old_sha256": "f5605664c77eb8345c00d49a801072f5ed731be2219b1cb8ad496c56f70bd5dd"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_142817_vision_cache_reuse/cpu_cache_only.console.log",
+      "new_sha256": "06def180e4b9ce938c856f7f58d2806db6a6611198bf0dd52956ad203a0e165d",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142817_e4_cache/tier1_only.console.log",
+      "old_sha256": "39df4f898e515e6b0ff42dd43a3733e0b7c9a169fc5fd2e6924f721c33c47c1b"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142817_vision_cache_reuse/cpu_cache_only.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142817_e4_cache/tier1_only.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_142817_vision_cache_reuse/cpu_and_sglang_cache.console.log",
+      "new_sha256": "6e2b360f98ee785b6f0a80ea683031dc2c0dcc9cf3fe65d452206f8163f12ded",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142817_e4_cache/tier1_tier2.console.log",
+      "old_sha256": "c2f4696b4f68e7585388c12b2f7bb49b88e9d5c60a35f0dfceb3f3e3f2b17cc2"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142817_vision_cache_reuse/cpu_and_sglang_cache.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142817_e4_cache/tier1_tier2.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_1_gpu.console.log",
+      "new_sha256": "708afd510deb38c2fb2a38105856969478886df28df1aaab44aff9493b4dfc47",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B0_M0.console.log",
+      "old_sha256": "6630ef8189389ee2b59ba566a2c5c9a774a1906033112d1435a281aac207e0f0"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_1_gpu.internal.log",
+      "new_sha256": "50ea776178f787f10038d1fc2454edd68a65a291e2421dd3344693cf4f090ed0",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B0_M0.internal.log",
+      "old_sha256": "faa6822e289553ac0034070e3a9205067febbe71858daba8a2de2133f3053626"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_1_cpu_no_caches.console.log",
+      "new_sha256": "84e690535d71b84b24f487285b16692909585253cce0954c774c6b0d9261e505",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B0_M1.console.log",
+      "old_sha256": "0e53c53a5f29046b3e3b503c92f5cf9d9b432fe96c21c513b3a7bd45fac45b74"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_1_cpu_no_caches.internal.log",
+      "new_sha256": "cd930fc381962de08f3be3395c7d8cb7175c69eaa5aeb36e65456bc1958b72cc",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B0_M1.internal.log",
+      "old_sha256": "387b666ed551da54f60ddf557127f279834b3d055d39e5edad586d8f53707051"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_1_cpu_cache.console.log",
+      "new_sha256": "ef9bd7abb7ece6e11d44177755e84d887be361a2898d65f029b63e6c1f5dcdd3",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B0_M2.console.log",
+      "old_sha256": "4daaf2fbdb416586ef7966c2e0fcd9b5c2093d0366582ff3ec7e7a3c27217947"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_1_cpu_cache.internal.log",
+      "new_sha256": "b1e3397028fcbb6f747b5b4728df98cb07090913cd28ca09f00539f87b842d84",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B0_M2.internal.log",
+      "old_sha256": "eba69e8aecf5914f6e03b6c665585481adcd7d15b3ac9f3cdb2227fed5c6b74f"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_1_cpu_and_sglang_cache.console.log",
+      "new_sha256": "c38ca55e17d747d80f03ce5b845623d994ef445da0fbf7ce7e3042166abf8e8a",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B0_M3.console.log",
+      "old_sha256": "2ff43cce7ea81ae28e90998d20ec54e0a569eae05243f18626b284560c8119a6"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_1_cpu_and_sglang_cache.internal.log",
+      "new_sha256": "cd75b8aaaeb9a9b64a792259ffe6c9ef398d73a10dede840c1bf2e6248f40c67",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B0_M3.internal.log",
+      "old_sha256": "620dc81201e17b30fa49bdb3f66443af170def8ce5bee05ce186b32e80fc9784"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_2_gpu.console.log",
+      "new_sha256": "9fd7958dbb90c23503b49c334da0b89dc7d54647f1ca57f25ac9387713783323",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B1_M0.console.log",
+      "old_sha256": "f4fdf3989cfb3b44b985f4e730ab4ca89cfe7ec85c5ce6780f931e7b6889b8c3"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_2_gpu.internal.log",
+      "new_sha256": "62eefc634e7359b91fd35aace25a555d353aa5d38fa365186997c679f9f6edc2",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B1_M0.internal.log",
+      "old_sha256": "346af2fe02d4f9c8ca3063250398525d65b2d2d50aa68b2396e7f8ce575e0198"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_2_cpu_no_caches.console.log",
+      "new_sha256": "ccbae0d43dcf2b6ed6b4aefa89a055ad65f1096ae590fbbbfaf557941664bfec",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B1_M1.console.log",
+      "old_sha256": "4eb12dcfae9d54e0f8b2866a3f1270c67d2e303117930f54773f5a130a5cfe42"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_2_cpu_no_caches.internal.log",
+      "new_sha256": "f6b27934e1313b54d72526f6cd0125c56d7ab5b8880aae242a662edc112df51f",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B1_M1.internal.log",
+      "old_sha256": "de35569ebad0653c54c1613db6e8de8c600fc6725d282248c6e9b4c7ac4a74e1"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_2_cpu_cache.console.log",
+      "new_sha256": "eee2a7abec6a9c1b4860ba182d653dd6738838aabe4a66aa3137f140bedf11c1",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B1_M2.console.log",
+      "old_sha256": "1c1dff7ade5978599be9d64f73758aa10001fbcd12b1dbbcd24dc0351dc22349"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_2_cpu_cache.internal.log",
+      "new_sha256": "8d60dcdb010acc065dc2af65cca31fa5b01704fe6231d69f24e681680c903e50",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B1_M2.internal.log",
+      "old_sha256": "a96f3fa7bd0a5499bef1e93a507ed47a7ef863c729456ff614293829a98bc3ad"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_2_cpu_and_sglang_cache.console.log",
+      "new_sha256": "701c43f07641f7621c7a6446de69c92070ad6df4d372d0cd0311bd592ceef614",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B1_M3.console.log",
+      "old_sha256": "111dd518762eb8da1141b326baefc747a18e0551b1e005556d1e1af0b9acd349"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_2_cpu_and_sglang_cache.internal.log",
+      "new_sha256": "db5d7209d040476f7efc6880dcd8563bcd4d58ec53e3deb9dba79bf7c8bde63b",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B1_M3.internal.log",
+      "old_sha256": "124459270a87fd158be23462c771facc93a621437818815d1aec699c3c89fbf2"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_3_gpu.console.log",
+      "new_sha256": "5635811d8b7d8fa03b7124c564e0ec0bec7bac369ab109cc007cfbef387731e1",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B2_M0.console.log",
+      "old_sha256": "cf201377b95e26bb50593c98146653514bf9522733f04b2c2eff1954749035a3"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_3_gpu.internal.log",
+      "new_sha256": "fa81dd5650751fc4f778a888594d93055ba2eb7e5d0ff88d363e8003f340bdba",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B2_M0.internal.log",
+      "old_sha256": "c844899b97ffb7ac8f85c43c0cae0e68a0e60da9c21ad202224c74c742f893af"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_3_cpu_no_caches.console.log",
+      "new_sha256": "cf6f9e765ee26fc3e6d06c7d111cb55e46f12128b46feeb4d65a49c0af73d0e6",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B2_M1.console.log",
+      "old_sha256": "220220a4c48f6e6e3c841ccf62a2036564a0b5fedfeb8775bdda1f8eb955e71b"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_3_cpu_no_caches.internal.log",
+      "new_sha256": "d1ac15fe9f840f1998a3e0551fc8e532b06287e7865e5623a1110b9aaebd6245",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B2_M1.internal.log",
+      "old_sha256": "6ef7bb617fe722947f579f7fe6b54c9c03aa6d282fc4675902d2fe35c0721189"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_3_cpu_cache.console.log",
+      "new_sha256": "f8a488fb9a0de984549a65e92328d28e99548ccfa07d3fe00ea7e850c12e4766",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B2_M2.console.log",
+      "old_sha256": "e11d78a30f100c0f0f6c8fb14aa55d070b9fa72189f90d5b741cd84d8af86f1a"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_3_cpu_cache.internal.log",
+      "new_sha256": "dbbcadb16aa5b160c39bfcda9ab66c398665f7d3cd97245b0ff64e0a8d74bff6",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B2_M2.internal.log",
+      "old_sha256": "c94d917cbf86721e8a7acc3128397bac530d5b1ca15793d12bb26fd72a7bb147"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_3_cpu_and_sglang_cache.console.log",
+      "new_sha256": "d49cd935ed4c47a8ee7140d8a568a977f024bd170f5cb5b1cfd56002bd5e3b7c",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B2_M3.console.log",
+      "old_sha256": "9fb91d7625dcec136381f59cf2b775a91ad2acf442ebdfca95689507f5103d72"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_3_cpu_and_sglang_cache.internal.log",
+      "new_sha256": "248cda9652c3b7c081d685e34ed08b916fb518ec4ae95596c02c14003dc4c1a3",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B2_M3.internal.log",
+      "old_sha256": "944e6119070841409494db5bee2e7416b17f19513cc45f9726c130fdd23df861"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_4_gpu.console.log",
+      "new_sha256": "b4cd6f78abb4c6de2f2704fa34cfb4acd3b279ba7d1092b432550375e9cfcb76",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B3_M0.console.log",
+      "old_sha256": "b3ac4977c60bcefaf735b92b6d5d6da397804fdc6b2eb7839c75606732126f5c"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_4_gpu.internal.log",
+      "new_sha256": "7e582f6bb49386745e69e58ade1beb2a7ac3b8e0785e5cd7a6b1d60cfdbe6f6a",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B3_M0.internal.log",
+      "old_sha256": "fb52115fc0912d0758678ae617e42f5c89833867f0b7079da373b1bfb12d3e4a"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_4_cpu_no_caches.console.log",
+      "new_sha256": "945801b05e56cbbfeefd19c9f2df3454daf9e0371a7d9f0f2184ce269bae05f9",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B3_M1.console.log",
+      "old_sha256": "c0132d758307ba4e4e3c8de56936b3fe2ea84acae7d1b45034f3518039a3b37e"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_4_cpu_no_caches.internal.log",
+      "new_sha256": "d6577b4c5db01166d94250cdac1e92bb2f2e837bd41d4038ca37b1f37fbd08d2",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B3_M1.internal.log",
+      "old_sha256": "0005d3a8a9c61a09b0ddaa3a51e778c2ae97325229a1df9d2a18b5087ba1babc"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_4_cpu_cache.console.log",
+      "new_sha256": "4302920b3bf6b8df50dbbcbb689bf9ad2fb82ea071b4dfed812af263b13d7490",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B3_M2.console.log",
+      "old_sha256": "4e69262992820d93bb7f2d12b3d0bb3bee8ab0d1492c5c672045f01dd1467ba8"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_4_cpu_cache.internal.log",
+      "new_sha256": "907a387c3b0b042311115197cc95be64c0a16a28b442833819486c366eb73c05",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B3_M2.internal.log",
+      "old_sha256": "4c0ed3cf00e56eefcb9cedf13daf95a967bce7af7c237d3f00b6d66ffc52a619"
+    },
+    {
+      "content_replacements": [
+        "M2->cpu_cache",
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_4_cpu_and_sglang_cache.console.log",
+      "new_sha256": "e64170835c7223120f6927f562a9f28d0a8a9a2adca39a6904545008eddfc03d",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B3_M3.console.log",
+      "old_sha256": "c747d5f5a169e679474f3d356338acbc830ee551f46415484eab9a02f2ed0bbe"
+    },
+    {
+      "content_replacements": [
+        "M2->cpu_cache",
+        "adaptive->automatic",
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/repeat_4_cpu_and_sglang_cache.internal.log",
+      "new_sha256": "7fe5e7ae1bdcd5bf9557c2f982ab795f7409d44537c3e0829f907a43116101e5",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/B3_M3.internal.log",
+      "old_sha256": "75c7ce0d4af1d352ad88074e92077559969d0afc3323b876e29f279b49a0a18a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/cpu-topology.txt",
+      "new_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/cpu-topology.txt",
+      "old_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8"
+      ],
+      "new_path": "slurm_154079_vision_settings/git-head.txt",
+      "new_sha256": "806698c0cead4cc875ccd32b7020e30611a03cdaef1b50d114b5b58228af24cc",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/git-head.txt",
+      "old_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/git-status.txt",
+      "new_sha256": "8528e4be4e71370c603019fae0dfbe1dd7b2c0745a700dceef484e82c9c56f19",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/git-status.txt",
+      "old_sha256": "8528e4be4e71370c603019fae0dfbe1dd7b2c0745a700dceef484e82c9c56f19"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "slurm_154079_vision_settings/hf_parity.json",
+      "new_sha256": "a96d15860c2f94fc17f64f80f8c2dd65ce7080a8c2406bcd4c7d6efa5f5c4dc7",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/hf_parity.json",
+      "old_sha256": "57583e699cf39782ad61cb473acb1df35dfbd46b31b09bbdd6224b19e8c555b1"
+    },
+    {
+      "content_replacements": [
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/hf_parity.log",
+      "new_sha256": "89e0503452dca1704938bab948944c53d503512ba8f61acade37bd4089b24f2a",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/hf_parity.log",
+      "old_sha256": "1e67a135bed583e98bbf690ef521ae5f30742dcceab9303f5e9aa577c99852d4"
+    },
+    {
+      "content_replacements": [
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2"
+      ],
+      "new_path": "slurm_154079_vision_settings/input-sha256.txt",
+      "new_sha256": "46b1a9679fe38038835be0bbf391be9e874228b99cfcd5a21aad9646d5a4a993",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/input-sha256.txt",
+      "old_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a"
+    },
+    {
+      "content_replacements": [
+        "B0->repeat_1",
+        "B1->repeat_2",
+        "B2->repeat_3",
+        "B3->repeat_4",
+        "M0->gpu",
+        "M1->cpu_no_caches",
+        "M2->cpu_cache",
+        "M3->cpu_and_sglang_cache"
+      ],
+      "new_path": "slurm_154079_vision_settings/manifest.tsv",
+      "new_sha256": "23c67a22fd548985b4198e8c877b7ad0ea3d66f9437b44f7235bea0de9c533b7",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/manifest.tsv",
+      "old_sha256": "c111f5ebe371d1c6be4efb811eacbc1cd1ee4399a44123e0a05983a473b003a5"
+    },
+    {
+      "content_replacements": [
+        "B0->repeat_1",
+        "B1->repeat_2",
+        "B2->repeat_3",
+        "B3->repeat_4",
+        "M0->gpu",
+        "M1->cpu_no_caches",
+        "M2->cpu_cache",
+        "M3->cpu_and_sglang_cache",
+        "actor_cycle_seconds->training_cycle_seconds",
+        "actor_cycles_per_hour->training_cycles_per_hour",
+        "block_effects->repeat_speedups",
+        "num_blocks->repeat_count",
+        "rollout_wall_seconds->rollout_seconds"
+      ],
+      "new_path": "slurm_154079_vision_settings/matched_analysis.json",
+      "new_sha256": "90173e29e3f718405aafc480efe087c189cf5d919cc5894c31eeae5dacbac455",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/matched_analysis.json",
+      "old_sha256": "ea1c4f9a19f5519ad7b8cda63c58311e2f0dca8d0462f6115939030a96fc12b3"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1",
+        "native->gpu",
+        "native_parallel_sampling->gpu_parallel_sampling"
+      ],
+      "new_path": "slurm_154079_vision_settings/sglang_parity.json",
+      "new_sha256": "474cfee63214339c7e95505197e3d9ad998d8f0783b62aa8f5ca4edd323605bc",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/sglang_parity.json",
+      "old_sha256": "88b2c099af78ba78efec853feaff797ac175744743ba0c48cbdbf91a7a107129"
+    },
+    {
+      "content_replacements": [
+        "adaptive->automatic",
+        "native->gpu"
+      ],
+      "new_path": "slurm_154079_vision_settings/sglang_parity.log",
+      "new_sha256": "a824c68a1139226b5984985a0128a9d9a6c2c20fa4a0334c5666750534eb1dc9",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/sglang_parity.log",
+      "old_sha256": "d7a30ac82722d627260766f0e2c3e17dcfa71a9b7200d2884af153592379099a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/slurm-job.txt",
+      "new_sha256": "63160a10af67458ff0f68c04842178aeca0014855edbe7d3085f76448db7ea7f",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/slurm-job.txt",
+      "old_sha256": "63160a10af67458ff0f68c04842178aeca0014855edbe7d3085f76448db7ea7f"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "slurm_154079_vision_settings/vram-after.csv",
+      "new_sha256": "aa2e244c991a53eb329eb6f1faae1673aa6c4c61f1ec7905857ed60b73f2fa08",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/vram-after.csv",
+      "old_sha256": "564a4c20cfe90a903609e97e8f9c65c2b246f4db2c7cb14a7a52251b0c893126"
+    },
+    {
+      "content_replacements": [
+        "d0->prompts8_samples8",
+        "d1->prompts16_samples4",
+        "d2->prompts32_samples2",
+        "d3->prompts64_samples1"
+      ],
+      "new_path": "slurm_154079_vision_settings/vram-before.csv",
+      "new_sha256": "aa2e244c991a53eb329eb6f1faae1673aa6c4c61f1ec7905857ed60b73f2fa08",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_matched/vram-before.csv",
+      "old_sha256": "564a4c20cfe90a903609e97e8f9c65c2b246f4db2c7cb14a7a52251b0c893126"
+    },
+    {
+      "content_replacements": [
+        "vision placement metadata->vision workload metadata"
+      ],
+      "new_path": "vision_workload_validation.parquet",
+      "new_sha256": "4087eddc59a156d6983def2069641bd5b57139ec4d4006772c7df6be53198ce4",
+      "numeric_values_preserved": true,
+      "old_path": "trace_builder_validation.parquet",
+      "old_sha256": "920ff9449f4f462460c2ea69534884ba65657c541a7ccef896a351aa1ace7694"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "vision_workload_validation_cycles.json",
+      "new_sha256": "0a9e9d991c2d576ee72e5b3eb5ec4aaf33a693fe66db026c4a491a4a28428028",
+      "numeric_values_preserved": true,
+      "old_path": "trace_builder_validation_cycles.json",
+      "old_sha256": "0a9e9d991c2d576ee72e5b3eb5ec4aaf33a693fe66db026c4a491a4a28428028"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "vision_workload_validation_manifest.json",
+      "new_sha256": "04b462751836bc03a973dd4610c53d3daf0256b587d9ddfd0cc1c12ccc24f7c1",
+      "numeric_values_preserved": true,
+      "old_path": "trace_builder_validation_manifest.json",
+      "old_sha256": "04b462751836bc03a973dd4610c53d3daf0256b587d9ddfd0cc1c12ccc24f7c1"
+    }
+  ],
+  "migration": "cpu-vision-direct-names-2026-08-28",
+  "schema_version": 1
+}

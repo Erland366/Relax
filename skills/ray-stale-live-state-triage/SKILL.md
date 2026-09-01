@@ -154,7 +154,7 @@ placement before reducing DP or model size.
 
 In the visual-XOR DP2 failure, GPU-wide usage was 62.44 GiB while the failing
 rank reported only 2.77 GiB allocated. RCCL then failed to allocate 6 MiB.
-A later clean run completed the same DP2 topology for 250 actor cycles and 500
+A later clean run completed the same DP2 topology for 250 training cycles and 500
 optimizer updates, proving the topology itself fit.
 
 ### Step 6: Stop and inspect worker logs before retrying

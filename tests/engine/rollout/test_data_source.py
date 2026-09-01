@@ -10,7 +10,10 @@ Run with: pytest tests/engine/rollout/test_data_source.py -v
 
 import json
 import os
+import sys
 import tempfile
+import types
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -166,6 +169,7 @@ class TestDataSourceIntegration:
 
         args = Namespace(
             sglang_model_impl="transformers",
+            preload_vision_features=True,
             rollout_global_dataset=True,
             hf_checkpoint="/tmp/checkpoint",
             dump_details=None,
@@ -205,10 +209,110 @@ class TestDataSourceIntegration:
 
         assert isinstance(config, Namespace)
         assert config.prompt_data == "/tmp/prompts.jsonl"
+        assert config.preload_vision_features is True
         assert config.save == "/tmp/save"
         assert config.load == "/tmp/load"
         assert not hasattr(config, "tq_config")
         assert not hasattr(config, "megatron_enum")
+
+    def test_eager_dataset_snapshot_returns_shallow_copies_without_advancing_state(self):
+        from relax.engine.rollout import data_source as data_source_module
+        from relax.utils.types import Sample
+
+        shared_multimodal_inputs = {"image": object()}
+        first = Sample(
+            prompt="first",
+            tokens=[1, 2],
+            rollout_tokens=[3],
+            weight_versions=["v1"],
+            metadata={"source": "dataset"},
+            multimodal_inputs=shared_multimodal_inputs,
+        )
+        second = Sample(prompt="second")
+        source = data_source_module.RolloutDataSource.__new__(data_source_module.RolloutDataSource)
+        source._use_streaming = False
+        source.dataset = SimpleNamespace(samples=[first, second])
+        source.epoch_id = 3
+        source.sample_offset = 1
+        source.sample_group_index = 7
+        source.sample_index = 11
+        state_before = (
+            source.epoch_id,
+            source.sample_offset,
+            source.sample_group_index,
+            source.sample_index,
+            tuple(source.dataset.samples),
+        )
+
+        snapshot = source.snapshot_dataset_samples()
+
+        assert [sample.prompt for sample in snapshot] == ["first", "second"]
+        assert snapshot is not source.dataset.samples
+        assert snapshot[0] is not first
+        assert snapshot[1] is not second
+        assert snapshot[0].tokens is not first.tokens
+        assert snapshot[0].rollout_tokens is not first.rollout_tokens
+        assert snapshot[0].weight_versions is not first.weight_versions
+        assert snapshot[0].metadata is not first.metadata
+        assert snapshot[0].multimodal_inputs is shared_multimodal_inputs
+        assert (
+            source.epoch_id,
+            source.sample_offset,
+            source.sample_group_index,
+            source.sample_index,
+            tuple(source.dataset.samples),
+        ) == state_before
+
+    def test_dataset_snapshot_rejects_streaming_dataset(self):
+        from relax.engine.rollout import data_source as data_source_module
+
+        source = data_source_module.RolloutDataSource.__new__(data_source_module.RolloutDataSource)
+        source._use_streaming = True
+        source.dataset = MagicMock()
+
+        with pytest.raises(RuntimeError, match="streaming"):
+            source.snapshot_dataset_samples()
+
+    def test_dataset_state_snapshot_reports_stable_ordered_fingerprint_without_advancing(self, monkeypatch):
+        processing_utils = types.ModuleType("relax.utils.data.processing_utils")
+        processing_utils.load_processor = lambda *args, **kwargs: None
+        processing_utils.load_tokenizer = lambda *args, **kwargs: None
+        monkeypatch.setitem(sys.modules, "relax.utils.data.processing_utils", processing_utils)
+        monkeypatch.delitem(sys.modules, "relax.engine.rollout.data_source", raising=False)
+        from relax.engine.rollout import data_source as data_source_module
+        from relax.utils.types import Sample
+
+        first = Sample(prompt="first", metadata={"record_id": "a"})
+        second = Sample(prompt="second", metadata={"record_id": "b"})
+        source = data_source_module.RolloutDataSource.__new__(data_source_module.RolloutDataSource)
+        source._use_streaming = False
+        source.dataset = SimpleNamespace(samples=[first, second])
+        source.epoch_id = 3
+        source.sample_offset = 1
+        source.sample_group_index = 7
+        source.sample_index = 11
+
+        first_snapshot = source.snapshot_dataset_state()
+        repeated_snapshot = source.snapshot_dataset_state()
+
+        assert first_snapshot == repeated_snapshot
+        assert first_snapshot == {
+            "sample_offset": 1,
+            "epoch_id": 3,
+            "sample_group_index": 7,
+            "sample_index": 11,
+            "dataset_size": 2,
+            "dataset_fingerprint": first_snapshot["dataset_fingerprint"],
+        }
+        assert len(first_snapshot["dataset_fingerprint"]) == 64
+        int(first_snapshot["dataset_fingerprint"], 16)
+
+        source.dataset.samples.reverse()
+        reordered_snapshot = source.snapshot_dataset_state()
+
+        assert reordered_snapshot["dataset_size"] == first_snapshot["dataset_size"]
+        assert reordered_snapshot["dataset_fingerprint"] != first_snapshot["dataset_fingerprint"]
+        assert (source.epoch_id, source.sample_offset, source.sample_group_index, source.sample_index) == (3, 1, 7, 11)
 
     def test_rollout_data_source_isolates_before_tokenizer_load(self, monkeypatch):
         from relax.engine.rollout import data_source as data_source_module

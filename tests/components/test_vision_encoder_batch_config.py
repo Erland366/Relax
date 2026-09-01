@@ -13,11 +13,11 @@ def _vision_component():
 
 def _valid_cpu_vision_config(**overrides):
     values = {
-        "vision_encoder_backend": "pytorch",
+        "vision_encoder_device": "cpu",
         "vision_encoder_num_replicas": 1,
         "vision_encoder_num_cpus": 1,
         "vision_encoder_cache_max_bytes": 1024,
-        "vision_encoder_max_batch_size": 8,
+        "vision_encoder_max_images_per_request": 8,
         "vision_encoder_batch_wait_timeout_ms": 0.0,
         "resource": {"vision_encoder": [1, 0]},
         "freeze_vision_model": True,
@@ -54,6 +54,23 @@ def test_sglang_vision_feature_cache_argument_defaults_to_disabled():
 
     assert len(actions) == 1, "--sglang-vision-feature-cache-max-bytes must be registered"
     assert actions[0].default == 0
+
+
+def test_preload_vision_features_argument_is_explicitly_opt_in():
+    arguments = importlib.import_module("relax.utils.arguments")
+    parser = arguments.get_slime_extra_args_provider()(ArgumentParser())
+
+    actions = [
+        action
+        for action in parser._actions
+        if "--preload-vision-features" in action.option_strings
+    ]
+
+    assert len(actions) == 1, "--preload-vision-features must be registered"
+    assert actions[0].default is False
+    required_args = ["--rollout-batch-size", "1"]
+    assert parser.parse_args(required_args).preload_vision_features is False
+    assert parser.parse_args([*required_args, "--preload-vision-features"]).preload_vision_features is True
 
 
 def test_sglang_vision_feature_cache_argument_rejects_negative_bytes():

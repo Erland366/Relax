@@ -15,20 +15,20 @@ def _vision_component():
 
 
 def test_disabled_vision_encoder_config_preserves_existing_launchers():
-    _vision_component().validate_vision_encoder_config(Namespace(vision_encoder_backend="disabled"))
+    _vision_component().validate_vision_encoder_config(Namespace(vision_encoder_device="gpu"))
 
 
-def test_vision_encoder_arguments_expose_opt_in_gpu_weight_omission():
+def test_vision_encoder_arguments_expose_opt_in_gpu_encoder_skip():
     arguments = importlib.import_module("relax.utils.arguments")
     parser = arguments.get_slime_extra_args_provider()(ArgumentParser())
 
     actions = [
         action
         for action in parser._actions
-        if "--vision-encoder-omit-gpu-weights" in action.option_strings
+        if "--skip-gpu-vision-encoder" in action.option_strings
     ]
 
-    assert len(actions) == 1, "--vision-encoder-omit-gpu-weights must be registered"
+    assert len(actions) == 1, "--skip-gpu-vision-encoder must be registered"
     assert actions[0].default is False
     assert actions[0].const is True
 
@@ -49,11 +49,11 @@ def test_vision_encoder_arguments_default_to_one_cpu_replica():
 
 def test_pytorch_vision_encoder_requires_positive_replica_count():
     config = Namespace(
-        vision_encoder_backend="pytorch",
+        vision_encoder_device="cpu",
         vision_encoder_num_replicas=0,
         vision_encoder_num_cpus=8,
         vision_encoder_cache_max_bytes=1024,
-        vision_encoder_max_batch_size=8,
+        vision_encoder_max_images_per_request=8,
         resource={"vision_encoder": [1, 0]},
         freeze_vision_model=True,
         freeze_vision_projection=True,
@@ -65,11 +65,11 @@ def test_pytorch_vision_encoder_requires_positive_replica_count():
 
 def test_multiple_cpu_vision_replicas_keep_one_cpu_only_service_resource():
     config = Namespace(
-        vision_encoder_backend="pytorch",
+        vision_encoder_device="cpu",
         vision_encoder_num_replicas=3,
         vision_encoder_num_cpus=8,
         vision_encoder_cache_max_bytes=1024,
-        vision_encoder_max_batch_size=8,
+        vision_encoder_max_images_per_request=8,
         resource={"vision_encoder": [1, 0]},
         freeze_vision_model=True,
         freeze_vision_projection=True,
@@ -81,7 +81,7 @@ def test_multiple_cpu_vision_replicas_keep_one_cpu_only_service_resource():
 
 def test_pytorch_vision_encoder_requires_frozen_tower_and_projection():
     config = Namespace(
-        vision_encoder_backend="pytorch",
+        vision_encoder_device="cpu",
         vision_encoder_num_cpus=8,
         resource={"vision_encoder": [1, 0]},
         freeze_vision_model=True,
@@ -92,13 +92,13 @@ def test_pytorch_vision_encoder_requires_frozen_tower_and_projection():
         _vision_component().validate_vision_encoder_config(config)
 
 
-def test_omit_gpu_vision_weights_requires_pytorch_cpu_encoder():
+def test_skip_gpu_vision_encoder_requires_cpu_vision_encoder():
     config = Namespace(
-        vision_encoder_backend="disabled",
-        vision_encoder_omit_gpu_weights=True,
+        vision_encoder_device="gpu",
+        skip_gpu_vision_encoder=True,
     )
 
-    with pytest.raises(ValueError, match="omit.*GPU.*pytorch"):
+    with pytest.raises(ValueError, match="skip_gpu_vision_encoder.*vision_encoder_device='cpu'"):
         _vision_component().validate_vision_encoder_config(config)
 
 
@@ -111,13 +111,13 @@ def test_omit_gpu_vision_weights_requires_pytorch_cpu_encoder():
         ({"context_parallel_size": 2}, "context_parallel_size=1"),
     ],
 )
-def test_omit_gpu_vision_weights_requires_frozen_pp1_cp1_config(override, message):
+def test_skip_gpu_vision_encoder_requires_frozen_pp1_cp1_config(override, message):
     values = {
-        "vision_encoder_backend": "pytorch",
-        "vision_encoder_omit_gpu_weights": True,
+        "vision_encoder_device": "cpu",
+        "skip_gpu_vision_encoder": True,
         "vision_encoder_num_cpus": 8,
         "vision_encoder_cache_max_bytes": 1024,
-        "vision_encoder_max_batch_size": 8,
+        "vision_encoder_max_images_per_request": 8,
         "resource": {"vision_encoder": [1, 0]},
         "freeze_vision_model": True,
         "freeze_vision_projection": True,
@@ -137,7 +137,7 @@ def test_register_vision_encoder_only_when_enabled(monkeypatch):
     monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising=False)
     vision_component = _vision_component()
     algo = {}
-    config = Namespace(genrm_model_path=None, vision_encoder_backend="pytorch")
+    config = Namespace(genrm_model_path=None, vision_encoder_device="cpu")
 
     roles = vision_component.register_vision_encoder(config, algo)
 
@@ -398,10 +398,10 @@ def test_vision_encoder_init_builds_selectively_loaded_cpu_eval_backend(monkeypa
     )
 
     config = Namespace(
-        vision_encoder_backend="pytorch",
+        vision_encoder_device="cpu",
         vision_encoder_num_cpus=2,
         vision_encoder_cache_max_bytes=2048,
-        vision_encoder_max_batch_size=8,
+        vision_encoder_max_images_per_request=8,
         resource={"vision_encoder": [1, 0]},
         freeze_vision_model=True,
         freeze_vision_projection=True,

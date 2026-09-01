@@ -227,18 +227,18 @@ payload produced -> transported -> parsed -> injected into model -> logits match
 ```
 
 The first three states are structural evidence only. Cache hits, valid feature
-IDs, successful request parsing, GPU-weight omission, or a completed RL cycle
+IDs, successful request parsing, skipping the GPU encoder, or a completed RL cycle
 do not prove that the consumer passed the supplied representation into its
 language-model forward.
 
 ```text
 structural contract
-  -> standalone representation parity
+  -> standalone feature parity
   -> standalone language-logit parity
   -> live rollout-backend parity
   -> live training-backend parity
   -> end-to-end behavioral parity
-  -> resident-versus-omitted VRAM
+  -> GPU-encoder-kept versus GPU-encoder-skipped VRAM
   -> throughput and scaling
 ```
 
@@ -246,7 +246,7 @@ structural contract
    order, shapes, grid metadata, dtype, and expected language-layer injection
    indexes. For Qwen3-VL, check the final projected stream and every projected
    DeepStack stream independently.
-2. **Standalone representation parity:** compare native and precomputed
+2. **Standalone feature parity:** compare GPU and precomputed
    features with cosine, absolute-error distribution, finite-value checks, and
    elementwise-close fraction. Do not require bitwise identity across CPU and
    GPU BF16 kernels.
@@ -266,8 +266,8 @@ structural contract
    distribution, validity, and controls. A completed rollout/optimizer smoke
    proves plumbing, not semantic parity.
 7. **Memory isolation:** compare the same precomputed-feature path first with
-   GPU encoder weights resident and then omitted. Do not attribute the full
-   native-versus-offloaded VRAM difference to omitted parameters.
+   GPU encoder weights kept and then skipped. Do not attribute the full
+   GPU-versus-CPU VRAM difference to skipped parameters.
 8. **Performance:** tune transport, CPU threads, batching, routing, and replica
    count only after every semantic gate passes. Track total requests separately
    from backend encode work, and aggregate counters across replicas.
@@ -306,9 +306,9 @@ Before adding mutable server state, benchmark a compact lossless inline
 representation. For BF16 features, send contiguous bytes plus explicit dtype
 and shape in the existing request envelope; base64 is acceptable as the
 stateless first gate. Require an exact BF16 bit round trip and repeat the live
-native-versus-precomputed logit gate. Decode before the rollout backend's base
+GPU-versus-CPU-precomputed logit gate. Decode before the rollout backend's base
 multimodal processor reads `feature`, remove transport-only fields afterward,
-and guard the decoder so native PIL/media objects retain their established
+and guard the decoder so GPU PIL/media objects retain their established
 path. Preserve a legacy reader only when migration compatibility is explicit.
 
 If repeated transport across distinct requests remains material afterward,
@@ -331,7 +331,7 @@ hashing, and the actor's tensor-only batch contract remains unchanged.
 
 For fully asynchronous VRAM comparisons, retain per-role device peaks and
 phase context. One simultaneous cluster maximum is schedule-sensitive; isolate
-omission with repeated runs or synchronized phase-specific probes.
+VRAM saving from skipping the GPU encoder with repeated runs or synchronized phase-specific probes.
 
 The corrected Qwen3-VL example exposed the pattern: a 524,312-byte feature
 became a 2.907 MB JSON request, 768 evaluation requests sent 2.233 GB, and the
@@ -341,9 +341,9 @@ universal thresholds.
 
 The 2026-08-04 follow-up grouped stochastic evaluation independently of reward
 grouping and replaced nested numeric JSON with inline BF16 base64. Under the
-same omitted-weight workload, evaluation fell from 1.117 GB grouped nested
+same skipped-weight workload, evaluation fell from 1.117 GB grouped nested
 traffic to 268.9 MB packed traffic, and each 64-sample rollout sent 5.60 MB.
-Live native-versus-packed tokens matched with maximum A/B log-probability delta
+Live GPU-versus-packed tokens matched with maximum A/B log-probability delta
 `1.43e-6`; all four optimizer updates passed. See the packed-transport report
 before proposing a feature registry.
 
@@ -358,8 +358,84 @@ only raw `item.feature` values. The corrected Qwen3-VL path uses an explicit
 all-precomputed prefill adapter: it validates and splits the packed final plus
 DeepStack streams, scatters the final stream into image-token positions, and
 passes the visual-position mask and ordered DeepStack streams to the language
-model. Native-image requests and decode keep their original path, while mixed
-native/precomputed prefill fails explicitly.
+model. GPU-image requests and decode keep their original path, while mixed
+GPU/CPU-precomputed prefill fails explicitly.
+
+#### Full-dataset preload comparison and critical-path adoption gate
+
+When a matched lazy-cache comparison is neutral, do not assume that cold fill
+hid a steady-state training-speed benefit. Run a full-dataset preload comparison only
+for a finite eager dataset whose complete immutable feature set fits in both
+enabled caches. Keep it disabled by default and use it as a correctness and
+upper-bound experiment, not as an automatic production optimization.
+
+Before rollout cycle 0, the full-dataset preload must:
+
+1. Snapshot the complete ordered dataset without calling the consuming sample
+   path or changing its cursor, epoch, shuffle state, or fingerprint.
+2. Produce every immutable feature through the production processor and frozen
+   encoder, deduplicate by the complete schema/revision/feature identity, and
+   admit every unique feature into the rollout engine without tokenization,
+   prefill, decode, or KV-cache creation.
+3. Publish an identity only after admission succeeds and prove that both caches
+   retains every expected feature with zero eviction.
+4. Record exact feature identities, grids, bytes, admission counts, residency,
+   one-time wall time, and proof of zero generation and training work.
+5. Abort before service loops and actor training on any capacity, identity,
+   dataset-state, or admission mismatch. Never silently fall back to raw vision.
+
+Compare no-cache and full-dataset-preload runs in matched, counterbalanced repeats with
+independent repeat seeds. Treat complete runs as the experimental
+units; rollout cycles within a run are repeated observations, not independent
+replicates. Reject incomplete profiles rather than pooling their completed
+cycles into the accepted matrix.
+
+Report three boundaries separately:
+
+1. Mechanism effects such as backend encodes, hit/miss accounting, request
+   bytes, serialization, service RTT, and rollout time.
+2. Raw cycle-0-inclusive end-to-end training-cycle effect.
+3. End-to-end effect after charging the one-time preload cost over the measured
+   horizon.
+
+For each matched repeat, compute the raw training-cycle speedup:
+
+$$
+S_{\mathrm{preload}} = 1 -
+\frac{\overline{T}_{\mathrm{full\ dataset\ preload}}}{\overline{T}_{\mathrm{no\ cache}}}
+$$
+
+Across $K$ cycles, compute:
+
+$$
+S_{\mathrm{including\ preload}}(K) =
+1 -
+\frac{T_{\mathrm{preload}} + \sum_{i=0}^{K-1}T_{\mathrm{full\ dataset\ preload},i}}
+{\sum_{i=0}^{K-1}T_{\mathrm{no\ cache},i}}
+$$
+
+Only report finite cycles to recover preload time when the full-dataset-preload run is
+actually faster. If any repeat has the opposite sign or the paired confidence
+interval crosses zero, a mean over only the recovering repeats is descriptive and
+must not become an unconditional recovery claim.
+
+The completed Qwen3-VL prompts32_samples2 full-dataset preload used four counterbalanced repeats, 22 cycles per
+profile, and 64 preloaded features. It accepted 176 cycles, 11,264 valid
+responses, and 352 optimizer completions. Starting with all features cached reduced rollout
+time by `61.806%`, mean service RTT by `97.724%`, request bytes by `99.824%`,
+and serialization time by `71.158%`. The paired raw training-cycle speedup was only
+`+0.324%` with a 95% confidence interval of `-4.100%` to `+4.748%`; charging
+the mean `8.660052 s` preload over 22 cycles produced `-2.889%` with a 95%
+confidence interval of `-7.340%` to `+1.562%`. Weight-update time changed by
+only `+0.110%`.
+
+The decision boundary is therefore explicit: the cache has a proven
+frozen-vision-feature mechanism benefit but no demonstrated `prompts32_samples2` training-throughput
+benefit. Retain it as an opt-in correctness tool. Do not adopt preloading or
+additional cache engineering as a training-speed optimization until a matched
+workload proves that rollout or feature transport paces the actor. Keep
+training and weight-update timing visible as bottleneck covariates without
+redefining them as the CPU-offload contribution.
 
 ### CPU offload capacity protocol
 
@@ -367,7 +443,7 @@ Do not choose CPU threads, replicas, dynamic batching, sticky routing, or a
 feature registry from isolated encoder throughput. Apply these gates in order:
 
 ```text
-representation parity
+feature parity
   -> language-logit parity
   -> live consumer demand
   -> offline CPU supply
@@ -378,7 +454,7 @@ representation parity
 Measure consumer demand before supply. For grouped RL workloads, keep total
 generated responses constant while increasing unique images so that actor
 sample volume does not confound CPU demand. Compute peak demand from steady
-cycles as unique feature IDs consumed divided by the corresponding actor-cycle
+cycles as unique feature IDs consumed divided by the corresponding training-cycle
 wall time. A performance-only `n=1` saturation probe must not be described as
 a meaningful GRPO learning configuration.
 
@@ -425,21 +501,21 @@ directly to a database or shared feature registry.
 
 The 2026-08-06 Qwen3-VL run explains why the ordering matters: one uncached
 one-thread CPU replica kept actor wait at `0.88%` with full rollout/actor
-overlap even though packed requests were `383.5` times larger than native
+overlap even though packed requests were `383.5` times larger than GPU
 requests. The August 11 allocation then exposed only two SMT siblings of one
-physical core, so the scaling matrix correctly remained unrun. The later E1
+physical core, so the scaling matrix correctly remained unrun. The later CPU vision demand
 allocation measured a global peak demand of `5.8588356399` images/s and a
-`7.3235445499` images/s capacity target; D2 actor wait still remained below
+`7.3235445499` images/s capacity target; prompts32_samples2 actor wait still remained below
 1%. Read these reports before claiming a CPU layout, cache speedup, or batching
 result:
 
 - `training_reports/2026-08-06-qwen3-vl-cpu-vision-steady-state-overlap.md`
 - `training_reports/2026-08-11-qwen3-vl-cpu-vit-scaling-readiness.md`
-- `training_reports/2026-08-18-qwen3-vl-policy-invariant-representation-cache.md`
+- `training_reports/2026-08-18-qwen3-vl-reuse-frozen-vision-features.md`
 
 ### Qwen3-VL live regression probe
 
-Run the fixed-image native-versus-precomputed comparison inside one real
+Run the fixed-image GPU-versus-CPU-precomputed comparison inside one real
 SGLang transformers server before benchmarking the CPU path:
 
 ```bash
@@ -460,20 +536,22 @@ decoded text on all eight images. Its maximum A/B log-probability delta was
 `1.043081283569336e-07`, and maximum normalized action-probability delta was
 `1.7429432036530912e-08`.
 
-The follow-up omitted-weight Relax run kept rollout-versus-Megatron
+The follow-up skipped-weight Relax run kept rollout-versus-Megatron
 sampled-token log-probability mean absolute differences below `5e-7` at both
 optimizer updates. This is a live actual-sample cross-backend gate, not a
-within-Megatron native-versus-precomputed full-vocabulary comparison.
+within-Megatron GPU-versus-CPU-precomputed full-vocabulary comparison.
 
 Evidence and measured examples:
 
 - `training_reports/2026-07-30-qwen3-vl-cpu-gpu-vision-parity.md`
 - `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`
-- `training_reports/2026-07-31-qwen3-vl-vision-three-mode-vram.md`
+- `training_reports/2026-07-31-qwen3-vl-gpu-cpu-vision-vram.md`
 - `training_reports/2026-07-31-qwen3-vl-live-precomputed-deepstack-parity.md`
-- `training_reports/2026-08-01-qwen3-vl-corrected-three-mode-performance.md`
+- `training_reports/2026-08-01-qwen3-vl-gpu-cpu-vision-performance.md`
 - `training_reports/2026-08-03-qwen3-vl-sglang-parallel-sampling.md`
 - `training_reports/2026-08-04-qwen3-vl-packed-cpu-vision-transport.md`
+- `training_reports/2026-08-25-qwen3-vl-compare-vision-settings.md`
+- `training_reports/2026-08-26-qwen3-vl-preload-all-vision-features.md`
 
 ## Validation Checklist
 

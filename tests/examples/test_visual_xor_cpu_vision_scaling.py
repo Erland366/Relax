@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from examples.visual_xor.benchmark_cpu_vision_scaling import (
+from examples.visual_xor.measure_cpu_vision_scaling import (
     summarize_scaling_results,
     write_scaling_artifact,
 )

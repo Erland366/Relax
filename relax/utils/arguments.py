@@ -107,21 +107,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=("Max number of actor checkpoints to keep."),
             )
             parser.add_argument(
-                "--vision-encoder-backend",
-                choices=["disabled", "pytorch"],
-                default="disabled",
+                "--vision-encoder-device",
+                choices=["gpu", "cpu"],
+                default="gpu",
                 help=(
-                    "Optional frozen Qwen3-VL image encoder service. 'pytorch' runs the visual tower on CPU; "
-                    "'disabled' preserves the existing in-model vision path."
+                    "Device used by the frozen Qwen3-VL vision encoder when --vision-device-mode=fixed. "
+                    "Selecting 'cpu' also deploys the CPU vision service required by automatic mode."
                 ),
             )
             parser.add_argument(
-                "--vision-encoder-omit-gpu-weights",
+                "--skip-gpu-vision-encoder",
                 action="store_true",
                 default=False,
                 help=(
-                    "Do not construct the frozen Qwen3-VL visual tower in Megatron or materialize it in "
-                    "SGLang. Requires --vision-encoder-backend=pytorch and precomputed visual features."
+                    "Do not construct the frozen Qwen3-VL vision encoder in Megatron or SGLang. "
+                    "Requires --vision-encoder-device=cpu."
                 ),
             )
             parser.add_argument(
@@ -152,7 +152,35 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--vision-encoder-max-batch-size",
+                "--preload-vision-features",
+                action="store_true",
+                default=False,
+                help="Cache every feature in the finite eager dataset before rollout cycle 0.",
+            )
+            parser.add_argument(
+                "--vision-device-mode",
+                choices=["fixed", "automatic"],
+                default="fixed",
+                help=(
+                    "How to choose the frozen vision encoder's device. 'fixed' follows "
+                    "--vision-encoder-device. 'automatic' chooses CPU or GPU once per rollout cycle "
+                    "from --vision-device-plan."
+                ),
+            )
+            parser.add_argument(
+                "--vision-device-plan",
+                type=str,
+                default=None,
+                help="JSON file containing measured CPU/GPU times and rollout-cycle workloads.",
+            )
+            parser.add_argument(
+                "--vision-device-minimum-gap",
+                type=float,
+                default=None,
+                help="Optional minimum predicted time gap required to switch devices.",
+            )
+            parser.add_argument(
+                "--vision-encoder-max-images-per-request",
                 type=int,
                 default=8,
                 help="Maximum number of images accepted by one CPU vision encoder request.",

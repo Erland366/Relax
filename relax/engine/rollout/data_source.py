@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Relax Authors. All Rights Reserved.
 
 import abc
+import hashlib
 import os
+import pickle
 import sys
 from argparse import Namespace
 from pathlib import Path
@@ -51,6 +53,7 @@ _DATA_SOURCE_CONFIG_FIELDS = (
     "video_fps_min_frames",
     "video_max_token_num",
     "video_min_token_num",
+    "preload_vision_features",
 )
 
 
@@ -248,6 +251,31 @@ class RolloutDataSource(DataSource):
 
     def lengths(self):
         return len(self.dataset)
+
+    def _eager_dataset_samples(self) -> list[Sample]:
+        """Return eager samples or fail with the snapshot-specific invariant."""
+        if self._use_streaming:
+            raise RuntimeError("Cannot snapshot a streaming rollout dataset")
+        if self.dataset is None:
+            raise RuntimeError("Cannot snapshot an uninitialized rollout dataset")
+        return self.dataset.samples
+
+    def snapshot_dataset_samples(self) -> list[Sample]:
+        """Copy every eager-dataset sample without advancing rollout state."""
+        return [_shallow_copy_sample(sample) for sample in self._eager_dataset_samples()]
+
+    def snapshot_dataset_state(self) -> dict[str, int | str]:
+        """Report eager-dataset position and ordered content without advancing it."""
+        samples = self._eager_dataset_samples()
+        serialized_samples = pickle.dumps(samples, protocol=pickle.HIGHEST_PROTOCOL)
+        return {
+            "sample_offset": self.sample_offset,
+            "epoch_id": self.epoch_id,
+            "sample_group_index": self.sample_group_index,
+            "sample_index": self.sample_index,
+            "dataset_size": len(samples),
+            "dataset_fingerprint": hashlib.sha256(serialized_samples).hexdigest(),
+        }
 
     def get_samples(self, num_samples):
         # TODO further improve code

@@ -961,6 +961,175 @@ class RolloutManager(ReloadableMixin):
         assert self.args.rollout_global_dataset
         return ray.get(self.data_source.lengths.remote()) // self.args.rollout_batch_size
 
+    async def _encode_and_cache_vision_features(
+        self,
+        sglang_rollout,
+        state,
+        samples: list[Sample],
+        engine_url: str,
+    ) -> dict[str, Any]:
+        """Encode and cache each unique feature while retaining preload accounting."""
+        published_features = sglang_rollout._published_sglang_vision_features(state)
+        feature_ids = []
+        feature_artifacts = []
+        cached_feature_bytes = 0
+        image_processor_seconds = 0.0
+        encode_round_trip_seconds = 0.0
+        serialization_seconds = 0.0
+        cache_request_seconds = 0.0
+        sglang_cache = {"entries": 0, "resident_bytes": 0, "evictions": 0, "stores": 0}
+
+        for sample in samples:
+            _, multimodal_train_inputs, processor_elapsed = await sglang_rollout._run_image_processor(
+                state,
+                self.args,
+                sample.prompt,
+                sample.multimodal_inputs,
+            )
+            image_processor_seconds += processor_elapsed
+
+            encode_started_at = time.monotonic()
+            features = await sglang_rollout._run_cpu_vision_encoder(state, multimodal_train_inputs)
+            encode_round_trip_seconds += time.monotonic() - encode_started_at
+            feature_identity = (
+                features.feature_id,
+                features.vision_revision,
+                features.feature_schema_version,
+            )
+            if feature_identity in published_features:
+                continue
+
+            serialization_started_at = time.monotonic()
+            rollout_payload, _ = sglang_rollout.prepare_qwen3_vl_precomputed_rollout_inputs(
+                payload={},
+                multimodal_train_inputs=multimodal_train_inputs,
+                features=features,
+            )
+            cache_payload = sglang_rollout.serialize_sglang_precomputed_image_data(
+                rollout_payload["image_data"][0]
+            )
+            serialization_seconds += time.monotonic() - serialization_started_at
+
+            cache_request_started_at = time.monotonic()
+            cached = await sglang_rollout.post(
+                f"{engine_url}/relax/vision-features/cache",
+                cache_payload,
+            )
+            cache_request_seconds += time.monotonic() - cache_request_started_at
+            expected_fields = {
+                "feature_id": features.feature_id,
+                "vision_revision": features.vision_revision,
+                "feature_schema_version": features.feature_schema_version,
+                "image_grid_thw": cache_payload["image_grid_thw"],
+            }
+            for field_name, expected_value in expected_fields.items():
+                if cached.get(field_name) != expected_value:
+                    raise RuntimeError(
+                        "Vision feature cache response has mismatched "
+                        f"{field_name}: expected {expected_value!r}, got {cached.get(field_name)!r}"
+                    )
+
+            published_features.add(feature_identity)
+            feature_ids.append(features.feature_id)
+            feature_artifacts.append(
+                {
+                    **expected_fields,
+                    "image_tokens": features.vision_embeds.shape[0],
+                    "feature_bytes": features.nbytes,
+                }
+            )
+            cached_feature_bytes += cached["cached_bytes"]
+            sglang_cache.update(
+                entries=cached["entries"],
+                resident_bytes=cached["resident_bytes"],
+                evictions=cached["evictions"],
+                stores=sglang_cache["stores"] + 1,
+            )
+
+        return {
+            "published_features": published_features,
+            "feature_ids": feature_ids,
+            "feature_artifacts": feature_artifacts,
+            "cached_feature_bytes": cached_feature_bytes,
+            "image_processor_seconds": image_processor_seconds,
+            "encode_round_trip_seconds": encode_round_trip_seconds,
+            "serialization_seconds": serialization_seconds,
+            "cache_request_seconds": cache_request_seconds,
+            "sglang_cache": sglang_cache,
+        }
+
+    async def preload_vision_features(self) -> dict[str, Any]:
+        """Cache every dataset feature without consuming dataset samples."""
+        from relax.engine.rollout import sglang_rollout
+
+        started_at = time.monotonic()
+        rollout_engines = self.rollout_engines
+        if len(rollout_engines) != 1:
+            raise RuntimeError(
+                "Preloading vision features requires one rollout engine; "
+                f"found {len(rollout_engines)}"
+            )
+        engine_url = await rollout_engines[0].get_url.remote()
+        if not isinstance(engine_url, str) or not engine_url.strip():
+            raise RuntimeError("Preloading vision features requires a rollout engine URL")
+
+        state = sglang_rollout.GenerateState(self.args)
+        dataset_state_before = await self.data_source.snapshot_dataset_state.remote()
+        samples = await self.data_source.snapshot_dataset_samples.remote()
+        preload = await self._encode_and_cache_vision_features(sglang_rollout, state, samples, engine_url)
+
+        cpu_cache = sglang_rollout._aggregate_cpu_vision_snapshots(
+            state.vision_encoder_cumulative_replica_snapshots
+        )
+        unique_features = len(preload["published_features"])
+        for cache_name, snapshot in (("CPU", cpu_cache), ("SGLang", preload["sglang_cache"])):
+            if snapshot["evictions"]:
+                raise RuntimeError(
+                    f"{cache_name} vision feature cache reported {snapshot['evictions']} eviction(s) during preload"
+                )
+            if snapshot["entries"] != unique_features:
+                raise RuntimeError(
+                    f"{cache_name} vision feature cache entries {snapshot['entries']} do not match "
+                    f"{unique_features} unique features"
+                )
+        dataset_state_after = await self.data_source.snapshot_dataset_state.remote()
+        if dataset_state_after != dataset_state_before:
+            raise RuntimeError(
+                "dataset state changed while preloading vision features: "
+                f"before={dataset_state_before!r}, after={dataset_state_after!r}"
+            )
+        await sglang_rollout._collect_cpu_vision_metrics(state, phase="preload")
+        return {
+            "schema_version": 2,
+            "dataset_samples": len(samples),
+            "unique_features": unique_features,
+            "duplicate_features": len(samples) - unique_features,
+            "feature_ids": preload["feature_ids"],
+            "features": preload["feature_artifacts"],
+            "work_counters": {
+                "generation_requests": 0,
+                "generated_samples": 0,
+                "training_samples": 0,
+            },
+            "dataset_state": {
+                "before": dataset_state_before,
+                "after": dataset_state_after,
+                "unchanged": True,
+            },
+            "wall_seconds": time.monotonic() - started_at,
+            "image_processor_seconds": preload["image_processor_seconds"],
+            "encode_round_trip_seconds": preload["encode_round_trip_seconds"],
+            "serialization_seconds": preload["serialization_seconds"],
+            "cache_request_seconds": preload["cache_request_seconds"],
+            "cached_feature_bytes": preload["cached_feature_bytes"],
+            "cpu_cache": {
+                "entries": cpu_cache["entries"],
+                "resident_bytes": cpu_cache["resident_bytes"],
+                "evictions": cpu_cache["evictions"],
+            },
+            "sglang_cache": preload["sglang_cache"],
+        }
+
     async def generate(self, rollout_id):
         self.rollout_id = rollout_id
         self.health_monitoring_resume()

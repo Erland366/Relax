@@ -477,6 +477,9 @@ class Controller:
                     if ROLES.reference in self.serve_dict:
                         handles.append(self.serve_dict[ROLES.reference].recv_weight_fully_async())
                     [await handle for handle in handles]
+                if getattr(self.config, "preload_vision_features", False):
+                    preload_summary = await rollout_manager.preload_vision_features.remote()
+                    logger.info("VISION_FEATURE_PRELOAD %r", preload_summary)
                 step = await self.serve_dict[ROLES.actor].get_step()
                 for service in self.serve_dict.values():
                     await service.set_step(step)

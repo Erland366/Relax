@@ -96,6 +96,50 @@ class SGLangVisionFeatureCache:
             feature_schema_version=feature_schema_version,
         )
 
+    def _publish_inline(self, payload: dict[str, Any]) -> int:
+        identity = self._validated_identity(payload)
+        self._validated_grid(payload)
+        cached_payload = dict(payload)
+        feature = _materialize_inline_bf16_feature(cached_payload)
+        if feature is None:
+            feature = torch.as_tensor(cached_payload["feature"], dtype=torch.bfloat16)
+        if feature.ndim != 2 or feature.shape[0] == 0 or feature.shape[1] == 0:
+            raise ValueError(
+                "SGLang cached vision feature must be a non-empty rank-2 tensor, "
+                f"got shape {tuple(feature.shape)}"
+            )
+        size_bytes = feature.numel() * feature.element_size()
+        cached_payload["feature"] = feature
+        self._cache.put(identity, cached_payload, size_bytes=size_bytes)
+        return size_bytes
+
+    def cache(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Cache one inline feature without running SGLang generation."""
+        if self._cache is None:
+            raise RuntimeError("SGLang vision feature cache is disabled")
+        if payload.get("format") != "precomputed_embedding":
+            raise ValueError("Caching a vision feature requires an inline feature payload")
+
+        image_grid_thw = self._validated_grid(payload).tolist()
+        cached_bytes = self._publish_inline(payload)
+        if cached_bytes > self._cache.max_bytes:
+            raise ValueError(
+                "SGLang cached vision feature exceeds cache capacity: "
+                f"feature_bytes={cached_bytes}, max_bytes={self._cache.max_bytes}"
+            )
+        feature_id, vision_revision, feature_schema_version = self._identity(payload)
+        stats = self._cache.stats
+        return {
+            "feature_id": feature_id,
+            "vision_revision": vision_revision,
+            "feature_schema_version": feature_schema_version,
+            "image_grid_thw": image_grid_thw,
+            "entries": stats["entries"],
+            "resident_bytes": stats["resident_bytes"],
+            "evictions": stats["evictions"],
+            "cached_bytes": cached_bytes,
+        }
+
     def resolve(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Publish an inline feature or resolve an ID-only request."""
         if self._cache is None:
@@ -103,23 +147,7 @@ class SGLangVisionFeatureCache:
 
         payload_format = payload.get("format")
         if payload_format == "precomputed_embedding":
-            identity = self._validated_identity(payload)
-            self._validated_grid(payload)
-            cached_payload = dict(payload)
-            feature = _materialize_inline_bf16_feature(cached_payload)
-            if feature is None:
-                feature = torch.as_tensor(cached_payload["feature"], dtype=torch.bfloat16)
-            if feature.ndim != 2 or feature.shape[0] == 0 or feature.shape[1] == 0:
-                raise ValueError(
-                    "SGLang cached vision feature must be a non-empty rank-2 tensor, "
-                    f"got shape {tuple(feature.shape)}"
-                )
-            cached_payload["feature"] = feature
-            self._cache.put(
-                identity,
-                cached_payload,
-                size_bytes=feature.numel() * feature.element_size(),
-            )
+            self._publish_inline(payload)
             return payload
 
         if payload_format != "precomputed_embedding_id":
@@ -145,11 +173,32 @@ class SGLangVisionFeatureCache:
         return resolved
 
 
-class OmittedQwen3VLVisual(torch.nn.Module):
-    """Parameterless guard for raw-image requests in GPU omission mode."""
+def install_sglang_vision_feature_cache_route(app, processor_cls) -> bool:
+    """Install the cache-only endpoint on SGLang's HTTP FastAPI app."""
+    marker = "_relax_vision_feature_cache_route_installed"
+    if getattr(app, marker, False):
+        return False
+
+    from fastapi import HTTPException
+
+    @app.post("/relax/vision-features/cache")
+    async def _cache_vision_feature(payload: dict[str, Any]):
+        try:
+            return processor_cls._relax_sglang_vision_feature_cache.cache(payload)
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    setattr(app, marker, True)
+    return True
+
+
+class Qwen3VLPrecomputedOnlyVisual(torch.nn.Module):
+    """Parameterless guard for raw-image requests when the GPU encoder is skipped."""
 
     def forward(self, *args, **kwargs):
-        raise RuntimeError("Qwen3-VL GPU vision weights were omitted; provide precomputed vision features")
+        raise RuntimeError(
+            "Qwen3-VL GPU vision encoder was skipped; provide precomputed vision features"
+        )
 
 
 def _get_qwen3_vl_precomputed_items(forward_batch: Any) -> list[list[Any]] | None:
@@ -158,20 +207,20 @@ def _get_qwen3_vl_precomputed_items(forward_batch: Any) -> list[list[Any]] | Non
 
     request_items = []
     has_precomputed = False
-    has_native = False
+    has_raw_media = False
     for mm_input in forward_batch.mm_inputs or []:
         items = [] if mm_input is None else [item for item in mm_input.mm_items or [] if item is not None]
         request_items.append(items)
         for item in items:
             if getattr(item, "precomputed_embeddings", None) is None:
-                has_native = True
+                has_raw_media = True
             else:
                 has_precomputed = True
 
     if not has_precomputed:
         return None
-    if has_native:
-        raise RuntimeError("Qwen3-VL SGLang transformers batches cannot mix native and precomputed vision items")
+    if has_raw_media:
+        raise RuntimeError("Qwen3-VL SGLang transformers batches cannot mix GPU-computed and precomputed vision items")
     return request_items
 
 
@@ -336,7 +385,7 @@ def patch_qwen3_vl_transformers_precomputed_forward(transformers_multimodal_mixi
     return True
 
 
-def patch_qwen3_vl_transformers_for_omitted_vision(
+def patch_qwen3_vl_transformers_to_skip_gpu_vision_encoder(
     *,
     qwen3_vl_model_cls,
     transformers_base_cls,
@@ -347,14 +396,14 @@ def patch_qwen3_vl_transformers_for_omitted_vision(
         return False
 
     original_init = qwen3_vl_model_cls.__init__
-    if getattr(original_init, "_relax_omitted_qwen3_vl_vision", False):
+    if getattr(original_init, "_relax_skipped_qwen3_vl_vision", False):
         return False
 
     def _init_without_gpu_vision(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
-        self.visual = OmittedQwen3VLVisual()
+        self.visual = Qwen3VLPrecomputedOnlyVisual()
 
-    _init_without_gpu_vision._relax_omitted_qwen3_vl_vision = True
+    _init_without_gpu_vision._relax_skipped_qwen3_vl_vision = True
     _init_without_gpu_vision._relax_original = original_init
     qwen3_vl_model_cls.__init__ = _init_without_gpu_vision
 
@@ -366,7 +415,7 @@ def patch_qwen3_vl_transformers_for_omitted_vision(
             self.skip_prefixes.append(prefix)
         return original_load_weights(self, weights)
 
-    _load_without_gpu_vision._relax_omitted_qwen3_vl_vision = True
+    _load_without_gpu_vision._relax_skipped_qwen3_vl_vision = True
     _load_without_gpu_vision._relax_original = original_load_weights
     transformers_base_cls.load_weights = _load_without_gpu_vision
     return True

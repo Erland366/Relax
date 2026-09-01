@@ -15,8 +15,9 @@
 
 ## Verified result table entries
 
-- CPU/native token match: `8/8`; maximum log-probability drift: `1.43e−6`.
+- CPU/GPU token match: `8/8`; maximum log-probability drift: `1.43e−6`.
 - Peak demand / one-core supply: `5.86 / 17.43 images/s` (`2.98×`).
 - Batch-eight gain: `7.96%`, below the `20%` eligibility gate.
-- Tier 2: request bytes `−99.82%`, serialization `−77.94%`, p95 RTT `−29.30%`.
-- Rollout wall: `1.344 → 1.261 s` (`−6.17%`), below the `10%` adoption gate.
+- SGLang cache: request bytes `−99.82%`, serialization `−77.94%`, p95 RTT `−29.30%`.
+- Rollout time: `1.344 → 1.261 s` (`−6.17%`), below the `10%` adoption gate.
+- Claim boundary: the vision cache-reuse study is rollout-path mechanism evidence, not a training-cycle speedup.

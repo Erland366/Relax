@@ -1,13 +1,13 @@
 # Qwen3-VL Packed CPU Vision Transport
 
 - **Date:** 2026-08-04
-- **Status:** passed serialization benchmark, live native-versus-precomputed
+- **Status:** passed serialization benchmark, live GPU-versus-CPU-precomputed
   parity, grouped evaluation, and a fully asynchronous two-rollout training run
 - **Hardware:** four AMD MI210 GPUs; one Ray CPU reserved for one frozen CPU
   vision replica
 - **Checkpoint:**
   `/vast/users/qirong.ho/erland/Python_project/SFT_training/qwen3-vl-0.37b-visual-xor-refinement-sft`
-- **GPU vision state:** omitted from SGLang, actor, and actor-forward
+- **GPU vision state:** skipped from SGLang, actor, and actor-forward
 - **Checkpoint saving:** disabled
 
 ## Result
@@ -36,7 +36,7 @@ request. A failing test first established that an evaluation prompt with
 group while preserving per-sample reward calculation.
 
 The immutable multimodal object is shared across the branches so the existing
-SGLang native-parallel eligibility proof applies. Deterministic `n=1` controls
+SGLang multi-sample eligibility proof applies. Deterministic `n=1` controls
 remain scalar. The accepted nested-list measurement therefore used:
 
 - 128 held-out SGLang requests with `n=4`, returning 512 samples; and
@@ -82,13 +82,13 @@ The existing `format: precomputed_embedding` object now contains:
 The decoder fails loudly on unsupported dtype, invalid base64, negative or
 malformed shapes, and shape/byte-count mismatch. It reconstructs the original
 BF16 bit pattern exactly. Legacy nested-list payloads remain readable during
-the transition, and native PIL/media objects bypass the packed decoder.
+the transition, and raw PIL/media objects bypass the packed decoder.
 
 Two live failures tightened the integration seam:
 
 1. Decoding after SGLang's base processor was too late; the processor had
    already indexed `dict_item["feature"]` and raised `KeyError`.
-2. Treating every multimodal item as a mapping broke native PIL input with
+2. Treating every multimodal item as a mapping broke raw PIL input with
    `AttributeError: PngImageFile has no attribute get`.
 
 The final decoder runs before that base read and checks that an item is a
@@ -105,7 +105,7 @@ tensor-to-list conversion.
 Artifact:
 `benchmark_results/cpu_vision/20260804_packed_transport/sglang_live_parity.json`
 
-The fixed eight-image native-GPU versus packed-CPU comparison passed inside
+The fixed eight-image GPU versus packed-CPU comparison passed inside
 one live SGLang transformers server.
 
 | Gate | Result |
@@ -134,8 +134,8 @@ The same server also completed eight `n=8` packed requests:
 |---|---|
 | Ray job | `raysubmit_c3YzyTcrTuidT6us` |
 | W&B | `kjp5zomx` |
-| Log | `log/visual-xor-refinement-cpu-omitted-20260804_133243.log` |
-| VRAM artifact | `benchmark_results/cpu_vision/20260804_packed_transport/cpu_omitted_packed_two_rollout_vram.json` |
+| Log | `log/visual-xor-refinement-cpu-skip-gpu-encoder-20260804_133243.log` |
+| VRAM artifact | `benchmark_results/cpu_vision/20260804_packed_transport/cpu_skipped_packed_two_rollout_vram.json` |
 | Exit code | 0 |
 | Monitor wall time | 680.384 s |
 
@@ -187,7 +187,7 @@ and client-side construction/serialization are the direct transport evidence.
 | Parallel samples per request | 8 | 8 |
 | Request-body bytes | 5,602,384 | 5,602,384 |
 | Request-build mean | 13.566 ms | 17.340 ms |
-| Rollout wall time | 3.777 s | 5.142 s |
+| Rollout time time | 3.777 s | 5.142 s |
 | Reward | 0.6875 | 0.671875 |
 | Valid-action rate | 1.0 | 1.0 |
 | CPU encodes | 8 | 8 |
@@ -240,6 +240,6 @@ git diff --check: passed
 ```
 
 The focused suite includes bit-exact BF16 round trips, malformed wire payloads,
-legacy nested lists, native-media bypass, early SGLang processor materialization,
+legacy nested lists, raw-media bypass, early SGLang processor materialization,
 evaluation grouping independent of reward grouping, shared multimodal identity,
 HTTP metrics, and the live parity harness.

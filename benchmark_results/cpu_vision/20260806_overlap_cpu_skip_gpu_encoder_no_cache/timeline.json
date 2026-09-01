@@ -1,0 +1,422 @@
+{
+  "actor_intervals": [
+    {
+      "duration_seconds": 38.0,
+      "finished_at": "2026-08-06 08:20:39",
+      "rollout": 0,
+      "started_at": "2026-08-06 08:20:01",
+      "step": 0
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:20:44",
+      "rollout": 0,
+      "started_at": "2026-08-06 08:20:39",
+      "step": 1
+    },
+    {
+      "duration_seconds": 8.0,
+      "finished_at": "2026-08-06 08:21:08",
+      "rollout": 1,
+      "started_at": "2026-08-06 08:21:00",
+      "step": 0
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:21:13",
+      "rollout": 1,
+      "started_at": "2026-08-06 08:21:09",
+      "step": 1
+    },
+    {
+      "duration_seconds": 10.0,
+      "finished_at": "2026-08-06 08:21:37",
+      "rollout": 2,
+      "started_at": "2026-08-06 08:21:27",
+      "step": 0
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:21:42",
+      "rollout": 2,
+      "started_at": "2026-08-06 08:21:37",
+      "step": 1
+    },
+    {
+      "duration_seconds": 8.0,
+      "finished_at": "2026-08-06 08:22:04",
+      "rollout": 3,
+      "started_at": "2026-08-06 08:21:56",
+      "step": 0
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:22:09",
+      "rollout": 3,
+      "started_at": "2026-08-06 08:22:04",
+      "step": 1
+    },
+    {
+      "duration_seconds": 9.0,
+      "finished_at": "2026-08-06 08:22:31",
+      "rollout": 4,
+      "started_at": "2026-08-06 08:22:22",
+      "step": 0
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:22:35",
+      "rollout": 4,
+      "started_at": "2026-08-06 08:22:31",
+      "step": 1
+    },
+    {
+      "duration_seconds": 10.0,
+      "finished_at": "2026-08-06 08:22:57",
+      "rollout": 5,
+      "started_at": "2026-08-06 08:22:47",
+      "step": 0
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:23:01",
+      "rollout": 5,
+      "started_at": "2026-08-06 08:22:57",
+      "step": 1
+    },
+    {
+      "duration_seconds": 9.0,
+      "finished_at": "2026-08-06 08:23:23",
+      "rollout": 6,
+      "started_at": "2026-08-06 08:23:14",
+      "step": 0
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:23:28",
+      "rollout": 6,
+      "started_at": "2026-08-06 08:23:23",
+      "step": 1
+    },
+    {
+      "duration_seconds": 7.0,
+      "finished_at": "2026-08-06 08:23:49",
+      "rollout": 7,
+      "started_at": "2026-08-06 08:23:42",
+      "step": 0
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:23:55",
+      "rollout": 7,
+      "started_at": "2026-08-06 08:23:50",
+      "step": 1
+    },
+    {
+      "duration_seconds": 9.0,
+      "finished_at": "2026-08-06 08:24:18",
+      "rollout": 8,
+      "started_at": "2026-08-06 08:24:09",
+      "step": 0
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:24:23",
+      "rollout": 8,
+      "started_at": "2026-08-06 08:24:18",
+      "step": 1
+    },
+    {
+      "duration_seconds": 9.0,
+      "finished_at": "2026-08-06 08:24:44",
+      "rollout": 9,
+      "started_at": "2026-08-06 08:24:35",
+      "step": 0
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:24:49",
+      "rollout": 9,
+      "started_at": "2026-08-06 08:24:44",
+      "step": 1
+    },
+    {
+      "duration_seconds": 10.0,
+      "finished_at": "2026-08-06 08:25:12",
+      "rollout": 10,
+      "started_at": "2026-08-06 08:25:02",
+      "step": 0
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:25:16",
+      "rollout": 10,
+      "started_at": "2026-08-06 08:25:12",
+      "step": 1
+    },
+    {
+      "duration_seconds": 10.0,
+      "finished_at": "2026-08-06 08:25:39",
+      "rollout": 11,
+      "started_at": "2026-08-06 08:25:29",
+      "step": 0
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:25:44",
+      "rollout": 11,
+      "started_at": "2026-08-06 08:25:39",
+      "step": 1
+    },
+    {
+      "duration_seconds": 8.0,
+      "finished_at": "2026-08-06 08:26:05",
+      "rollout": 12,
+      "started_at": "2026-08-06 08:25:57",
+      "step": 0
+    },
+    {
+      "duration_seconds": 6.0,
+      "finished_at": "2026-08-06 08:26:11",
+      "rollout": 12,
+      "started_at": "2026-08-06 08:26:05",
+      "step": 1
+    },
+    {
+      "duration_seconds": 8.0,
+      "finished_at": "2026-08-06 08:26:35",
+      "rollout": 13,
+      "started_at": "2026-08-06 08:26:27",
+      "step": 0
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:26:40",
+      "rollout": 13,
+      "started_at": "2026-08-06 08:26:35",
+      "step": 1
+    },
+    {
+      "duration_seconds": 9.0,
+      "finished_at": "2026-08-06 08:27:02",
+      "rollout": 14,
+      "started_at": "2026-08-06 08:26:53",
+      "step": 0
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:27:07",
+      "rollout": 14,
+      "started_at": "2026-08-06 08:27:02",
+      "step": 1
+    },
+    {
+      "duration_seconds": 10.0,
+      "finished_at": "2026-08-06 08:27:29",
+      "rollout": 15,
+      "started_at": "2026-08-06 08:27:19",
+      "step": 0
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:27:33",
+      "rollout": 15,
+      "started_at": "2026-08-06 08:27:29",
+      "step": 1
+    },
+    {
+      "duration_seconds": 10.0,
+      "finished_at": "2026-08-06 08:27:57",
+      "rollout": 16,
+      "started_at": "2026-08-06 08:27:47",
+      "step": 0
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:28:01",
+      "rollout": 16,
+      "started_at": "2026-08-06 08:27:57",
+      "step": 1
+    },
+    {
+      "duration_seconds": 8.0,
+      "finished_at": "2026-08-06 08:28:21",
+      "rollout": 17,
+      "started_at": "2026-08-06 08:28:13",
+      "step": 0
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:28:26",
+      "rollout": 17,
+      "started_at": "2026-08-06 08:28:21",
+      "step": 1
+    },
+    {
+      "duration_seconds": 8.0,
+      "finished_at": "2026-08-06 08:28:47",
+      "rollout": 18,
+      "started_at": "2026-08-06 08:28:39",
+      "step": 0
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:28:51",
+      "rollout": 18,
+      "started_at": "2026-08-06 08:28:47",
+      "step": 1
+    },
+    {
+      "duration_seconds": 8.0,
+      "finished_at": "2026-08-06 08:29:12",
+      "rollout": 19,
+      "started_at": "2026-08-06 08:29:04",
+      "step": 0
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:29:16",
+      "rollout": 19,
+      "started_at": "2026-08-06 08:29:12",
+      "step": 1
+    }
+  ],
+  "rollout_intervals": [
+    {
+      "duration_seconds": 14.0,
+      "finished_at": "2026-08-06 08:20:15",
+      "rollout": 0,
+      "started_at": "2026-08-06 08:20:01"
+    },
+    {
+      "duration_seconds": 3.0,
+      "finished_at": "2026-08-06 08:20:18",
+      "rollout": 1,
+      "started_at": "2026-08-06 08:20:15"
+    },
+    {
+      "duration_seconds": 7.0,
+      "finished_at": "2026-08-06 08:20:25",
+      "rollout": 2,
+      "started_at": "2026-08-06 08:20:18"
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:20:30",
+      "rollout": 3,
+      "started_at": "2026-08-06 08:20:25"
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:20:35",
+      "rollout": 4,
+      "started_at": "2026-08-06 08:20:30"
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:21:04",
+      "rollout": 5,
+      "started_at": "2026-08-06 08:21:00"
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:21:31",
+      "rollout": 6,
+      "started_at": "2026-08-06 08:21:27"
+    },
+    {
+      "duration_seconds": 6.0,
+      "finished_at": "2026-08-06 08:22:02",
+      "rollout": 7,
+      "started_at": "2026-08-06 08:21:56"
+    },
+    {
+      "duration_seconds": 5.0,
+      "finished_at": "2026-08-06 08:22:28",
+      "rollout": 8,
+      "started_at": "2026-08-06 08:22:23"
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:22:51",
+      "rollout": 9,
+      "started_at": "2026-08-06 08:22:47"
+    },
+    {
+      "duration_seconds": 3.0,
+      "finished_at": "2026-08-06 08:23:18",
+      "rollout": 10,
+      "started_at": "2026-08-06 08:23:15"
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:23:46",
+      "rollout": 11,
+      "started_at": "2026-08-06 08:23:42"
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:24:13",
+      "rollout": 12,
+      "started_at": "2026-08-06 08:24:09"
+    },
+    {
+      "duration_seconds": 6.0,
+      "finished_at": "2026-08-06 08:24:41",
+      "rollout": 13,
+      "started_at": "2026-08-06 08:24:35"
+    },
+    {
+      "duration_seconds": 6.0,
+      "finished_at": "2026-08-06 08:25:08",
+      "rollout": 14,
+      "started_at": "2026-08-06 08:25:02"
+    },
+    {
+      "duration_seconds": 7.0,
+      "finished_at": "2026-08-06 08:25:37",
+      "rollout": 15,
+      "started_at": "2026-08-06 08:25:30"
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:26:01",
+      "rollout": 16,
+      "started_at": "2026-08-06 08:25:57"
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:26:31",
+      "rollout": 17,
+      "started_at": "2026-08-06 08:26:27"
+    },
+    {
+      "duration_seconds": 4.0,
+      "finished_at": "2026-08-06 08:26:58",
+      "rollout": 18,
+      "started_at": "2026-08-06 08:26:54"
+    },
+    {
+      "duration_seconds": 6.0,
+      "finished_at": "2026-08-06 08:27:25",
+      "rollout": 19,
+      "started_at": "2026-08-06 08:27:19"
+    }
+  ],
+  "summary": {
+    "actor_finish_count": 40,
+    "actor_start_count": 40,
+    "complete_actor_interval_count": 40,
+    "complete_rollout_interval_count": 20,
+    "overlap_seconds": 105.0,
+    "rollout_finish_count": 20,
+    "rollout_overlap_percent": 100.0,
+    "rollout_start_count": 20,
+    "total_actor_optimizer_wall_seconds": 299.0,
+    "total_rollout_seconds": 105.0,
+    "unmatched_actor_finishes": [],
+    "unmatched_actor_starts": [],
+    "unmatched_rollout_finishes": [],
+    "unmatched_rollout_starts": []
+  }
+}

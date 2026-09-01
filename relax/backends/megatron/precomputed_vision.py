@@ -16,12 +16,12 @@ from relax.backends.vision.qwen3_vl import (
 )
 
 
-class OmittedQwen3VLVisionModel(torch.nn.Module):
+class Qwen3VLPrecomputedOnlyVisionModel(torch.nn.Module):
     """Parameterless guard used when the frozen visual tower lives on CPU."""
 
     def forward(self, *args, **kwargs):
         raise RuntimeError(
-            "Qwen3-VL GPU vision weights were omitted; provide precomputed vision features"
+            "Qwen3-VL GPU vision encoder was skipped; provide precomputed vision features"
         )
 
 

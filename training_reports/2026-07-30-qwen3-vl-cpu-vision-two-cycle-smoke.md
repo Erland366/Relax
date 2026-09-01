@@ -12,7 +12,7 @@
 ## Objective
 
 Prove that the frozen Qwen3-VL CPU visual path works through two complete
-fully-asynchronous Relax cycles while the GPU visual weights remain resident:
+fully-asynchronous Relax cycles while the GPU visual weights remain allocated:
 
 ```text
 image
@@ -52,7 +52,7 @@ rollout                        SGLang on GPU 2
 actor_fwd                      Megatron on GPU 3
 vision_encoder                 one replica, one CPU thread
 VISION_ENCODER_CACHE_MAX_BYTES 1 GiB
-VISION_ENCODER_OMIT_GPU_WEIGHTS 0
+SKIP_GPU_VISION_ENCODER 0
 SAVE_CHECKPOINTS               0
 ```
 
@@ -198,15 +198,15 @@ benchmark rather than treated as desirable behavior.
 - [x] The job exited successfully and released all four GPUs.
 - [x] No model or optimizer checkpoint was written.
 - [ ] Exact cache counters were captured at shutdown.
-- [x] A later corrected SGLang build passed fixed-image native-versus-
+- [x] A later corrected SGLang build passed fixed-image GPU-versus-
       precomputed next-token parity.
-- [x] A later one-cycle smoke passed with GPU visual weights omitted and
+- [x] A later one-cycle smoke passed with GPU visual weights skipped and
       Megatron/SGLang sampled-token differences below `5e-7`.
-- [ ] Native GPU, CPU-resident, and CPU-omitted VRAM/throughput were compared.
+- [ ] GPU, CPU with GPU encoder kept, and CPU with GPU encoder skipped VRAM/throughput were compared.
 
 ## Next gate
 
-The original next gates were completed on 2026-07-31: GPU-weight omission,
+The original next gates were completed on 2026-07-31: skipping the GPU encoder,
 per-device VRAM, cache counters, the SGLang DeepStack consumption fix, and
 live parity. The remaining work is performance-oriented: replace JSON tensor
 transport, scale CPU replicas on a CPU-rich allocation, and validate the

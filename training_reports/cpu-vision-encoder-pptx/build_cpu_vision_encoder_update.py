@@ -304,10 +304,10 @@ def add_results_table(slide) -> None:
             "The cache removes most of the transfer",
         ],
         [
-            "Does rollout get much faster?",
+            "Does the rollout path get faster?",
             "Rollout: 1.344 → 1.261 s (−6.17%); our gate is 10%",
             "NO",
-            "Keep the cache optional for now",
+            "Mechanism result; matched training-cycle study is pending",
         ],
     ]
     table_shape = slide.shapes.add_table(6, 4, Inches(0.66), Inches(1.66), Inches(12.02), Inches(4.46))
@@ -434,7 +434,7 @@ def build_motivation_slide(prs: Presentation):
         w=2.48,
         h=1.72,
         title="CPU vision encoder",
-        body="frozen vision model\nTier 1: cache its output",
+        body="frozen vision model\nCPU cache: cache its output",
         name="encoder",
         gray=True,
     )
@@ -460,7 +460,7 @@ def build_motivation_slide(prs: Presentation):
         w=3.36,
         h=1.30,
         title="SGLang rollout",
-        body="Tier 2: send the feature once",
+        body="SGLang cache: send the feature once",
         name="rollout",
         gray=True,
     )
@@ -512,7 +512,8 @@ def build_motivation_slide(prs: Presentation):
     add_notes(
         slide,
         "We can cache the feature safely because the vision model is frozen. The cache key includes the image and the model "
-        "version, so we do not reuse the wrong feature. Tier 1 saves vision compute. Tier 2 stops us from sending the full feature again.",
+        "version, so we do not reuse the wrong feature. CPU cache saves vision compute. SGLang cache stops us from "
+        "sending the full feature again.",
     )
     return slide
 
@@ -547,7 +548,7 @@ def build_results_slide(prs: Presentation):
     )
     add_text(
         slide,
-        "Still unresolved: native grouped n=8 has 0.039 log-prob drift, above our 0.01 gate.",
+        "Still unresolved: GPU grouped n=8 has 0.039 log-prob drift, above our 0.01 gate.",
         0.66,
         6.88,
         11.75,
@@ -561,7 +562,8 @@ def build_results_slide(prs: Presentation):
         slide,
         "One CPU thread is already 2.98 times faster than we need. More CPU workers reduce request latency, but they use more memory "
         "and actor wait is still below one percent. The cache removes almost all request bytes, but rollout improves by only 6.17 percent. "
-        "That is below our 10 percent gate, so I would keep it optional for now.",
+        "That is a rollout-path mechanism result, not a training-speed claim; the matched training-cycle study is "
+        "pending.",
     )
     return slide
 
@@ -646,7 +648,8 @@ def build_paper_slide(prs: Presentation):
     )
     add_text(
         slide,
-        "Current limit: the vision encoder is small, actor wait is below 1%, and rollout improves by only 6.17%.",
+        "Current limit: the encoder is small; vision cache reuse is mechanism evidence, while the matched "
+        "training-cycle study is pending.",
         0.66,
         6.78,
         11.88,
@@ -762,11 +765,12 @@ def validate_deck(path: Path) -> str:
             "",
             "## Verified result table entries",
             "",
-            "- CPU/native token match: `8/8`; maximum log-probability drift: `1.43e−6`.",
+            "- CPU/GPU token match: `8/8`; maximum log-probability drift: `1.43e−6`.",
             "- Peak demand / one-core supply: `5.86 / 17.43 images/s` (`2.98×`).",
             "- Batch-eight gain: `7.96%`, below the `20%` eligibility gate.",
-            "- Tier 2: request bytes `−99.82%`, serialization `−77.94%`, p95 RTT `−29.30%`.",
-            "- Rollout wall: `1.344 → 1.261 s` (`−6.17%`), below the `10%` adoption gate.",
+            "- SGLang cache: request bytes `−99.82%`, serialization `−77.94%`, p95 RTT `−29.30%`.",
+            "- Rollout time: `1.344 → 1.261 s` (`−6.17%`), below the `10%` adoption gate.",
+            "- Claim boundary: vision cache reuse is rollout-path mechanism evidence, not a training-cycle speedup.",
             "",
         ]
     )

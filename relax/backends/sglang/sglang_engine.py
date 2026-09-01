@@ -40,7 +40,7 @@ logger = get_logger(__name__)
 _PROCESS_SGL_KERNEL_STUB_INSTALLED = False
 _DISABLE_MEMORY_SAVER_ENV_VAR = "RELAX_SGLANG_DISABLE_MEMORY_SAVER"
 _PRECOMPUTED_VISION_ENV_VAR = "RELAX_SGLANG_QWEN3_VL_PRECOMPUTED_VISION"
-_OMIT_GPU_VISION_WEIGHTS_ENV_VAR = "RELAX_SGLANG_QWEN3_VL_OMIT_GPU_WEIGHTS"
+_SKIP_GPU_VISION_ENCODER_ENV_VAR = "RELAX_SGLANG_QWEN3_VL_SKIP_GPU_VISION_ENCODER"
 
 
 if TYPE_CHECKING:
@@ -78,19 +78,30 @@ def _maybe_install_precomputed_vision_patch() -> None:
     from relax.backends.sglang.precomputed_vision import install_qwen3_vl_precomputed_vision_patch
 
     install_qwen3_vl_precomputed_vision_patch()
-    if os.environ.get(_OMIT_GPU_VISION_WEIGHTS_ENV_VAR) != "1":
+    if os.environ.get(_SKIP_GPU_VISION_ENCODER_ENV_VAR) != "1":
         return
 
     from sglang.srt.models.transformers import TransformersBase
     from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLModel
 
-    from relax.backends.sglang.precomputed_vision import patch_qwen3_vl_transformers_for_omitted_vision
+    from relax.backends.sglang.precomputed_vision import patch_qwen3_vl_transformers_to_skip_gpu_vision_encoder
 
-    patch_qwen3_vl_transformers_for_omitted_vision(
+    patch_qwen3_vl_transformers_to_skip_gpu_vision_encoder(
         qwen3_vl_model_cls=Qwen3VLModel,
         transformers_base_cls=TransformersBase,
         enabled=True,
     )
+
+
+def _maybe_install_precomputed_vision_admission_route(app) -> None:
+    if os.environ.get(_PRECOMPUTED_VISION_ENV_VAR) != "1":
+        return
+
+    from sglang.srt.multimodal.processors.base_processor import BaseMultimodalProcessor
+
+    from relax.backends.sglang.precomputed_vision import install_sglang_vision_feature_cache_route
+
+    install_sglang_vision_feature_cache_route(app, BaseMultimodalProcessor)
 
 
 def _kill_process_tree(pid: int) -> None:
@@ -299,9 +310,11 @@ def _launch_server_with_patch(server_args):
         _disable_sglang_jit_store_cache_on_hip()
         _maybe_install_precomputed_vision_patch()
 
-        from sglang.srt.entrypoints.http_server import launch_server
+        from sglang.srt.entrypoints import http_server
 
-        launch_server(
+        _maybe_install_precomputed_vision_admission_route(http_server.app)
+
+        http_server.launch_server(
             server_args,
             run_scheduler_process_func=_patched_run_scheduler_process,
         )
@@ -313,9 +326,11 @@ def _launch_server(server_args):
         _disable_sglang_jit_store_cache_on_hip()
         _maybe_install_precomputed_vision_patch()
 
-        from sglang.srt.entrypoints.http_server import launch_server
+        from sglang.srt.entrypoints import http_server
 
-        launch_server(server_args, run_scheduler_process_func=_patched_run_scheduler_process)
+        _maybe_install_precomputed_vision_admission_route(http_server.app)
+
+        http_server.launch_server(server_args, run_scheduler_process_func=_patched_run_scheduler_process)
 
 
 def launch_server_process(server_args) -> multiprocessing.Process:

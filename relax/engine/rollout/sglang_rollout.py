@@ -3,12 +3,15 @@
 import asyncio
 import copy
 import inspect
+import json
 import os
 import uuid
 from argparse import Namespace
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from math import ceil
+from threading import Lock
 from time import monotonic
 from typing import Any
 
@@ -56,6 +59,11 @@ __all__ = ["generate_rollout"]
 
 logger = get_logger(__name__)
 
+_VISION_DEVICE_CHOICE: ContextVar[Any | None] = ContextVar(
+    "relax_vision_device_choice",
+    default=None,
+)
+
 
 class GenerateState(metaclass=SingletonMeta):
     """The global state for the generation process."""
@@ -66,7 +74,7 @@ class GenerateState(metaclass=SingletonMeta):
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
         self.vision_encoder = None
-        if getattr(args, "vision_encoder_backend", "disabled") == "pytorch":
+        if getattr(args, "vision_encoder_device", "gpu") == "cpu":
             from ray import serve
 
             self.vision_encoder = serve.get_app_handle("vision_encoder")
@@ -79,6 +87,16 @@ class GenerateState(metaclass=SingletonMeta):
         self.vision_encoder_interval_backend_feature_ids = set()
         self.vision_encoder_cumulative_backend_batch_sizes = []
         self.vision_encoder_interval_backend_batch_sizes = []
+        self.vision_device_plan = None
+        if getattr(args, "vision_device_mode", "fixed") == "automatic":
+            from relax.engine.rollout.vision_device import load_vision_device_plan
+
+            self.vision_device_plan = load_vision_device_plan(
+                args.vision_device_plan,
+                minimum_gap=getattr(args, "vision_device_minimum_gap", None),
+            )
+        self.vision_device_choices = {}
+        self.vision_device_lock = Lock()
 
         # Process pool for running HuggingFace processor without GIL contention.
         # Controlled by --mm-processor-pool-size (0 = disabled).
@@ -164,6 +182,41 @@ class GenerateState(metaclass=SingletonMeta):
             else:
                 self.pendings.add(task)
         self.remaining_batch_size += len(samples)
+
+
+def _choose_vision_device_for_cycle(state: GenerateState, rollout_id: int) -> None:
+    """Choose and log one vision device for an entire rollout cycle."""
+    if state.vision_device_plan is None:
+        _VISION_DEVICE_CHOICE.set(None)
+        return
+    should_log = False
+    with state.vision_device_lock:
+        choice = state.vision_device_choices.get(rollout_id)
+        if choice is None:
+            choice = state.vision_device_plan.choose(rollout_id)
+            state.vision_device_choices[rollout_id] = choice
+            should_log = True
+    if should_log:
+        logger.info(
+            "VISION_DEVICE_CHOICE %s",
+            json.dumps(choice.to_log_payload(), sort_keys=True, separators=(",", ":")),
+        )
+    _VISION_DEVICE_CHOICE.set(choice)
+
+
+def _uses_cpu_vision(state: GenerateState) -> bool:
+    """Return whether the current cycle must use the precomputed CPU path."""
+    if getattr(state, "vision_device_plan", None) is None:
+        return state.vision_encoder is not None
+    choice = _VISION_DEVICE_CHOICE.get()
+    if choice is None:
+        raise RuntimeError("Vision device was not chosen before generation started")
+    return choice.device == "cpu"
+
+
+def _collect_vision_device_metrics(state: GenerateState) -> dict[str, float | int]:
+    choice = _VISION_DEVICE_CHOICE.get()
+    return {} if choice is None else choice.to_metrics()
 
 
 async def _run_image_processor(
@@ -778,7 +831,7 @@ async def generate(
             state, args, sample.prompt, sample.multimodal_inputs
         )
         precomputed_sglang_image_data = None
-        if state.vision_encoder is not None:
+        if _uses_cpu_vision(state):
             (
                 precomputed_sglang_image_data,
                 sample.multimodal_train_inputs,
@@ -1253,7 +1306,7 @@ async def generate_and_rm_group(
     )
     used_parallel_sampling = False
     if (
-        state.vision_encoder is not None
+        _uses_cpu_vision(state)
         and shared_multimodal_input
         and all(sample.prompt == group[0].prompt for sample in group[1:])
     ):
@@ -1520,6 +1573,7 @@ async def generate_rollout_async(
     assert args.rollout_global_dataset
 
     state = GenerateState(args)
+    _choose_vision_device_for_cycle(state, rollout_id)
 
     # Start SGLang profiling if enabled
     await start_sglang_profile(args, rollout_id)
@@ -1701,6 +1755,7 @@ async def generate_rollout_async(
     all_samples = [sample for group in data for sample in (group if isinstance(group, list) else [group])]
     timing_metrics = _aggregate_rollout_timing(all_samples, get_samples_times)
     timing_metrics.update(await _collect_cpu_vision_metrics(state, phase=f"rollout_{rollout_id}"))
+    timing_metrics.update(_collect_vision_device_metrics(state))
 
     global CURRENT_ROLLOUT_BATCH
     if CURRENT_ROLLOUT_BATCH:
@@ -1736,6 +1791,7 @@ EVAL_PROMPT_DATASET = {}
 
 async def eval_rollout(args: Namespace, rollout_id: int) -> tuple[dict[str, dict[str, list[Any]]], list[list[Sample]]]:
     state = GenerateState(args)
+    _choose_vision_device_for_cycle(state, rollout_id)
     # Increment evaluating counter so that abort() knows to wait for eval to finish.
     # This prevents abort_all from killing in-flight eval requests on SGLang workers.
     state.evaluating += 1
@@ -1752,6 +1808,7 @@ async def eval_rollout(args: Namespace, rollout_id: int) -> tuple[dict[str, dict
         ]
         metrics = _aggregate_rollout_timing(all_eval_samples, [])
         metrics.update(await _collect_cpu_vision_metrics(state, phase=f"eval_{rollout_id}"))
+        metrics.update(_collect_vision_device_metrics(state))
         return RolloutFnEvalOutput(data=results, metrics=metrics), []
     finally:
         state.evaluating -= 1

@@ -42,22 +42,21 @@ class VisionEncoderResponse:
 
 def validate_vision_encoder_config(config: Namespace) -> None:
     """Validate the explicit resource and freezing contract for CPU vision."""
-    backend = getattr(config, "vision_encoder_backend", "disabled")
-    omit_gpu_weights = getattr(config, "vision_encoder_omit_gpu_weights", False)
-    if omit_gpu_weights and backend != "pytorch":
+    device = getattr(config, "vision_encoder_device", "gpu")
+    skip_gpu_encoder = getattr(config, "skip_gpu_vision_encoder", False)
+    if skip_gpu_encoder and device != "cpu":
         raise ValueError(
-            "vision_encoder_omit_gpu_weights can only omit GPU weights when "
-            "vision_encoder_backend='pytorch'"
+            "skip_gpu_vision_encoder requires vision_encoder_device='cpu'"
         )
-    if backend == "disabled":
+    if device == "gpu":
         resource = getattr(config, "resource", None) or {}
         if VISION_ENCODER_ROLE in resource:
             raise ValueError(
-                "resource contains 'vision_encoder' but --vision-encoder-backend is disabled"
+                "resource contains 'vision_encoder' but --vision-encoder-device=gpu"
             )
         return
-    if backend != "pytorch":
-        raise ValueError(f"Unsupported vision encoder backend: {backend!r}")
+    if device != "cpu":
+        raise ValueError(f"Unsupported vision encoder device: {device!r}")
 
     if not getattr(config, "freeze_vision_model", False) or not getattr(
         config, "freeze_vision_projection", False
@@ -76,8 +75,8 @@ def validate_vision_encoder_config(config: Namespace) -> None:
         raise ValueError("vision_encoder_num_cpus must be positive")
     if getattr(config, "vision_encoder_cache_max_bytes", 0) <= 0:
         raise ValueError("vision_encoder_cache_max_bytes must be positive")
-    if getattr(config, "vision_encoder_max_batch_size", 0) <= 0:
-        raise ValueError("vision_encoder_max_batch_size must be positive")
+    if getattr(config, "vision_encoder_max_images_per_request", 0) <= 0:
+        raise ValueError("vision_encoder_max_images_per_request must be positive")
     batch_wait_timeout_ms = getattr(config, "vision_encoder_batch_wait_timeout_ms", 0.0)
     if not math.isfinite(batch_wait_timeout_ms) or batch_wait_timeout_ms < 0:
         raise ValueError("vision_encoder_batch_wait_timeout_ms must be finite and nonnegative")
@@ -128,7 +127,7 @@ class VisionEncoder(Base):
             raise ValueError(f"The CPU vision encoder requires num_gpus=0, got {num_gpus}")
 
         torch.set_num_threads(config.vision_encoder_num_cpus)
-        self.max_batch_size = config.vision_encoder_max_batch_size
+        self.max_batch_size = config.vision_encoder_max_images_per_request
         self.batch_wait_timeout_ms = getattr(config, "vision_encoder_batch_wait_timeout_ms", 0.0)
         self.backend = build_qwen3_vl_cpu_vision_backend(
             config.hf_checkpoint,
@@ -202,7 +201,7 @@ class VisionEncoder(Base):
         if max_batch_size is not None and image_grid_thw.shape[0] > max_batch_size:
             raise ValueError(
                 f"CPU vision request contains {image_grid_thw.shape[0]} images, "
-                f"exceeding vision_encoder_max_batch_size={max_batch_size}"
+                f"exceeding vision_encoder_max_images_per_request={max_batch_size}"
             )
         feature_id = build_qwen3_vl_feature_cache_key(
             pixel_values=pixel_values,
@@ -283,8 +282,8 @@ class VisionEncoder(Base):
 
 
 def register_vision_encoder(config: Namespace, algo: dict) -> list[str]:
-    """Register the optional vision encoder service when explicitly enabled."""
-    if getattr(config, "vision_encoder_backend", "disabled") == "disabled":
+    """Register the CPU vision encoder service when requested."""
+    if getattr(config, "vision_encoder_device", "gpu") == "gpu":
         return []
     algo[VISION_ENCODER_ROLE] = VisionEncoder
     return [VISION_ENCODER_ROLE]

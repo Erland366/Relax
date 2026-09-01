@@ -1464,7 +1464,7 @@
       "action_probability_absolute_delta": 0.0,
       "feature_id": "ae3779b8f2088df0431779448f1a83586d69d71096bcd18686b3d17a1a406414",
       "generated_token_match": true,
-      "native": {
+      "gpu": {
         "action_a_logprob": -0.5239084959030151,
         "action_a_probability": 0.5926665999540697,
         "action_b_logprob": -0.8989084959030151,
@@ -1494,7 +1494,7 @@
       "action_probability_absolute_delta": 1.7429432008775336e-08,
       "feature_id": "19e71595e66ea4d247f9bea16d4c6abb6284a3a2e753edebe2ab4d8d13544002",
       "generated_token_match": true,
-      "native": {
+      "gpu": {
         "action_a_logprob": -1.5516905784606934,
         "action_a_probability": 0.21206881182686205,
         "action_b_logprob": -0.23919062316417694,
@@ -1524,7 +1524,7 @@
       "action_probability_absolute_delta": 7.469756729827637e-09,
       "feature_id": "491a7f3dffd99371c6ebdee98d4bdae43ecece40464c433e0d474e31b3f80fd9",
       "generated_token_match": true,
-      "native": {
+      "gpu": {
         "action_a_logprob": -1.5516905784606934,
         "action_a_probability": 0.21206881182686205,
         "action_b_logprob": -0.23919062316417694,
@@ -1554,7 +1554,7 @@
       "action_probability_absolute_delta": 0.0,
       "feature_id": "65356121cc842316957caf36b8afd5a09839a6ac512774464fad9d194ba0a648",
       "generated_token_match": true,
-      "native": {
+      "gpu": {
         "action_a_logprob": -0.451792448759079,
         "action_a_probability": 0.6370308013713525,
         "action_b_logprob": -1.0142924785614014,
@@ -1584,7 +1584,7 @@
       "action_probability_absolute_delta": 6.767860383227742e-09,
       "feature_id": "8a125b6eb071986008ae9dd20e0ae2bfd2e01de70178ba420fe49b8fafde6632",
       "generated_token_match": true,
-      "native": {
+      "gpu": {
         "action_a_logprob": -0.42951709032058716,
         "action_a_probability": 0.6513548511303336,
         "action_b_logprob": -1.0545170307159424,
@@ -1614,7 +1614,7 @@
       "action_probability_absolute_delta": 0.0,
       "feature_id": "4dc812bb2e78c4826fae0820dff7b2f188606c0de2a2020919a123821112bd87",
       "generated_token_match": true,
-      "native": {
+      "gpu": {
         "action_a_logprob": -1.2243521213531494,
         "action_a_probability": 0.29421497216298875,
         "action_b_logprob": -0.3493521213531494,
@@ -1644,7 +1644,7 @@
       "action_probability_absolute_delta": 4.800696618012523e-09,
       "feature_id": "9051d36f4a8b46114b087f0ba506f0f785a15e293dbd6f2e1bca5162277b36dd",
       "generated_token_match": true,
-      "native": {
+      "gpu": {
         "action_a_logprob": -1.6012712717056274,
         "action_a_probability": 0.20181322466072713,
         "action_b_logprob": -0.22627128660678864,
@@ -1674,7 +1674,7 @@
       "action_probability_absolute_delta": 7.003656543602688e-09,
       "feature_id": "f09c9c542a45fd6a9b8ed39fe28b448fb2c7e650b404436156e3289183498f87",
       "generated_token_match": true,
-      "native": {
+      "gpu": {
         "action_a_logprob": -0.47490909695625305,
         "action_a_probability": 0.622459324198198,
         "action_b_logprob": -0.9749090671539307,

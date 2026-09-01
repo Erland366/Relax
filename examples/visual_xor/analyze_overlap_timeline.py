@@ -169,7 +169,7 @@ def analyze_overlap_timeline(lines: Iterable[str]) -> dict[str, Any]:
             "unmatched_rollout_finishes": sorted(rollout_finishes.keys() - rollout_starts.keys()),
             "unmatched_actor_starts": unmatched_actor_starts,
             "unmatched_actor_finishes": unmatched_actor_finishes,
-            "total_rollout_wall_seconds": total_rollout_seconds,
+            "total_rollout_seconds": total_rollout_seconds,
             "total_actor_optimizer_wall_seconds": total_actor_seconds,
             "overlap_seconds": overlap_seconds,
             "rollout_overlap_percent": overlap_percent,

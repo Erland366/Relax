@@ -62,7 +62,7 @@ def test_analyze_overlap_timeline_pairs_ids_and_measures_intersection():
         "unmatched_rollout_finishes": [],
         "unmatched_actor_starts": [],
         "unmatched_actor_finishes": [],
-        "total_rollout_wall_seconds": 20.0,
+        "total_rollout_seconds": 20.0,
         "total_actor_optimizer_wall_seconds": 11.0,
         "overlap_seconds": 11.0,
         "rollout_overlap_percent": 55.0,

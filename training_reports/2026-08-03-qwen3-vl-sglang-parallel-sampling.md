@@ -2,7 +2,7 @@
 
 - **Date:** 2026-08-03
 - **Status:** passed standalone parity and a fully asynchronous two-rollout
-  CPU-omitted training run
+  CPU-skipped training run
 - **Hardware:** four AMD MI210 GPUs; one Ray CPU reserved for one CPU vision
   replica
 - **Checkpoint:**
@@ -19,7 +19,7 @@ the same feature eight times for `N_SAMPLES_PER_PROMPT=8`, making downstream
 transport—not CPU encoding—the first performance boundary.
 
 Test the smallest optimization before introducing an SGLang feature registry:
-use SGLang native parallel sampling to send one precomputed final-plus-
+use SGLang SGLang multi-sample sampling to send one precomputed final-plus-
 DeepStack bundle per prompt with `sampling_params.n=8`, then map the ordered
 outputs back to the original Relax samples.
 
@@ -44,7 +44,7 @@ finish metadata, reward, and Megatron visual inputs remain per sample.
 
 Unsupported groups retain the scalar path and log one explicit reason.
 Deterministic generation remains scalar because this SGLang interface does
-not expose a distinct seed for each native parallel branch. Multi-engine,
+not expose a distinct seed for each SGLang multi-sample branch. Multi-engine,
 non-round-robin routing also remains scalar because grouping would erase the
 existing per-sample routing decision.
 
@@ -89,8 +89,8 @@ SGLang engine exists. The multi-engine non-round-robin restriction remains.
 |---|---|
 | Ray job | `raysubmit_GLUEF5ZUBeq5S13S` |
 | W&B | `lr67sp9v` |
-| Log | `log/visual-xor-refinement-cpu-omitted-20260803_174541.log` |
-| VRAM artifact | `benchmark_results/cpu_vision/20260803_sglang_parallel_n8/cpu_omitted_two_rollout_vram.json` |
+| Log | `log/visual-xor-refinement-cpu-skip-gpu-encoder-20260803_174541.log` |
+| VRAM artifact | `benchmark_results/cpu_vision/20260803_sglang_parallel_n8/cpu_skipped_two_rollout_vram.json` |
 | Exit code | 0 |
 | Monitor wall time | 771.621 s |
 
@@ -125,7 +125,7 @@ path; client attempt counts remained one and all evaluation samples completed.
 | SGLang generation requests | 8 | 8 | 8 |
 | Parallel samples per request | 8 | 8 | 8 |
 | Request-body bytes | 23,169,839 | 23,323,962 | 23,246,900.5 |
-| Rollout wall time | 6.069 s | 5.562 s | 5.816 s |
+| Rollout time time | 6.069 s | 5.562 s | 5.816 s |
 | Reward | 0.7500 | 0.6875 | 0.71875 |
 | Valid action | 1.0 | 1.0 | 1.0 |
 | Action A | 0.46875 | 0.4375 | 0.453125 |
@@ -138,7 +138,7 @@ Compared with the rejected same-day scalar rollout 0:
 |---|---:|---:|---:|
 | SGLang requests | 64 | 8 | 87.50% fewer |
 | Request-body bytes | 185,397,880 | 23,246,900.5 | 87.46% lower |
-| Rollout wall time | 21.512 s | 5.816 s | 72.97% lower; 3.699x faster |
+| Rollout time time | 21.512 s | 5.816 s | 72.97% lower; 3.699x faster |
 
 The comparison isolates the within-prompt `n=8` amplification on the same
 day and execution path. Reward is stochastic task behavior, not a transport
@@ -158,22 +158,22 @@ Peak deltas above the common idle baseline:
 
 | Run | Card 0 actor | Card 1 actor | Card 2 rollout | Card 3 actor-fwd | Simultaneous total |
 |---|---:|---:|---:|---:|---:|
-| 2026-08-01 CPU omitted scalar | 2.840 GiB | 2.418 GiB | 7.215 GiB | 7.173 GiB | 19.279 GiB |
-| 2026-08-03 CPU omitted grouped | 2.838 GiB | 2.418 GiB | 7.215 GiB | 7.173 GiB | 18.786 GiB |
+| 2026-08-01 CPU skipped scalar | 2.840 GiB | 2.418 GiB | 7.215 GiB | 7.173 GiB | 19.279 GiB |
+| 2026-08-03 CPU skipped grouped | 2.838 GiB | 2.418 GiB | 7.215 GiB | 7.173 GiB | 18.786 GiB |
 
 The per-device peaks are effectively unchanged, as expected: grouping removes
 repeated transport but does not omit additional model weights. The 0.493 GiB
 lower simultaneous peak is schedule-sensitive fully asynchronous overlap and
 must not be reported as a memory saving.
 
-The complete monitor duration was 26.3% shorter than the 2026-08-01 omitted
+The complete monitor duration was 26.3% shorter than the 2026-08-01 skipped
 run, but baseline evaluation also ran faster because of runtime variance.
 Therefore the direct same-day scalar-versus-grouped rollout measurements—not
 whole-run duration—support the 3.699x speedup claim.
 
 ## Decision
 
-Native parallel sampling closes the repeated `N_SAMPLES_PER_PROMPT=8`
+SGLang multi-sample sampling closes the repeated `N_SAMPLES_PER_PROMPT=8`
 transport amplification for this training workload. Defer a general SGLang
 feature registry and do not scale CPU vision replicas yet.
 

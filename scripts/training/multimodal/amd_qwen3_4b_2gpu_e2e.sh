@@ -229,17 +229,53 @@ configure_vision_encoder() {
     VISION_ENCODER_NUM_REPLICAS="${VISION_ENCODER_NUM_REPLICAS:-1}"
     VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS="${VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS:-0}"
     SGLANG_VISION_FEATURE_CACHE_MAX_BYTES="${SGLANG_VISION_FEATURE_CACHE_MAX_BYTES:-0}"
-    VISION_ENCODER_OMIT_GPU_WEIGHTS="${VISION_ENCODER_OMIT_GPU_WEIGHTS:-0}"
+    PRELOAD_VISION_FEATURES="${PRELOAD_VISION_FEATURES:-0}"
+    VISION_DEVICE_MODE="${VISION_DEVICE_MODE:-fixed}"
+    VISION_DEVICE_PLAN="${VISION_DEVICE_PLAN:-}"
+    VISION_DEVICE_MINIMUM_GAP="${VISION_DEVICE_MINIMUM_GAP:-}"
+    SKIP_GPU_VISION_ENCODER="${SKIP_GPU_VISION_ENCODER:-0}"
     FREEZE_VISION_MODEL="${FREEZE_VISION_MODEL:-0}"
 
-    if [ "${VISION_ENCODER_BACKEND:-disabled}" != "disabled" ]; then
+    if [ "${VISION_ENCODER_DEVICE:-gpu}" = "cpu" ]; then
         FREEZE_VISION_MODEL=1
     fi
 
     require_positive_integer VISION_ENCODER_NUM_REPLICAS
     require_nonnegative_integer SGLANG_VISION_FEATURE_CACHE_MAX_BYTES
-    require_boolean_flag VISION_ENCODER_OMIT_GPU_WEIGHTS
+    require_boolean_flag PRELOAD_VISION_FEATURES
+    require_boolean_flag SKIP_GPU_VISION_ENCODER
     require_boolean_flag FREEZE_VISION_MODEL
+
+    case "${VISION_DEVICE_MODE}" in
+        fixed)
+            if [ -n "${VISION_DEVICE_PLAN}" ] || [ -n "${VISION_DEVICE_MINIMUM_GAP}" ]; then
+                echo "VISION_DEVICE_PLAN and VISION_DEVICE_MINIMUM_GAP require VISION_DEVICE_MODE=automatic" >&2
+                exit 2
+            fi
+            ;;
+        automatic)
+            if [ "${VISION_ENCODER_DEVICE:-gpu}" != "cpu" ]; then
+                echo "VISION_DEVICE_MODE=automatic requires VISION_ENCODER_DEVICE=cpu" >&2
+                exit 2
+            fi
+            if [ ! -f "${VISION_DEVICE_PLAN}" ]; then
+                echo "VISION_DEVICE_PLAN does not exist: ${VISION_DEVICE_PLAN:-unset}" >&2
+                exit 2
+            fi
+            if [ "${SKIP_GPU_VISION_ENCODER}" = "1" ]; then
+                echo "VISION_DEVICE_MODE=automatic requires the GPU vision encoder" >&2
+                exit 2
+            fi
+            if [ "${PRELOAD_VISION_FEATURES}" = "1" ]; then
+                echo "VISION_DEVICE_MODE=automatic cannot use PRELOAD_VISION_FEATURES=1" >&2
+                exit 2
+            fi
+            ;;
+        *)
+            echo "VISION_DEVICE_MODE must be fixed or automatic, got ${VISION_DEVICE_MODE}" >&2
+            exit 2
+            ;;
+    esac
 }
 
 configure_runtime_environment() {
@@ -356,6 +392,8 @@ configure_run_defaults() {
             ;;
     esac
     NUM_ROLLOUT="${NUM_ROLLOUT:-200}"
+    TRAIN_SEED="${TRAIN_SEED:-1234}"
+    ROLLOUT_SEED="${ROLLOUT_SEED:-42}"
     N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-8}"
     MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-1}"
     USE_STREAMING_DATASET="${USE_STREAMING_DATASET:-1}"
@@ -369,6 +407,8 @@ configure_run_defaults() {
     require_boolean_flag USE_STREAMING_DATASET
     require_boolean_flag ROLLOUT_SHUFFLE
     require_positive_integer NUM_ROLLOUT
+    require_nonnegative_integer TRAIN_SEED
+    require_nonnegative_integer ROLLOUT_SEED
     require_positive_integer NUM_STEPS_PER_ROLLOUT
     require_positive_integer ROLLOUT_BATCH_SIZE
     require_positive_integer N_SAMPLES_PER_PROMPT
@@ -788,11 +828,13 @@ append_rollout_arg() {
 build_rollout_args() {
     ROLLOUT_ARGS=(
         --prompt-data "${PROMPT_SET}"
-        --input-key prompt
-        --label-key label
+        --input-key "${INPUT_KEY:-prompt}"
+        --label-key "${LABEL_KEY:-label}"
         --apply-chat-template
         --rm-type "${RM_TYPE}"
         --num-rollout "${NUM_ROLLOUT}"
+        --seed "${TRAIN_SEED}"
+        --rollout-seed "${ROLLOUT_SEED}"
         --rollout-batch-size "${ROLLOUT_BATCH_SIZE}"
         --n-samples-per-prompt "${N_SAMPLES_PER_PROMPT}"
         --rollout-max-response-len "${ROLLOUT_MAX_RESPONSE_LEN}"
@@ -1027,9 +1069,21 @@ build_rocm_compat_args() {
 }
 
 build_training_args() {
-    VISION_ENCODER_ARGS=()
-    if [ "${VISION_ENCODER_OMIT_GPU_WEIGHTS}" = "1" ]; then
-        VISION_ENCODER_ARGS+=(--vision-encoder-omit-gpu-weights)
+    VISION_ENCODER_ARGS=(--vision-device-mode "${VISION_DEVICE_MODE}")
+    if [ "${SKIP_GPU_VISION_ENCODER}" = "1" ]; then
+        VISION_ENCODER_ARGS+=(--skip-gpu-vision-encoder)
+    fi
+    if [ "${PRELOAD_VISION_FEATURES}" = "1" ]; then
+        VISION_ENCODER_ARGS+=(--preload-vision-features)
+    fi
+    if [ "${VISION_DEVICE_MODE}" = "automatic" ]; then
+        VISION_ENCODER_ARGS+=(--vision-device-plan "${VISION_DEVICE_PLAN}")
+        if [ -n "${VISION_DEVICE_MINIMUM_GAP}" ]; then
+            VISION_ENCODER_ARGS+=(
+                --vision-device-minimum-gap
+                "${VISION_DEVICE_MINIMUM_GAP}"
+            )
+        fi
     fi
 
     build_checkpoint_args
@@ -1050,7 +1104,7 @@ log_launch_config() {
     echo "  mode: ${RELAX_EXECUTION_MODE}, max_staleness=${MAX_STALENESS}, balance_data=${USE_BALANCE_DATA}, use_kl_loss=${USE_KL_LOSS}" >&2
     echo "  resources: HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES}, RAY_NUM_GPUS=${RAY_NUM_GPUS}, actor_gpus=${ACTOR_RESOURCE_GPUS}, rollout_gpus=${ROLLOUT_RESOURCE_GPUS}, actor_fwd_gpus=${ACTOR_FWD_RESOURCE_GPUS}, RESOURCE_JSON=${RESOURCE_JSON}" >&2
     echo "  training: TP=${TENSOR_MODEL_PARALLEL_SIZE}, PP=${PIPELINE_MODEL_PARALLEL_SIZE}, CP=${CONTEXT_PARALLEL_SIZE}, micro_batch=${MICRO_BATCH_SIZE}, global_batch=${GLOBAL_BATCH_SIZE}, recompute=${ENABLE_RECOMPUTE}" >&2
-    echo "  rollout: num_rollout=${NUM_ROLLOUT}, steps_per_rollout=${NUM_STEPS_PER_ROLLOUT}, rollout_batch=${ROLLOUT_BATCH_SIZE}, samples_per_prompt=${N_SAMPLES_PER_PROMPT}, temperature=${ROLLOUT_TEMPERATURE}, top_p=${ROLLOUT_TOP_P}, top_k=${ROLLOUT_TOP_K}, streaming=${USE_STREAMING_DATASET}, shuffle=${ROLLOUT_SHUFFLE}" >&2
+    echo "  rollout: num_rollout=${NUM_ROLLOUT}, steps_per_rollout=${NUM_STEPS_PER_ROLLOUT}, rollout_batch=${ROLLOUT_BATCH_SIZE}, samples_per_prompt=${N_SAMPLES_PER_PROMPT}, temperature=${ROLLOUT_TEMPERATURE}, top_p=${ROLLOUT_TOP_P}, top_k=${ROLLOUT_TOP_K}, streaming=${USE_STREAMING_DATASET}, shuffle=${ROLLOUT_SHUFFLE}, train_seed=${TRAIN_SEED}, rollout_seed=${ROLLOUT_SEED}" >&2
     echo "  multimodal_keys: ${MULTIMODAL_KEYS:-disabled}" >&2
     if [ -n "${EVAL_CONFIG:-}" ]; then
         echo "  evaluation: config=${EVAL_CONFIG}, interval=${EVAL_INTERVAL}, baseline=enabled" >&2
@@ -1065,7 +1119,7 @@ log_launch_config() {
     echo "  transfer_queue: num_data_storage_units=${NUM_DATA_STORAGE_UNITS}" >&2
     echo "  sequence: seq_length=${SEQ_LENGTH}, rollout_max_response_len=${ROLLOUT_MAX_RESPONSE_LEN}, rollout_max_context_len=${ROLLOUT_MAX_CONTEXT_LEN:-unset}, rollout_max_prompt_len=${ROLLOUT_MAX_PROMPT_LEN:-unset}" >&2
     echo "  sglang: gpus_per_engine=${ROLLOUT_NUM_GPUS_PER_ENGINE}, pp=${SGLANG_PIPELINE_PARALLEL_SIZE}, dp=${SGLANG_DATA_PARALLEL_SIZE}, ep=${SGLANG_EXPERT_PARALLEL_SIZE}, attention_backend=${SGLANG_ATTENTION_BACKEND}, server_concurrency=${SGLANG_SERVER_CONCURRENCY}, max_running_requests=${SGLANG_MAX_RUNNING_REQUESTS:-unset}, max_total_tokens=${SGLANG_MAX_TOTAL_TOKENS:-unset}" >&2
-    echo "  vision_encoder: backend=${VISION_ENCODER_BACKEND:-disabled}, num_cpus=${VISION_ENCODER_NUM_CPUS:-8}, replicas=${VISION_ENCODER_NUM_REPLICAS}, cache_max_bytes=${VISION_ENCODER_CACHE_MAX_BYTES:-4294967296}, sglang_feature_cache_max_bytes=${SGLANG_VISION_FEATURE_CACHE_MAX_BYTES}, max_batch_size=${VISION_ENCODER_MAX_BATCH_SIZE:-8}, batch_wait_timeout_ms=${VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS}, omit_gpu_weights=${VISION_ENCODER_OMIT_GPU_WEIGHTS}, freeze_gpu_model=${FREEZE_VISION_MODEL}" >&2
+    echo "  vision_encoder: device=${VISION_ENCODER_DEVICE:-gpu}, device_mode=${VISION_DEVICE_MODE}, device_plan=${VISION_DEVICE_PLAN:-unset}, minimum_gap=${VISION_DEVICE_MINIMUM_GAP:-plan_default}, num_cpus=${VISION_ENCODER_NUM_CPUS:-8}, replicas=${VISION_ENCODER_NUM_REPLICAS}, cpu_cache_max_bytes=${VISION_ENCODER_CACHE_MAX_BYTES:-4294967296}, sglang_cache_max_bytes=${SGLANG_VISION_FEATURE_CACHE_MAX_BYTES}, preload_all_features=${PRELOAD_VISION_FEATURES}, max_images_per_request=${VISION_ENCODER_MAX_IMAGES_PER_REQUEST:-8}, skip_gpu_encoder=${SKIP_GPU_VISION_ENCODER}, freeze_gpu_model=${FREEZE_VISION_MODEL}" >&2
 }
 
 submit_training_job() {
@@ -1079,12 +1133,12 @@ submit_training_job() {
         -- python3 -m relax.entrypoints.train \
         --resource "${RESOURCE_JSON}" \
         --num-data-storage-units "${NUM_DATA_STORAGE_UNITS}" \
-        --vision-encoder-backend "${VISION_ENCODER_BACKEND:-disabled}" \
+        --vision-encoder-device "${VISION_ENCODER_DEVICE:-gpu}" \
         --vision-encoder-num-cpus "${VISION_ENCODER_NUM_CPUS:-8}" \
         --vision-encoder-num-replicas "${VISION_ENCODER_NUM_REPLICAS}" \
         --vision-encoder-cache-max-bytes "${VISION_ENCODER_CACHE_MAX_BYTES:-4294967296}" \
         --sglang-vision-feature-cache-max-bytes "${SGLANG_VISION_FEATURE_CACHE_MAX_BYTES}" \
-        --vision-encoder-max-batch-size "${VISION_ENCODER_MAX_BATCH_SIZE:-8}" \
+        --vision-encoder-max-images-per-request "${VISION_ENCODER_MAX_IMAGES_PER_REQUEST:-8}" \
         --vision-encoder-batch-wait-timeout-ms "${VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS}" \
         "${VISION_ENCODER_ARGS[@]}" \
         "${MODEL_ARGS[@]}" \

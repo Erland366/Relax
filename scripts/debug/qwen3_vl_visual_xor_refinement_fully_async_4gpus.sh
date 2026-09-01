@@ -66,7 +66,7 @@ export SGLANG_PIPELINE_PARALLEL_SIZE=1
 export SGLANG_DATA_PARALLEL_SIZE=1
 export SGLANG_EXPERT_PARALLEL_SIZE=1
 export SGLANG_ENABLE_DP_ATTENTION=0
-# Keep the native baseline equivalent to the CPU-vision modes: compute vision
+# Keep the GPU baseline equivalent to the CPU-vision modes: compute vision
 # on the GPU, but do not train the frozen tower or projector.
 export FREEZE_VISION_MODEL=1
 
@@ -76,7 +76,7 @@ export ASSET_DIR="${ASSET_DIR:-${DEFAULT_ASSET_DIR}}"
 export CONDA_ENV_NAME="${CONDA_ENV_NAME:-relaxrl_rocm_after_fix}"
 export MODEL_CONFIG_NAME=qwen3-vl-0.37B
 export MODEL_ASSET_NAME=Qwen3-VL-0.37B-Visual-XOR-Refinement-SFT
-export MODEL_LOG_NAME=qwen3-vl-0.37b-visual-xor-refinement-native-gpu
+export MODEL_LOG_NAME=qwen3-vl-0.37b-visual-xor-refinement-gpu
 export SYSTEM_PROMPT="Answer with exactly one uppercase character: A or B. Do not explain."
 export APPLY_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 export MULTIMODAL_KEYS='{"image":"image"}'
@@ -87,10 +87,10 @@ export USE_KL_LOSS=0
 export USE_BALANCE_DATA=0
 export LR="${LR:-3e-6}"
 export NUM_ROLLOUT="${NUM_ROLLOUT:-250}"
-export NUM_STEPS_PER_ROLLOUT=2
-export ROLLOUT_BATCH_SIZE=8
-export N_SAMPLES_PER_PROMPT=8
-export GLOBAL_BATCH_SIZE=32
+export NUM_STEPS_PER_ROLLOUT="${NUM_STEPS_PER_ROLLOUT:-2}"
+export ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-8}"
+export N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-8}"
+export GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-32}"
 export MICRO_BATCH_SIZE=1
 export SEQ_LENGTH=512
 export ROLLOUT_MAX_CONTEXT_LEN=512
@@ -124,11 +124,11 @@ export SGLANG_MEM_FRACTION_STATIC=0.4
 export SAVE_CHECKPOINTS=0
 unset SAVE_DIR SAVE_INTERVAL CKPT_FORMAT NO_SAVE_OPTIM NO_SAVE_RNG LOAD_DIR
 
-export RUN_LOG="${ROOT_DIR}/log/visual-xor-refinement-native-gpu-${RUN_TAG}.log"
+export RUN_LOG="${RUN_LOG:-${ROOT_DIR}/log/visual-xor-refinement-gpu-${RUN_TAG}.log}"
 export WANDB_MODE="${WANDB_MODE:-online}"
 export WANDB_ENTITY="${WANDB_ENTITY:-}"
 export WANDB_PROJECT=relax-amd-visual-xor-refinement
-export WANDB_GROUP="visual-xor-refinement-native-gpu-async-${RUN_TAG}"
+export WANDB_GROUP="visual-xor-refinement-gpu-async-${RUN_TAG}"
 export WANDB_DIR="${WANDB_DIR:-${ROOT_DIR}/log/wandb}"
 
 bash scripts/training/multimodal/amd_qwen3_4b_2gpu_e2e.sh

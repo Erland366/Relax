@@ -65,7 +65,7 @@ rather than basic reward or training plumbing.
   held-out XOR baseline.
 - A synchronous visual refinement run improved held-out reward from 0.6582 to
   0.9492 by step 231 while keeping permuted and constant controls near chance.
-- A clean DP2 fully-async run completed 250 actor cycles and 500 optimizer
+- A clean DP2 fully-async run completed 250 training cycles and 500 optimizer
   steps. It passed the full visual convergence gate near step 147, then
   regressed to 0.8652 held-out reward by the last recorded evaluation. This
   makes policy-version lag, update geometry, and best-state selection the next
@@ -3550,7 +3550,7 @@ thinking mode created reward variance and produced clear improvement.
 - Should the smoke test use a reward/stop setup that treats `<|im_end|>` as the
   expected terminal token while avoiding an instruction-like assistant answer?
 - Can fully async convergence be revisited after TransferQueue capacity or
-  producer/consumer backpressure is fixed?
+  CPU cache/consumer backpressure is fixed?
 
 ### Links
 
@@ -3760,21 +3760,21 @@ The Qwen3-VL visual-XOR path now has an opt-in PyTorch CPU service that
 computes the frozen final and DeepStack visual features once and routes the
 same bundle to SGLang and Megatron. The next work is gated deliberately:
 
-1. Propagate immutable feature/revision identities and prove CPU versus native
+1. Propagate immutable feature/revision identities and prove CPU versus GPU
    GPU feature parity.
-2. Prove native versus precomputed logits inside SGLang and Megatron, then
+2. Prove GPU versus precomputed logits inside SGLang and Megatron, then
    compare synchronized rollout/training logits.
 3. Complete a two-cycle shared-feature smoke before removing any visual
    weights from GPU model instances.
-4. Measure native GPU vision, CPU vision with resident GPU weights, and CPU
-   vision with omitted GPU weights.
+4. Measure GPU vision, CPU vision with the GPU encoder kept, and CPU
+   vision with the GPU encoder skipped.
 5. Tune CPU threads, explicit image batches, and Ray Serve replicas only after
    correctness and VRAM gates pass.
 
 No persistent database, Prima.cpp/llama.cpp backend, or PP-aware DeepStack
 routing will be added before the PyTorch baseline identifies a measured need.
 The detailed gates and transport thresholds are recorded in
-`docs/draft/frozen_cpu_vision_encoder.md`.
+`docs/draft/run_frozen_vision_encoder_on_cpu.md`.
 
 ## 2026-07-28 - Frozen CPU vision implementation checkpoint
 
@@ -3785,12 +3785,12 @@ Implemented and unit-tested:
 - immutable content-addressed feature IDs and frozen-vision revisions;
 - final plus three DeepStack feature parity metrics and exact gates;
 - a language-only Hugging Face Qwen3-VL precomputed-feature forward;
-- parameterless, fail-fast omission sentinels for Megatron and SGLang;
-- omission propagation through the real SGLang rollout runtime environment;
+- parameterless, fail-fast precomputed-only guards for Megatron and SGLang;
+- GPU-encoder skipping propagated through the real SGLang rollout runtime environment;
 - independent Ray Serve replica count and CPU slots per replica;
 - cache/backend-work service counters;
 - a versioned multiprocessing CPU scaling benchmark; and
-- safe launcher defaults: one replica and GPU omission disabled.
+- safe launcher defaults: one replica and GPU encoder skipping disabled.
 
 Local evidence:
 
@@ -3811,7 +3811,7 @@ without a supplied cluster address and dedicated idle devices.
 
 **Type:** Correctness gate
 
-The eight-image Qwen3-VL CPU-versus-native-GPU parity diagnostic passed on one
+The eight-image Qwen3-VL CPU-versus-GPU parity diagnostic passed on one
 MI210 after two diagnostic compatibility fixes:
 
 - Transformers 5.3 requires `mm_token_type_ids` in `get_rope_index`, even when
@@ -3832,22 +3832,22 @@ Observed results:
 - maximum A/B probability delta was below `8e-7`.
 
 Artifact:
-`benchmark_results/cpu_vision/20260730_hf_parity/parity.json`.
+`benchmark_results/cpu_vision/20260730_hf_gpu_cpu_parity/parity.json`.
 
 This closes the local Hugging Face parity gate. It does not yet prove the live
-Ray/SGLang/Megatron shared-feature path, GPU-weight omission, overlap, or VRAM
-reduction; the two-cycle GPU-resident CPU-vision smoke is next.
+Ray/SGLang/Megatron shared-feature path, GPU-encoder skipping, overlap, or VRAM
+reduction; the two-cycle CPU-vision smoke with the GPU encoder kept is next.
 
 Retrospective:
 `training_reports/2026-07-30-qwen3-vl-cpu-gpu-vision-parity.md`.
 
 ## 2026-07-31 - Frozen CPU vision live-system retrospective
 
-**Type:** Retrospective and three-mode systems benchmark
+**Type:** Retrospective and GPU/CPU systems benchmark
 
 **General description:** The frozen Qwen3-VL CPU vision path progressed from
 standalone feature/logit parity through two complete Relax cycles and real GPU
-weight omission, but the final native-versus-precomputed serving comparison
+skipping the GPU encoder, but the final GPU-versus-CPU-precomputed serving comparison
 exposed a live behavioral mismatch that blocks performance optimization.
 
 ### What we tried
@@ -3858,10 +3858,10 @@ exposed a live behavioral mismatch that blocks performance optimization.
 - Ran a fully asynchronous four-MI210 Relax smoke with one CPU vision replica,
   one Ray CPU, a 1 GiB LRU, two rollouts, two optimizer steps per rollout,
   actor DP2 on cards 0-1, SGLang on card 2, and actor-forward on card 3.
-- Repeated the same two-cycle workload with GPU visual weights omitted from
+- Repeated the same two-cycle workload with the GPU vision encoder skipped in
   both SGLang and Megatron model instances.
-- Ran a matched three-mode comparison: native frozen GPU vision, CPU vision
-  with resident GPU weights, and CPU vision with omitted GPU weights. Every
+- Ran a matched GPU/CPU comparison: frozen GPU vision, CPU vision
+  with GPU encoder kept, and CPU vision with GPU encoder skipped. Every
   mode started from the same idle per-card VRAM baseline and saved no
   checkpoint.
 - Added cumulative and interval CPU cache/backend counters to the normal Relax
@@ -3877,11 +3877,11 @@ exposed a live behavioral mismatch that blocks performance optimization.
   rollout, transfer queue, Megatron actor-forward, DP2 backward/optimizer,
   actor-to-SGLang synchronization, and final shutdown all work with final plus
   three DeepStack streams.
-- GPU visual weight omission also works end to end. The omitted run completed
+- Skipping the GPU vision encoder also works end to end. The skipped run completed
   768 evaluation requests, both 64-sample rollouts, four optimizer updates,
   final synchronization, and clean GPU release.
-- The clean omission comparison is CPU-resident versus CPU-omitted, not native
-  versus omitted. Omission reduced the simultaneous four-card peak from
+- The clean memory comparison is CPU with the GPU encoder kept versus CPU with the GPU encoder skipped, not GPU
+  versus CPU. Skipping the GPU encoder reduced the simultaneous four-card peak from
   `19.090 GiB` to `18.938 GiB`, a `155.73 MiB` reduction. Summing each card's
   independently observed peak reduction gives `206.76 MiB`, but those peaks
   did not occur simultaneously.
@@ -3889,19 +3889,19 @@ exposed a live behavioral mismatch that blocks performance optimization.
   requests, 128 unique misses/encodes, 640 hits, an `83.33%` hit rate, 128
   entries, and zero evictions. Each rollout then introduced eight new images,
   so each interval correctly contained eight misses and no hits.
-- CPU-resident and CPU-omitted wall times were `1006.9 s` and `1011.5 s`,
-  versus `658.8 s` for native GPU vision. On the one-core correctness
-  allocation, the CPU path was about `1.53x` native and weight omission itself
+- CPU with GPU encoder kept and CPU with GPU encoder skipped wall times were `1006.9 s` and `1011.5 s`,
+  versus `658.8 s` for GPU vision. On the one-core correctness
+  allocation, the CPU path was about `1.53x` GPU and skipping the GPU encoder itself
   produced no throughput improvement.
 - CPU backend encoding consumed only about 53 seconds during baseline
   evaluation. The larger wall-time gap therefore also contains JSON feature
   serialization, Ray/Serve transport, SGLang reconstruction/consumption,
   scheduling, and generation overhead.
-- The decisive unresolved result is behavioral. Native GPU vision scored
+- The decisive unresolved result is behavioral. GPU vision scored
   `0.6816` on held-out visual XOR with a balanced A/B distribution. CPU
-  resident and CPU omitted scored `0.5039` and `0.5000` and were biased toward
+  CPU with the GPU encoder kept and skipped scored `0.5039` and `0.5000` and were biased toward
   A (`0.6875` and `0.7148`). The two CPU modes agree closely with one another,
-  so omission is unlikely to be the source of the difference.
+  so skipping the GPU encoder is unlikely to be the source of the difference.
 
 ### What failed or required correction
 
@@ -3921,7 +3921,7 @@ exposed a live behavioral mismatch that blocks performance optimization.
   but it did not cover SGLang's processor-expanded IDs, position construction,
   serialized feature reconstruction, DeepStack injection, or live policy
   version.
-- The CPU-resident Ray workload succeeded, but the outer VRAM monitor recorded
+- The CPU with GPU encoder kept Ray workload succeeded, but the outer VRAM monitor recorded
   launcher status `127`. Its log contains all optimizer updates,
   `Main func successfully`, clean Ray shutdown, and Ray's final `Job ...
   succeeded`, with no matching command-not-found message. Preserve this as an
@@ -3932,7 +3932,7 @@ exposed a live behavioral mismatch that blocks performance optimization.
 
 1. Freeze one checkpoint/policy version, image, prompt, processor-expanded
    token sequence, and sampling configuration.
-2. Inside the live SGLang transformers backend, compare native-image and
+2. Inside the live SGLang transformers backend, compare GPU-image and
    precomputed-feature full next-token logits, KL, top token, A/B
    probabilities, position IDs, visual grid, final stream, and all DeepStack
    stream identities.
@@ -3945,7 +3945,7 @@ exposed a live behavioral mismatch that blocks performance optimization.
 
 ### Open questions
 
-- At which exact SGLang boundary do native and precomputed logits first
+- At which exact SGLang boundary do GPU and precomputed logits first
   diverge: prompt IDs, MRoPE positions, reconstructed final features,
   DeepStack routing, dtype/device conversion, or policy synchronization?
 - Does Megatron actor-forward preserve the same logits when given the exact
@@ -3955,21 +3955,21 @@ exposed a live behavioral mismatch that blocks performance optimization.
   ingestion?
 - Can feature-ID-sticky routing avoid duplicate encodes across multiple
   independent replica LRUs, or is a shared object/binary transport required?
-- Why did the successful CPU-resident outer launcher return status `127` after
+- Why did the successful CPU with GPU encoder kept outer launcher return status `127` after
   Ray reported success?
 
 Reports:
 
 - `training_reports/2026-07-30-qwen3-vl-cpu-gpu-vision-parity.md`
 - `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`
-- `training_reports/2026-07-31-qwen3-vl-vision-three-mode-vram.md`
+- `training_reports/2026-07-31-qwen3-vl-gpu-cpu-vision-vram.md`
 
 Artifacts:
 
-- `benchmark_results/cpu_vision/20260730_hf_parity/parity.json`
-- `benchmark_results/cpu_vision/20260731_three_mode_two_cycle/native_gpu_vram.json`
-- `benchmark_results/cpu_vision/20260731_three_mode_two_cycle/cpu_resident_vram.json`
-- `benchmark_results/cpu_vision/20260731_three_mode_two_cycle/cpu_omitted_vram.json`
+- `benchmark_results/cpu_vision/20260730_hf_gpu_cpu_parity/parity.json`
+- `benchmark_results/cpu_vision/20260731_gpu_cpu_vision_two_cycle/gpu_vram.json`
+- `benchmark_results/cpu_vision/20260731_gpu_cpu_vision_two_cycle/cpu_vram.json`
+- `benchmark_results/cpu_vision/20260731_gpu_cpu_vision_two_cycle/cpu_skip_gpu_encoder_vram.json`
 
 ## 2026-07-31 - Frozen CPU vision live semantic-parity closure
 
@@ -3978,7 +3978,7 @@ Artifacts:
 **General description:** A deterministic live-backend investigation found
 that SGLang parsed and transported the CPU feature bundle but did not consume
 it in the Qwen3-VL language-model forward; the corrected final-plus-DeepStack
-adapter now matches native GPU vision for the tested single-image PP1/CP1
+adapter now matches GPU vision for the tested single-image PP1/CP1
 path.
 
 ### What we tried
@@ -3986,7 +3986,7 @@ path.
 - Preserved the earlier Hugging Face eight-image representation and
   full-vocabulary logit parity as the standalone boundary check.
 - Traced the real generic-transformers SGLang multimodal forward after the
-  three-mode benchmark showed chance-level CPU behavior despite successful
+  GPU/CPU benchmark showed chance-level CPU behavior despite successful
   Relax cycles.
 - Added an explicit all-precomputed Qwen3-VL prefill adapter that validates
   the packed feature width, separates the final projection from all three
@@ -3994,10 +3994,10 @@ path.
   positions, and supplies both the visual mask and DeepStack streams to the
   language model.
 - Added a deterministic live SGLang probe that evaluates eight fixed images
-  through native GPU vision and CPU-precomputed vision in the same server and
+  through GPU vision and CPU-precomputed vision in the same server and
   compares generated tokens, decoded text, A/B log probabilities, action
   margins, and normalized action probabilities.
-- Repeated an omitted-GPU-weight Relax workload through evaluation, rollout,
+- Repeated a Relax workload with the GPU encoder skipped through evaluation, rollout,
   Megatron actor-forward, two optimizer updates, weight synchronization, and
   shutdown while collecting CPU cache counters and rollout-versus-training
   sampled-token log probabilities.
@@ -4017,7 +4017,7 @@ path.
   was `1.430511474609375e-06`; maximum action-margin delta was
   `1.043081283569336e-07`; and maximum normalized action-probability delta was
   `1.7429432036530912e-08`.
-- The corrected omitted-weight Relax run recovered native-like behavior:
+- The corrected GPU-encoder-skipped Relax run recovered GPU-like behavior:
   held-out reward `0.69921875`, valid-action rate `1.0`, and action-A rate
   `0.453125`, versus the historical broken-consumer result of `0.5000` reward
   and `0.7148` action-A rate. Because these are stochastic evaluations, the
@@ -4025,12 +4025,12 @@ path.
 - SGLang rollout and Megatron actor-forward agreed on sampled-token log
   probabilities within `5e-7` mean absolute error at both optimizer updates.
   This closes the actual-sample cross-backend gate, but it is not a separate
-  within-Megatron native-versus-precomputed full-vocabulary comparison.
+  within-Megatron GPU-versus-CPU-precomputed full-vocabulary comparison.
 - The CPU cache counters were internally consistent: 768 requests over 128
   unique images produced 640 hits, 128 misses/encodes, an `83.33%` hit rate,
   zero evictions, and 67,111,936 resident feature bytes.
 - Correctness must be established at every consumer boundary before measuring
-  performance. The earlier three-mode timing numbers describe the historical
+  performance. The earlier GPU/CPU timing numbers describe the historical
   broken-consumer implementation and must be rerun before making a scaling or
   throughput recommendation for the corrected path.
 
@@ -4041,18 +4041,18 @@ path.
   caching, transport, Megatron consumption/training, synchronization, and
   shutdown only.
 - Stochastic task reward and action distribution exposed the mismatch but
-  could not locate it. The fixed-input native-versus-precomputed live-logit
+  could not locate it. The fixed-input GPU-versus-CPU-precomputed live-logit
   comparison was the decisive diagnostic.
 - Treating payload parsing, feature IDs, cache hits, or successful GPU-weight
-  omission as semantic proof was insufficient. A backend can carry all of
+  skipping the GPU encoder as semantic proof was insufficient. A backend can carry all of
   that metadata while silently following its ordinary embedding path.
-- The historical native/CPU wall-time comparison cannot be used to select CPU
+- The historical GPU/CPU wall-time comparison cannot be used to select CPU
   thread count, replica count, batching, or transport until all three modes
   are rerun with the corrected SGLang consumer.
 
 ### Open questions
 
-- What is the corrected native-versus-CPU-resident-versus-CPU-omitted
+- What is the corrected GPU-versus-CPU with GPU encoder kept-versus-CPU with GPU encoder skipped
   throughput and latency under an equal workload?
 - How much of the CPU-path overhead comes from JSON tensor serialization,
   Ray/Serve transport, feature reconstruction, scheduling, and CPU encoding?
@@ -4062,26 +4062,26 @@ path.
   encoding when multiple CPU replicas are introduced?
 - Do the same contracts hold for multiple images, video, chunked multimodal
   prefill, context parallelism, pipeline parallelism greater than one, and
-  mixed native/precomputed scheduling?
-- Is a within-Megatron fixed-input full-vocabulary native-versus-precomputed
+  mixed GPU/precomputed scheduling?
+- Is a within-Megatron fixed-input full-vocabulary GPU-versus-CPU-precomputed
   comparison worth adding beyond the passing sampled-token cross-backend gate?
 
 Reports:
 
 - `training_reports/2026-07-31-qwen3-vl-live-precomputed-deepstack-parity.md`
 - `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`
-- `training_reports/2026-07-31-qwen3-vl-vision-three-mode-vram.md`
+- `training_reports/2026-07-31-qwen3-vl-gpu-cpu-vision-vram.md`
 
 Artifacts:
 
 - `benchmark_results/cpu_vision/20260731_sglang_live_parity/parity.json`
-- `benchmark_results/cpu_vision/20260730_hf_parity/parity.json`
-- `log/visual-xor-refinement-cpu-omitted-20260731_115759.log`
+- `benchmark_results/cpu_vision/20260730_hf_gpu_cpu_parity/parity.json`
+- `log/visual-xor-refinement-cpu-skip-gpu-encoder-20260731_115759.log`
 
 ## 2026-08-01 - Corrected CPU vision performance boundary
 
 **Type:** Experiment and decision
-**General description:** The corrected native, CPU-resident, and CPU-omitted
+**General description:** The corrected GPU, CPU with GPU encoder kept, and CPU with GPU encoder skipped
 Qwen3-VL workloads all passed. Stage instrumentation located the first
 performance bottleneck in repeated JSON feature transport rather than CPU
 encoding.
@@ -4091,8 +4091,8 @@ encoding.
 - All three matched fully asynchronous runs completed baseline evaluation,
   two rollouts, four optimizer updates, final synchronization, and clean
   shutdown without checkpoints.
-- Held-out rewards were `0.7090` native, `0.6816` CPU resident, and `0.7031`
-  CPU omitted. Both corrected CPU modes retained native-like behavior.
+- Held-out rewards were `0.7090` GPU, `0.6816` CPU with GPU encoder kept, and `0.7031`
+  CPU with GPU encoder skipped. Both corrected CPU modes retained GPU-like behavior.
 - The CPU LRU served 640 of 768 evaluation requests from cache and encoded
   only 128 unique images. Actual backend encode time was 49-54 seconds.
 - One raw feature was 524,312 bytes, while one JSON generation request
@@ -4100,10 +4100,10 @@ encoding.
   transported about 185 MB for only eight unique features.
 - CPU evaluation request construction alone averaged 0.37 seconds per
   request. Mean response wait was about 4.0-4.1 seconds versus 1.12 seconds
-  native. Tensor-to-list conversion averaged only 21-24 milliseconds.
-- CPU modes took 1.455x and 1.487x native wall time. Omitting weights changed
-  CPU-resident wall time by only 2.2%, confirming that it is a memory feature.
-- Omission reduced every per-device peak by 26-60 MiB, totaling 190.61 MiB
+  GPU. Tensor-to-list conversion averaged only 21-24 milliseconds.
+- CPU modes took 1.455x and 1.487x GPU wall time. Omitting weights changed
+  CPU with GPU encoder kept wall time by only 2.2%, confirming that it is a memory feature.
+- Skipping the GPU encoder reduced every per-device peak by 26-60 MiB, totaling 190.61 MiB
   across independent device peaks. The asynchronous simultaneous maximum
   reversed ordering across repeats, so it is schedule-sensitive and not a
   clean isolated weight-memory statistic.
@@ -4119,7 +4119,7 @@ encoding.
 
 Report:
 
-- `training_reports/2026-08-01-qwen3-vl-corrected-three-mode-performance.md`
+- `training_reports/2026-08-01-qwen3-vl-gpu-cpu-vision-performance.md`
 
 ## 2026-08-03 - Qwen3-VL SGLang parallel sampling
 
@@ -4127,7 +4127,7 @@ Report:
 **General description:** Relax now sends one CPU-precomputed final-plus-
 DeepStack feature bundle to SGLang for eight stochastic branches instead of
 retransmitting it once per sample. Standalone parity and a fully asynchronous
-two-rollout CPU-omitted run passed.
+two-rollout CPU with GPU encoder skipped run passed.
 
 ### Key findings
 
@@ -4146,7 +4146,7 @@ two-rollout CPU-omitted run passed.
 - Both rollouts, actor-forward, four successful optimizer updates, final
   rollout and actor-forward weight synchronization, and clean shutdown
   completed. Checkpoint saving remained disabled.
-- Grouped and previous scalar CPU-omitted per-device VRAM peaks were
+- Grouped and previous scalar CPU with GPU encoder skipped per-device VRAM peaks were
   effectively identical. This is a transport optimization, not an additional
   weight-memory optimization.
 - Baseline evaluation remained scalar and sent 2.233 GB across 768 requests.
@@ -4155,7 +4155,7 @@ two-rollout CPU-omitted run passed.
 
 ### Decision
 
-- Keep native SGLang parallel sampling for narrowly eligible fresh,
+- Keep GPU SGLang parallel sampling for narrowly eligible fresh,
   homogeneous, stochastic CPU-precomputed Qwen3-VL groups.
 - Keep deterministic, partial, resumed, custom, Slime, routing-replay, and
   multi-engine non-round-robin cases on the scalar path with an explicit
@@ -4173,31 +4173,31 @@ Report:
 Artifacts:
 
 - `benchmark_results/cpu_vision/20260803_sglang_parallel_n8/probe.json`
-- `benchmark_results/cpu_vision/20260803_sglang_parallel_n8/cpu_omitted_two_rollout_vram.json`
+- `benchmark_results/cpu_vision/20260803_sglang_parallel_n8/cpu_skip_gpu_encoder_two_rollout_vram.json`
 
 Accepted run:
 
 - Ray job `raysubmit_GLUEF5ZUBeq5S13S`
 - W&B run `lr67sp9v`
-- `log/visual-xor-refinement-cpu-omitted-20260803_174541.log`
+- `log/visual-xor-refinement-cpu-skip-gpu-encoder-20260803_174541.log`
 
 Artifacts:
 
-- `benchmark_results/cpu_vision/20260801_corrected_three_mode/native_gpu_vram_retry1.json`
-- `benchmark_results/cpu_vision/20260801_corrected_three_mode/cpu_resident_vram.json`
-- `benchmark_results/cpu_vision/20260801_corrected_three_mode/cpu_omitted_vram.json`
+- `benchmark_results/cpu_vision/20260801_gpu_cpu_vision_performance/gpu_vram_retry1.json`
+- `benchmark_results/cpu_vision/20260801_gpu_cpu_vision_performance/cpu_vram.json`
+- `benchmark_results/cpu_vision/20260801_gpu_cpu_vision_performance/cpu_skip_gpu_encoder_vram.json`
 
 ## 2026-08-01 - Retrospective on corrected CPU vision performance
 
 **Type:** Retrospective
 **General description:** Once live SGLang semantic parity was established, a
-matched three-mode rerun separated CPU encoding, cache behavior, feature
+matched GPU/CPU rerun separated CPU encoding, cache behavior, feature
 conversion, transport, serving latency, and asynchronous GPU-memory peaks.
 
 ### What we tried
 
-- Reran native GPU vision, CPU-precomputed vision with resident GPU visual
-  weights, and CPU-precomputed vision with GPU visual weights omitted under
+- Reran GPU vision, CPU-precomputed vision with the GPU encoder kept,
+  and CPU-precomputed vision with the GPU encoder skipped under
   the same fully asynchronous two-rollout workload.
 - Kept the actor DP2, rollout GPU, actor-forward GPU, rollout sampling,
   evaluation, optimizer, and no-checkpoint configuration matched.
@@ -4215,7 +4215,7 @@ conversion, transport, serving latency, and asynchronous GPU-memory peaks.
   consumption; the corrected live-logit gate had to pass before rerunning
   performance experiments.
 - The corrected CPU modes scored `0.6816` and `0.7031` held out versus
-  `0.7090` native, with valid-action rate `1.0`. Omission preserved behavior.
+  `0.7090` GPU, with valid-action rate `1.0`. Skipping the GPU encoder preserved behavior.
 - The CPU LRU behaved correctly: 128 unique evaluation images produced 128
   encodes, 640 hits, no evictions, and only 49-54 seconds of backend work.
 - A cache hit at the CPU service did not eliminate downstream work. Every
@@ -4237,9 +4237,9 @@ conversion, transport, serving latency, and asynchronous GPU-memory peaks.
 - Treating a successful end-to-end RL cycle as proof that SGLang consumed the
   intended representation was incorrect. Structural payload evidence and
   task reward could expose a problem but could not prove semantic equivalence.
-- The first native benchmark attempt inherited an unrelated `engram-vit`
+- The first GPU benchmark attempt inherited an unrelated `engram-vit`
   virtual environment. It failed before Ray startup and was excluded; the
-  sanitized Relax-environment retry is the accepted native baseline.
+  sanitized Relax-environment retry is the accepted GPU baseline.
 - The initial performance intuition focused too early on CPU parallelism.
   Backend encode counters showed that increasing encoder replicas would leave
   the dominant serialization and repeated-transfer costs intact.
@@ -4247,7 +4247,7 @@ conversion, transport, serving latency, and asynchronous GPU-memory peaks.
   These totals measure accumulated work/latency; matched wall-clock duration
   and per-request distributions remain separate evidence.
 - Interpreting one fully asynchronous simultaneous VRAM maximum as clean
-  omission savings was unstable. Role-local per-device peaks were repeatable;
+  VRAM savings from skipping the GPU encoder were unstable. Role-local per-device peaks were repeatable;
   overlap timing was not.
 
 ### Open questions
@@ -4266,7 +4266,7 @@ conversion, transport, serving latency, and asynchronous GPU-memory peaks.
   replication, and how is a missing registration retried without silently
   falling back to raw vision?
 - How should repeated synchronized phase-specific probes quantify aggregate
-  omission VRAM independently of fully asynchronous allocation overlap?
+  VRAM saved by skipping the GPU encoder independently of fully asynchronous allocation overlap?
 
 ### Reusable lessons
 
@@ -4285,18 +4285,18 @@ conversion, transport, serving latency, and asynchronous GPU-memory peaks.
 
 Report:
 
-- `training_reports/2026-08-01-qwen3-vl-corrected-three-mode-performance.md`
+- `training_reports/2026-08-01-qwen3-vl-gpu-cpu-vision-performance.md`
 
 ## 2026-08-04 - Retrospective on SGLang parallel sampling for CPU vision
 
 **Type:** Retrospective
-**General description:** The smallest transport optimization—one native
+**General description:** The smallest transport optimization—one GPU
 SGLang branch request per prompt—removed the eight-sample retransmission from
 training rollouts without changing model semantics or GPU-memory ownership.
 
 ### What we tried
 
-- Started from the corrected three-mode evidence that a 524,312-byte CPU
+- Started from the corrected GPU/CPU evidence that a 524,312-byte CPU
   feature expanded into an approximately 2.907 MB JSON generation request and
   was retransmitted once per generated sample.
 - Added an isolated live SGLang `n=8` gate that compared one grouped request
@@ -4305,12 +4305,12 @@ training rollouts without changing model semantics or GPU-memory ownership.
 - Added narrowly gated Relax grouping for fresh homogeneous stochastic
   CPU-precomputed Qwen3-VL samples, with exact response cardinality and ordered
   mapping back to the original samples.
-- Ran a foreground startup gate, then a fully asynchronous CPU-omitted
+- Ran a foreground startup gate, then a fully asynchronous CPU with GPU encoder skipped
   workload containing baseline evaluation, two 64-sample rollouts, actor-
   forward, four optimizer updates, final weight synchronization, and VRAM
   monitoring.
 - Preserved the scalar path for unsupported generation and routing contracts
-  rather than widening native branching speculatively.
+  rather than widening SGLang multi-sample generation speculatively.
 
 ### Key findings
 
@@ -4324,15 +4324,15 @@ training rollouts without changing model semantics or GPU-memory ownership.
 - Both rollouts, actor-forward, all four optimizer updates, final rollout and
   actor-forward synchronization, and clean shutdown passed. Grouping changed
   the request boundary without changing the training-consumer boundary.
-- Grouped and scalar CPU-omitted per-device VRAM peaks were effectively
-  identical. Native branching is a transport optimization, not a GPU-weight
+- Grouped and scalar CPU with GPU encoder skipped per-device VRAM peaks were effectively
+  identical. SGLang multi-sample generation is a transport optimization, not a GPU-weight
   or activation-memory optimization.
 - One SGLang engine makes the router policy name irrelevant to grouping
   safety: there is no alternative engine to select. With multiple engines,
   non-round-robin routing must remain scalar until grouped routing semantics
   are explicitly designed and tested.
 - Baseline evaluation still used 768 scalar requests and sent 2.233 GB.
-  Native branching closed within-prompt amplification but not repeated
+  SGLang multi-sample generation closed within-prompt amplification but not repeated
   transport across distinct requests.
 
 ### What failed or required correction
@@ -4344,7 +4344,7 @@ training rollouts without changing model semantics or GPU-memory ownership.
   eligibility rule.
 - The earlier performance decision jumped directly from repeated JSON
   transport to a feature registry. That was too large a first step for
-  `N_SAMPLES_PER_PROMPT=8`; native SGLang branching removed the dominant
+  `N_SAMPLES_PER_PROMPT=8`; SGLang multi-sample generation removed the dominant
   training-rollout duplication with a smaller contract.
 - Whole-run duration cannot establish the 3.699x speedup because startup and
   scalar evaluation varied between runs. The defensible comparison is the
@@ -4363,7 +4363,7 @@ training rollouts without changing model semantics or GPU-memory ownership.
 - How should grouped requests route with multiple SGLang engines: prompt-
   sticky ownership, explicit replication, or a different request contract?
 - Can a future SGLang interface provide distinct per-branch seeds so
-  deterministic Relax generation can use native branching without changing
+  deterministic Relax generation can use SGLang multi-sample generation without changing
   reproducibility?
 - After cross-request transport is addressed, do server reconstruction/H2D,
   prefill, CPU thread count, dynamic encoder batching, or replica count become
@@ -4374,7 +4374,7 @@ training rollouts without changing model semantics or GPU-memory ownership.
 ### Reusable lessons
 
 - Optimize repeated multimodal transport in increasing order of contract
-  size: native within-request branching, then measured cross-request reuse,
+  size: GPU within-request branching, then measured cross-request reuse,
   then a bounded registry or binary/shared-memory transport if still needed.
 - Derive eligibility from actual topology and semantic contracts, not a router
   policy label. One engine and multiple engines have different safety proofs.
@@ -4428,7 +4428,7 @@ before introducing a distributed feature registry.
   JSON request envelope. Grid, feature ID, and vision revision remain explicit.
 - SGLang reconstructs the BF16 tensor before its base multimodal processor
   reads `feature`, validates the exact byte count, and removes transport-only
-  fields. Legacy nested-list input remains readable; native media bypasses the
+  fields. Legacy nested-list input remains readable; GPU media bypasses the
   decoder.
 
 ### Evidence
@@ -4444,13 +4444,13 @@ before introducing a distributed feature registry.
   evaluation versus 268.92 MB inline, but requires ownership, routing,
   eviction, revision, and missing-ID contracts. Inline BF16 was therefore the
   smallest justified change.
-- The live eight-image native-versus-packed SGLang gate matched every token and
+- The live eight-image GPU-versus-packed SGLang gate matched every token and
   text. Maximum A/B log-probability delta was `1.430511474609375e-06`; maximum
   action-margin delta was `1.043081283569336e-07`.
 - The live `n=8` packed gate returned 64/64 matching outputs. Eight grouped
   requests sent 5,602,616 bytes instead of 44,820,416 scalar-equivalent bytes.
 - Ray job `raysubmit_c3YzyTcrTuidT6us` and W&B run `kjp5zomx` completed the
-  matched CPU-omitted two-rollout workload. Evaluation sent 268,913,280 bytes,
+  matched CPU with GPU encoder skipped two-rollout workload. Evaluation sent 268,913,280 bytes,
   75.93% below grouped nested JSON and 87.96% below the original scalar nested
   path. Each 64-sample rollout sent 5,602,384 bytes across eight requests.
 - Rollout rewards were `0.6875` and `0.671875`, valid-action rate was `1.0`, and
@@ -4466,10 +4466,10 @@ before introducing a distributed feature registry.
   later collector was too late because SGLang's base processor had already
   indexed the legacy field. The fix moved reconstruction to the early
   `process_and_combine_mm_data` seam.
-- The next live parity attempt failed on native PNG input with
+- The next live parity attempt failed on GPU PNG input with
   `AttributeError: PngImageFile has no attribute get`. The compatibility hook
   had assumed every multimodal item was a dictionary. An explicit mapping
-  guard restored the native path.
+  guard restored the GPU path.
 - The historical W&B key `precomputed_to_list_time` is now semantically stale.
   It remains only to preserve dashboard continuity and is documented as packed
   serialization time.
@@ -4485,11 +4485,11 @@ before introducing a distributed feature registry.
 
 - Keep reward grouping and generation grouping as separate contracts. Reward
   semantics must not accidentally disable an inference-engine optimization.
-- Optimize multimodal transport in ascending contract size: native branching,
+- Optimize multimodal transport in ascending contract size: SGLang multi-sample generation,
   compact stateless inline bytes, then a bounded stateful registry only if the
   remaining cross-request traffic is still material.
 - Lossless wire-format tests are necessary but not sufficient. The decoder must
-  run at the consumer's actual read seam, native media must retain its path, and
+  run at the consumer's actual read seam, GPU media must retain its path, and
   live logits must still pass.
 - A feature registry is not just a smaller payload. It introduces engine
   ownership, routing affinity or replication, eviction, revision consistency,
@@ -4518,10 +4518,10 @@ Report:
 Existing reusable skill:
 
 - `model-integration` now records packed-inline-before-registry ordering, the
-  early decoder seam, native-media guard, and exact BF16/live-parity gates. No
+  early decoder seam, GPU-media guard, and exact BF16/live-parity gates. No
   additional result skill is needed yet.
 
-## 2026-08-06: CPU vision steady-state overlap and matched native counterfactual
+## 2026-08-06: CPU vision steady-state overlap and matched GPU counterfactual
 
 **General description:** Test whether one frozen CPU vision replica can stay
 ahead of fully asynchronous RL training before replacing the remaining packed
@@ -4529,7 +4529,7 @@ JSON feature transport.
 
 ### What changed
 
-- Native processor-backed image-only groups now share one processor pass and
+- Raw-image processor-backed image-only groups now share one processor pass and
   raw-media encoding and use one SGLang `n=N` request under the same narrow
   fresh-group safety contract as CPU-precomputed sampling.
 - Both fully asynchronous refinement launchers accept `ENABLE_EVAL=0` for an
@@ -4539,22 +4539,22 @@ JSON feature transport.
 
 ### Evidence
 
-- The strict native `n=8` probe returned 64/64 matching tokens/texts but failed
+- The strict GPU `n=8` probe returned 64/64 matching tokens/texts but failed
   its scalar-score gate: maximum action-log-probability, margin, and
   probability deltas were `0.03938`, `0.06250`, and `0.01457`. The threshold
-  remained unchanged and the native training run is qualified as a
+  remained unchanged and the GPU training run is qualified as a
   performance counterfactual.
-- The CPU-omitted run forced `VISION_ENCODER_CACHE_MAX_BYTES=1`: 160 misses,
+- The CPU with GPU encoder skipped run forced `VISION_ENCODER_CACHE_MAX_BYTES=1`: 160 misses,
   160 evictions, zero hits, and 160 real encodes. Mean backend time was 1.904
-  seconds per eight images and steady rollout wall was 4.789 seconds.
+  seconds per eight images and steady rollout time was 4.789 seconds.
 - All 20 CPU rollout intervals and 40 optimizer intervals were complete; all
   105 rollout seconds overlapped actor optimizer work. Steady actor data wait
   averaged 0.238 seconds, only 0.88% of its 26.829-second cycle.
-- Native rollout wall averaged 3.263 seconds, but its actor compute and complete
-  cycle averaged 15.674 and 29.700 seconds. CPU omission reduced those by
+- GPU rollout time averaged 3.263 seconds, but its actor compute and complete
+  cycle averaged 15.674 and 29.700 seconds. Skipping the GPU encoder reduced those by
   13.68% and 9.67% respectively.
-- CPU requests used 5,602,384 bytes per rollout versus 14,609 bytes native, a
-  383.5x expansion, but both producers filled the same staleness window and
+- CPU requests used 5,602,384 bytes per rollout versus 14,609 bytes GPU, a
+  383.5x expansion, but both CPU caches filled the same staleness window and
   neither starved the actor.
 - Simultaneous peak VRAM fell from 20.562 to 19.841 GiB. The reductions were
   108.09/77.39 MiB on the actor ranks, 498.22 MiB on SGLang, and 76.27 MiB on
@@ -4565,23 +4565,23 @@ JSON feature transport.
 
 ### Decision
 
-- Keep stateless packed transport and omission mode for the next scale test.
+- Keep stateless packed transport and skip the GPU encoder for the next scale test.
   Do not add a registry or CPU replicas until increased rollout demand makes
-  actor wait rise or prevents the producer from reaching staleness
+  actor wait rise or prevents the CPU cache from reaching staleness
   backpressure.
 - Profile the 12-13 second per-cycle weight propagation phase independently;
   it now occupies nearly as much time as actor compute.
-- Investigate native grouped branch-logit drift before treating it as a strict
+- Investigate GPU grouped branch-logit drift before treating it as a strict
   correctness baseline. Do not weaken the gate.
 
 Report and artifacts:
 
 - `training_reports/2026-08-06-qwen3-vl-cpu-vision-steady-state-overlap.md`
-- `benchmark_results/cpu_vision/20260806_native_grouped_n8/probe.json`
-- `benchmark_results/cpu_vision/20260806_overlap_cpu_omitted_nocache/`
-- `benchmark_results/cpu_vision/20260806_overlap_native_grouped/`
-- `log/visual-xor-refinement-cpu-omitted-20260806_081340.log`
-- `log/visual-xor-refinement-native-gpu-20260806_083125.log`
+- `benchmark_results/cpu_vision/20260806_gpu_grouped_n8/probe.json`
+- `benchmark_results/cpu_vision/20260806_overlap_cpu_skip_gpu_encoder_nocache/`
+- `benchmark_results/cpu_vision/20260806_overlap_gpu_grouped/`
+- `log/visual-xor-refinement-cpu-skip-gpu-encoder-20260806_081340.log`
+- `log/visual-xor-refinement-gpu-20260806_083125.log`
 
 ## 2026-08-11: CPU-ViT scaling instrumentation and allocation gate
 
@@ -4602,12 +4602,12 @@ claiming results from an allocation that cannot expose meaningful CPU scaling.
 - The offline runner excludes layouts above `--max-total-cpus=8`, keeps only
   one replica/thread process layout alive at a time, reuses that layout across
   explicit batch sizes, and records process CPU time and peak RSS by worker.
-- The four E1 demand fanouts can be selected through launcher environment
+- The four CPU vision demand demand fanouts can be selected through launcher environment
   overrides while preserving 64 responses per rollout. Capacity mode runs a
   topology preflight before Ray startup.
 - `VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS=0` preserves the existing one-request,
   one-forward path. Invalid values fail validation, and positive values fail
-  explicitly until E2 establishes the required 20% explicit-batching gain.
+  explicitly until CPU scaling establishes the required 20% explicit-batching gain.
 
 ### Local evidence
 
@@ -4625,13 +4625,13 @@ claiming results from an allocation that cannot expose meaningful CPU scaling.
 
 ### Decision
 
-- Do not infer an E1 peak demand, select an E2 topology, or implement live
-  dynamic batching from this allocation. No E0-E4 hardware run was performed.
+- Do not infer an CPU vision demand peak demand, select an CPU scaling topology, or implement live
+  dynamic batching from this allocation. No GPU-CPU parity-vision cache reuse hardware run was performed.
 - Acquire four MI210 GPUs, 16 scheduler CPUs, and at least eight distinct
-  physical cores. Rerun E0 representation parity, execute E1, and feed its
-  measured peak demand into E2.
-- If E2 does not show at least a 20% gain for explicit batch size above one at
-  the same replica/thread layout, record the negative result and stop the E4
+  physical cores. Rerun GPU-CPU parity representation parity, execute CPU vision demand, and feed its
+  measured peak demand into CPU scaling.
+- If CPU scaling does not show at least a 20% gain for explicit batch size above one at
+  the same replica/thread layout, record the negative result and stop the vision cache reuse
   batching branch.
 - Keep asynchronous weight-update time visible only as a timing covariate; it
   is not an optimization target in this experiment.
@@ -4640,25 +4640,25 @@ Report:
 
 - `training_reports/2026-08-11-qwen3-vl-cpu-vit-scaling-readiness.md`
 
-## 2026-08-17: Submit node-exclusive CPU-ViT E0-E1 Slurm job
+## 2026-08-17: Submit node-exclusive CPU-ViT GPU-CPU parity-CPU vision demand Slurm job
 
 **General description:** Move the next CPU-ViT parity and live-demand gates
 from the inadequate one-core interactive allocation into a scheduler-managed
-MI210 allocation without bypassing the E1-to-E2 decision boundary.
+MI210 allocation without bypassing the CPU vision demand-to-CPU scaling decision boundary.
 
 ### What changed
 
-- Added `scripts/slurm/qwen3_vl_cpu_vit_e0_e1.sbatch` for the `faculty`
+- Added `scripts/slurm/qwen3_vl_measure_cpu_vision_demand.sbatch` for the `faculty`
   partition using account `faculty-acc` and QoS `qirong_qos`.
 - The job requests one node, four MI210 GPUs, one 16-core non-SMT task,
   128 GiB, a 12-hour limit, and node-exclusive access. Exclusivity is required
   because the existing single-node Relax launcher uses dashboard port 8265
   and broad local Ray cleanup.
 - The wrapper validates the maximum planned eight-CPU ViT layout, runs the
-  local full-vocabulary E0 parity gate, and runs the live scalar/grouped E0
-  probe. The known grouped-native result is recorded but does not block E1
+  local full-vocabulary GPU-CPU parity parity gate, and runs the live scalar/grouped GPU-CPU parity
+  probe. The known grouped-GPU result is recorded but does not block CPU vision demand
   when scalar CPU and grouped CPU parity pass.
-- D0-D3 then run sequentially with 12 rollouts, cache disabled, one encoder
+- prompts8_samples8-prompts64_samples1 then run sequentially with 12 rollouts, cache disabled, one encoder
   replica and thread, no evaluation or checkpoints, and deterministic outer
   console logs. Ray Serve and Ray are stopped after each successful profile
   and on batch exit.
@@ -4673,16 +4673,16 @@ MI210 allocation without bypassing the E1-to-E2 decision boundary.
 - Initial state: `PENDING (Priority)`
 - Requested TRES: 16 CPUs, 128 GiB, and four MI210 GPUs; node sharing is
   disabled.
-- Slurm log: `log/slurm-cpu-vit-e0-e1-141944.log`
+- Slurm log: `log/slurm-cpu-vision-demand-141944.log`
 - Artifact directory after startup:
-  `benchmark_results/cpu_vision/slurm_141944_e0_e1/`
+  `benchmark_results/cpu_vision/slurm_141944_cpu_vision_demand/`
 
 ### Decision boundary
 
-- Do not submit E2 until job `141944` completes and ten steady E1 cycles per
+- Do not submit CPU scaling until job `141944` completes and ten steady CPU vision demand cycles per
   profile yield a measured peak consumer-demand scalar.
-- Do not submit E3 until E2 selects a capacity layout and the D2 actor-wait
-  result determines whether D3 is needed as the saturation profile.
+- Do not submit CPU worker layouts until CPU scaling selects a capacity layout and the prompts32_samples2 actor-wait
+  result determines whether prompts64_samples1 is needed as the high-demand setting.
 - Keep `VISION_ENCODER_BATCH_WAIT_TIMEOUT_MS=0`; this submission does not
   authorize or imply live dynamic batching.
 
@@ -4696,20 +4696,20 @@ claiming an unmeasured topology or batching result.
 
 - Semantic parity, live consumer demand, offline CPU supply, live topology,
   batching eligibility, and cache locality are separate ordered gates.
-- Scalar native versus CPU and grouped CPU versus scalar CPU passed their
-  feature/logit gates. Grouped native `n=8` remained an independent qualified
+- Scalar GPU versus CPU and grouped CPU versus scalar CPU passed their
+  feature/logit gates. Grouped GPU `n=8` remained an independent qualified
   performance counterfactual because its strict branch-score gates failed.
 - One uncached one-thread CPU replica kept steady actor wait at `0.88%` and all
-  rollout time overlapped actor work. D0 therefore proved useful overlap but
-  could not select a CPU topology because it did not saturate the producer.
-- Packed CPU requests were `383.5` times larger than native requests without
+  rollout time overlapped actor work. prompts8_samples8 therefore proved useful overlap but
+  could not select a CPU topology because it did not saturate the CPU cache.
+- Packed CPU requests were `383.5` times larger than GPU requests without
   pacing the actor. Large transport volume alone does not justify a registry.
 - Multi-replica service state must be aggregated from response-carried latest
   snapshots per replica; load-balanced metric queries cannot represent the
   deployment.
 - Explicit offline batches justify a live batching implementation only after
   a same-layout gain of at least 20%. Live adoption still requires actor-wait,
-  capacity, parity, rollout-wall or CPU-reservation, and p95 RTT gates.
+  capacity, parity, rollout-time or CPU-reservation, and p95 RTT gates.
 - CPU topology is part of the experiment. The affinity CPUs `8,72` were SMT
   siblings of one physical core, so rejecting the local scaling matrix before
   Ray startup preserved the validity of the result.
@@ -4720,7 +4720,7 @@ claiming an unmeasured topology or batching result.
   protocol covering demand-before-supply measurement, topology preflight,
   response-carried replica telemetry, `1.25`-times capacity headroom,
   conditional batching, live acceptance, and the cache-locality boundary.
-- Did not create an “optimal CPU-ViT scaling” result skill because E1-E4 have
+- Did not create an “optimal CPU-ViT scaling” result skill because CPU vision demand-vision cache reuse have
   not measured a winning layout or batch-wait timeout.
 - Did not add a troubleshooting entry. The SMT-only rejection is an intended,
   actionable preflight guard rather than a runtime failure pattern.
@@ -4730,37 +4730,37 @@ Inputs:
 - `training_reports/2026-08-06-qwen3-vl-cpu-vision-steady-state-overlap.md`
 - `training_reports/2026-08-11-qwen3-vl-cpu-vit-scaling-readiness.md`
 
-## 2026-08-18: Complete E0-E1 and submit the gated E2 sweep
+## 2026-08-18: Complete GPU-CPU parity-CPU vision demand and submit the gated CPU scaling sweep
 
 **General description:** Convert the completed Slurm demand run into a checked
 consumer-demand artifact and advance only the next experiment gate.
 
 ### Evidence
 
-- Slurm job `141944` completed E0 and all 12 cycles of D0-D3 with exit code
+- Slurm job `141944` completed GPU-CPU parity and all 12 cycles of prompts8_samples8-prompts64_samples1 with exit code
   zero, 24 optimizer intervals per profile, final synchronization, valid-action
   rate 1.0, no checkpoint write, and Ray shutdown.
-- Scalar native versus scalar CPU and grouped CPU versus scalar CPU passed.
-  Grouped native remained the known independent failure with maximum
+- Scalar GPU versus scalar CPU and grouped CPU versus scalar CPU passed.
+  Grouped GPU remained the known independent failure with maximum
   log-probability, margin, and probability drift of `0.0393803`, `0.0625000`,
   and `0.0145715`.
 - `examples.visual_xor.analyze_cpu_vision_demand` now pairs CPU-vision and actor
   cycles, rejects incomplete pairings, discards cycles 0-1, reports request
   accounting, and writes a versioned artifact.
-- D0-D3 peak demands were `0.810161`, `1.614181`, `3.240455`, and `5.858836`
-  images/s. D2 maximum steady actor wait was `0.655000%`, below the 5%
+- prompts8_samples8-prompts64_samples1 peak demands were `0.810161`, `1.614181`, `3.240455`, and `5.858836`
+  images/s. prompts32_samples2 maximum steady actor wait was `0.655000%`, below the 5%
   saturation gate.
-- D0-D2 have exact image/request accounting. D3 accepted the planned 64
+- prompts8_samples8-prompts32_samples2 have exact image/request accounting. prompts64_samples1 accepted the planned 64
   responses per cycle but encoded 29 extra refill/filter candidates in cycle
   11; the analyzer marks the profile non-exact.
-- The E2 capacity target is `7.3235445499` images/s.
+- The CPU scaling capacity target is `7.3235445499` images/s.
 
 ### Submission
 
-- E2 job `142800` was cancelled before accepting results because the
+- CPU scaling job `142800` was cancelled before accepting results because the
   node-exclusive batch shell exposed all 128 logical CPUs.
 - The corrected script ran the measured commands inside an explicit 16-core
-  Slurm step. E2 job `142801` completed all 36 valid layouts in 7m58s with no
+  Slurm step. CPU scaling job `142801` completed all 36 valid layouts in 7m58s with no
   more than eight total ViT worker threads.
 - One replica by one thread already sustains `17.433295` images/s at batch one,
   `2.975` times peak demand. Batch eight gains only `7.955%` at that winning
@@ -4771,10 +4771,10 @@ consumer-demand artifact and advance only the next experiment gate.
 
 Artifacts and report:
 
-- `benchmark_results/cpu_vision/slurm_141944_e0_e1/e1_demand.json`
-- `benchmark_results/cpu_vision/slurm_142801_e2/e2_scaling.json`
-- `scripts/slurm/qwen3_vl_cpu_vit_e2.sbatch`
-- `training_reports/2026-08-18-qwen3-vl-policy-invariant-representation-cache.md`
+- `benchmark_results/cpu_vision/slurm_141944_cpu_vision_demand/cpu_vision_demand.json`
+- `benchmark_results/cpu_vision/slurm_142801_cpu_vision_scaling/cpu_vision_scaling.json`
+- `scripts/slurm/qwen3_vl_measure_cpu_vision_scaling.sbatch`
+- `training_reports/2026-08-18-qwen3-vl-reuse-frozen-vision-features.md`
 
 ## 2026-08-18: Add the opt-in policy-invariant representation cache
 
@@ -4784,9 +4784,9 @@ inline path.
 
 ### What changed
 
-- The feature schema version now participates in producer identity and travels
+- The feature schema version now participates in CPU cache identity and travels
   with encoder responses and packed SGLang payloads.
-- Oversized producer entries bypass admission without evicting resident data.
+- Oversized CPU cache entries bypass admission without evicting resident data.
 - `SGLANG_VISION_FEATURE_CACHE_MAX_BYTES=0` preserves inline behavior. A
   positive value enables a job-local SGLang host LRU.
 - The first scalar or grouped request publishes inline. Later requests use
@@ -4801,59 +4801,371 @@ inline path.
 
 ### Local evidence and decision
 
-- The initial combined focused suite passed 193 tests. After the two E4 live
+- The initial combined focused suite passed 193 tests. After the two vision cache reuse live
   integration fixes, the targeted cache/loader/Slurm slice passed 56 tests and
   the broader CPU-vision regression slice passed 191 tests. Compilation,
   shell syntax, and diff checks passed; Ruff is unavailable in the existing
   environment.
-- Do not claim a live cache speedup from unit tests. Run a Tier 1/Tier 2
-  ablation after E2 selects the layout and retain representation/logit parity,
-  request accounting, p95 RTT, actor-wait, and rollout-wall adoption gates.
+- Do not claim a live cache speedup from unit tests. Run a CPU cache/SGLang cache
+  ablation after CPU scaling selects the layout and retain representation/logit parity,
+  request accounting, p95 RTT, training-wait, and rollout-time adoption gates.
 - Frame the research result as schema-safe policy-invariant representation
   reuse across inference and training, not only as VRAM savings from a small
   visual tower.
 
 Report:
 
-- `training_reports/2026-08-18-qwen3-vl-policy-invariant-representation-cache.md`
+- `training_reports/2026-08-18-qwen3-vl-reuse-frozen-vision-features.md`
 
-## 2026-08-18: Complete E3 topology and submit corrected E4 cache ablation
+## 2026-08-18: Complete CPU worker-layout study topology and submit corrected cache reuse cache ablation
 
-**General description:** Advance the measured `1x1` E2 winner into a live
-equal-ViT-CPU topology comparison, then isolate producer compute reuse from
+**General description:** Advance the measured `1x1` CPU scaling winner into a live
+equal-ViT-CPU topology comparison, then isolate CPU cache compute reuse from
 SGLang representation-transport reuse.
 
 ### Execution boundary
 
-- E3 reuses the completed E1 D2 `1x1` control and runs only `1x4`, `2x2`, and
+- CPU worker-layout study reuses the completed CPU vision demand prompts32_samples2 `1x1` control and runs only `1x4`, `2x2`, and
   `4x1`, each with four reserved ViT CPUs, cache disabled, and live batching
   disabled.
 - Initial job `142802` was cancelled without accepting a result. With Ray
   advertising 16 CPUs, VisionEncoder was alive but Rollout remained
   `PENDING_CREATION`; live cluster state showed one unschedulable CPU demand.
-- Corrected E3 job `142804` requested and advertised 20 CPUs. The additional
+- Corrected CPU worker-layout study job `142804` requested and advertised 20 CPUs. The additional
   four CPUs are control-plane headroom; every compared ViT layout remains
   fixed at four CPUs and the eight-CPU ViT ceiling is unchanged.
 - Job `142804` completed all 12 cycles for `1x4`, `2x2`, and `4x1`. Mean
-  rollout walls were `1.613`, `1.405`, and `1.454` seconds; all mean actor wait
+  rollout times were `1.613`, `1.405`, and `1.454` seconds; all mean actor wait
   remained below `0.62%`. `2x2` was the fastest equal-four-CPU layout, while
   `4x1` used `8.58 GiB` aggregate RSS without beating it.
-- The system recommendation remains `1x1`: E2 measured `2.975` times peak
+- The system recommendation remains `1x1`: CPU scaling measured `2.975` times peak
   demand at batch one, so reserving four ViT CPUs reduces rollout latency but
   does not solve actor starvation.
-- E4 job `142805` exposed a tensor-valued grid in the ID-only JSON payload.
+- cache reuse job `142805` exposed a tensor-valued grid in the ID-only JSON payload.
   Job `142809` exposed a second boundary: SGLang's early media loader rejected
   the ID-only dictionary before the processor cache could resolve it. No
   partial result from either attempt is accepted.
 - Regression tests now cover JSON-safe IDs and early-loader pass-through. The
-  Slurm wrapper rejects missing vision, rollout, or actor cycles and invokes
+  Slurm wrapper rejects missing vision, rollout, or training cycles and invokes
   the checked cache analyzer before reporting success.
-- Pending E4 job `142817` runs Tier 1 only and Tier 1 plus Tier 2 with 1 GiB
-  per enabled tier at `1x1`. Job `142816` was cancelled before allocation and
+- Pending cache reuse job `142817` runs CPU cache only and CPU cache plus SGLang cache with 1 GiB
+  per enabled cache at `1x1`. Job `142816` was cancelled before allocation and
   replaced with a one-hour backfill request; no experiment setting changed.
-- `examples.visual_xor.analyze_cpu_vision_cache` requires complete paired
-  steady cycles and computes request-byte, serialization, RTT, rollout-wall,
-  actor-wait, cache-hit, republish, backend-forward, and valid-action results.
+- `examples.visual_xor.measure_vision_cache_reuse` requires complete paired
+  steady cycles and computes request-byte, serialization, RTT, rollout-time,
+  training-wait, cache-hit, republish, backend-forward, and valid-action results.
 
-E3 is accepted. No live Tier 2 performance claim is accepted until job
-`142817` and its checked artifact complete.
+CPU worker-layout study is accepted. Job `142817` subsequently completed both cache reuse profiles with exit
+code zero. Its checked artifact reports `99.824%` fewer request bytes,
+`77.939%` less serialization time, `29.303%` lower mean cycle-p95 service RTT,
+and `6.172%` lower rollout time. The last result is below the `10%` adoption
+gate. Post-hoc `perf/step_time` was `4.434%` slower in the single SGLang cache run, so
+no training-cycle speedup is inferred from cache reuse.
+
+## 2026-08-25: Correct the CPU-vision and cache performance metric
+
+**General description:** Replace comparisons across different workloads and
+timing boundaries with one order-balanced GPU/CPU vision-setting study on prompts32_samples2.
+
+### Measurement boundary
+
+- `perf/step_time = perf/train_wait_time + perf/train_time` is the primary
+  training-cycle metric. Optimizer and fully asynchronous weight-update work are
+  already inside the train scope and are not added again.
+- Every logged training cycle contains two optimizer intervals. Training cycles/hour
+  is `3600 / mean_step_time`; optimizer intervals/hour is
+  `7200 / mean_step_time`.
+- The four settings are GPU vision, CPU vision without caches, CPU vision with the 1 GiB CPU cache, and CPU vision
+  with both the 1 GiB CPU and SGLang caches.
+- Four repeats use cyclic mode orders and distinct repeat seeds. Each mode uses
+  22 cycles, discards cycles 0-1, and analyzes 20 steady prompts32_samples2 cycles.
+- Each complete profile run is an experimental unit. The analyzer computes
+  paired speedups and a Student-$t$ 95% confidence interval across four repeats;
+  it does not pool 80 rollout cycles as independent replicates.
+- The matched launcher records the commit, dirty state, input hashes, Slurm
+  allocation, topology, cache settings, seeds, logs, exact response/optimizer
+  accounting, CPU service telemetry, and VRAM snapshots.
+
+The implementation lives in
+`examples.visual_xor.compare_vision_settings` and
+`scripts/slurm/qwen3_vl_compare_vision_settings.sbatch`. The run is submitted only
+after local analyzer, launcher, shell, and parity regressions pass.
+
+Local validation passed 116 CPU-vision regressions, matched real-log parsing,
+shell syntax, and Slurm `--test-only`. Paper-quality job `154079` was submitted
+with a three-hour limit and initially entered `PENDING (Priority)` with an
+estimated 2026-08-25 16:46 UTC start.
+
+Job `154079` subsequently completed all 16 profiles. Across the four run
+means, GPU/CPU-without-caches/CPU-cache/CPU-and-SGLang-caches training-cycle time was `11.931008 s`, `11.056925 s`,
+`11.108226 s`, and `11.212820 s`, respectively. The paired CPU-vision speedup
+was a `7.328%` speedup (95% CI `3.711%` to `10.944%`). All caching relative to
+uncached CPU vision was a `1.504%` regression (95% CI `-10.170%` to `7.161%`).
+The latter interval crosses zero: the study supports neither a cache
+throughput gain nor a definitive cache slowdown.
+
+## 2026-08-26: Add a full-dataset vision-feature preload
+
+**General description:** Separate lazy cache-fill effects from steady cache
+behavior by filling both caches with the entire finite dataset before
+rollout cycle 0.
+
+- Added the disabled-by-default `--preload-vision-features` option and
+  launcher propagation through `PRELOAD_VISION_FEATURES=0|1`.
+- Added a non-consuming eager-dataset snapshot and an admission-only SGLang
+  endpoint at `POST /relax/vision-features/cache`.
+- The controller waits for preload after initial fully asynchronous weight
+  synchronization and before starting service loops. Any missing entry,
+  eviction, invalid identity, or admission error aborts startup.
+- Added a direct four-repeat no-cache/full-dataset-preload runner and paired analyzer. The analyzer keeps
+  the raw cycle-0-inclusive speedup separate from the preload-inclusive speedup
+  and cycles needed to recover preload time.
+- Acceptance requires exactly 64 retained unique features, no eviction,
+  32 CPU cache hits and 32 SGLang cache ID hits in every preloaded cycle, and exact uncached
+  misses/encodes in every no-cache cycle.
+
+At implementation completion, the direct GPU study still required a renewed
+interactive allocation with four MI210 GPUs and 16 distinct physical CPU
+cores. The following entry records the subsequently completed result.
+
+## 2026-08-27: Complete the full-dataset vision-feature preload
+
+**General description:** Run the order-balanced four-repeat no-cache/full-dataset-preload matrix and test
+whether perfect cache residency changes the complete training critical path.
+
+### Execution
+
+- Job `160119` passed the five-minute foreground gate. Its first full attempt
+  was rejected after repeat_1/full-dataset-preload encountered an intermittent RCCL bind collision on
+  port `11963` during the first lazy broadcast after process-group creation.
+  A second attempt was rejected when the allocation control shell exited
+  during monitoring. Neither attempt entered the analysis.
+- Job `160198` ran the clean accepted matrix on `auh7-1b-gpu-315` with four
+  MI210 GPUs, 16 affinity CPUs on 16 physical cores, and 64 GiB host memory.
+- All eight profiles exited zero. The accepted matrix contains 176 rollout
+  cycles, 11,264 valid responses, and 352 successful optimizer completions.
+  All final weight synchronization and controller shutdown markers are
+  present, with no evaluation or checkpoint writes.
+- Every preload retained all 64 immutable features in both caches with zero
+  eviction, zero generation/training work, and unchanged dataset cursor and
+  fingerprint. Every preloaded cycle had 32 CPU cache hits and 32 SGLang cache ID hits with no
+  miss, encode, republish, or inline publication. Every no-cache cycle had exactly 32
+  misses and backend encodes.
+
+### Result and decision
+
+- Mean preload time was `8.660052 s`.
+- The four raw cycle-0-inclusive training-cycle speedups were `0.557%`, `1.287%`,
+  `3.005%`, and `-3.552%`. Their paired mean was `0.324%`, with a 95%
+  confidence interval from `-4.100%` to `4.748%`.
+- The 22-cycle mean speedup including preload time was `-2.889%`, with a 95%
+  confidence interval from `-7.340%` to `1.562%`.
+- The first three repeats needed 126, 55, and 24 cycles to recover preload time; repeat_4 did not
+  preload-time recovery because the preloaded setting was slower. The conditional mean was
+  `68.33` cycles, but no unconditional break-even is supported.
+- Perfect caching reduced rollout time by `61.806%`, mean service RTT by
+  `97.724%`, request bytes by `99.824%`, and serialization time by `71.158%`.
+  Mean weight-update time changed by only `+0.110%`.
+
+The result is a negative training-throughput upper-bound experiment and a positive mechanism
+result. Do not adopt dataset preloading as a prompts32_samples2 training-speed optimization.
+Retain it as an opt-in correctness baseline showing that even perfect cache
+residency cannot accelerate this workload while training and weight
+synchronization pace the training pipeline.
+
+Accepted artifacts:
+
+- `benchmark_results/cpu_vision/full_dataset_preload_retry2_20260827_081348/full_dataset_preload_analysis.json`
+
+## 2026-08-27: plan-based vision-device choice implementation
+
+Implemented the next paper-facing experiment layer without launching Ray or a
+GPU workload. The default CPU/GPU behavior remains unchanged. An opt-in
+automatic mode now predicts the exposed critical-path cost of GPU
+and CPU-precomputed vision for each declared rollout cycle, applies a
+minimum-gap rule, and emits one structured decision plus W&B-compatible
+metrics per cycle.
+
+The policy is deliberately narrow. It supports only frozen Qwen3-VL vision and
+projection weights, the SGLang transformers implementation, retained GPU vision
+weights, complete rollout cycles, and an explicit versioned vision-device plan. It
+rejects cache preloading, a skipped GPU encoder, partial rollout, a missing cycle,
+or an invalid vision-device plan before deployment. This prevents automatic device choice
+from becoming an unmeasured fallback mechanism.
+
+After the first static review, the device choice was moved out of mutable singleton
+state. Device choices are now precomputed in rollout-ID order, and each
+training or evaluation coroutine carries its own immutable decision. A focused
+overlap test proves that concurrent CPU and GPU cycles keep distinct device choices
+and metrics.
+
+The review also corrected an impossible timing-model requirement: for a fixed
+Qwen3-VL model and BF16 feature schema, feature bytes are a linear combination
+of image count and visual tokens. The fitter now selects an independent feature
+subset, records dropped collinear predictors, and solves the remaining small
+NNLS problem by exact active-set enumeration. The analyzer additionally
+requires matched 32-request fanout, complementary one-hot device-choice metrics, and a
+minimum number of cycles over the minimum gap.
+
+Added three experiment layers:
+
+- a balanced low/high-resolution visual-XOR workload, a rank-aware exact
+  non-negative timing-model builder, a five-repeat counterbalanced
+  GPU/CPU/automatic runner, and a strict device-choice comparison analyzer;
+- a Qwen3-VL-4B fully asynchronous eight-MI210 Geo3K launcher with fixed GPU,
+  CPU with GPU encoder kept, and CPU with GPU encoder skipped modes; the automatic case fails until runtime
+  batch-workload observation exists;
+- Geo3K preparation and deterministic evaluation-config tools that produce the
+  exact Relax multimodal and reward schemas.
+
+The local workload-builder validation preserved 32 A and 32 B examples per repeat.
+The 112-by-112 workload produced 64 visual tokens per image and 16,777,984 feature
+bytes per 32-image cycle; the 448-by-448 workload produced 196 visual tokens per
+image and 51,380,992 feature bytes. These are workload-shape checks, not
+performance results.
+
+No GPU experiment was run. The current Slurm allocation exposes four authorized
+MI210s, while the real-task launcher requires exactly eight. A scientifically
+valid plan-based automatic run also requires measured GPU and CPU timing rows; the
+implementation does not manufacture timing coefficients. Public-paper
+resource import was attempted through the approved `add-resource` workflow but
+the configured proxy rejected both MLSys and arXiv downloads, so the literature
+map records stable primary-source links without pretending the PDFs were added.
+
+Artifacts:
+
+- `docs/draft/choose_vision_device_per_cycle.md`
+- `references/cpu_gpu_vision_literature.md`
+- `training_reports/2026-08-27-iclr-claim-evidence.md`
+- `training_reports/2026-08-27-qwen3-vl-choose-vision-device-per-cycle.md`
+- `benchmark_results/cpu_vision/full_dataset_preload_retry2_20260827_081348/manifest.tsv`
+- `benchmark_results/cpu_vision/full_dataset_preload_retry2_20260827_081348/repeat_1_preload.json`
+- `benchmark_results/cpu_vision/full_dataset_preload_retry2_20260827_081348/repeat_2_preload.json`
+- `benchmark_results/cpu_vision/full_dataset_preload_retry2_20260827_081348/repeat_3_preload.json`
+- `benchmark_results/cpu_vision/full_dataset_preload_retry2_20260827_081348/repeat_4_preload.json`
+
+## 2026-08-27 - Retrospective on the full-dataset vision-feature preload
+
+**Type:** Retrospective
+**General description:** Perfectly preloading both frozen-vision caches
+removed repeated CPU encoding and almost all feature transport, but did not
+accelerate the complete prompts32_samples2 training cycle because those costs were not pacing the
+training pipeline.
+
+### What we tried
+
+- Compared CPU vision without caches with full-dataset preload
+  in four matched, order-balanced repeats with independent train and rollout
+  seeds.
+- Preloaded all 64 immutable features into both the CPU and SGLang caches
+  before rollout cycle 0, without consuming or reordering the dataset and
+  without running generation or training.
+- Required exact lifecycle, response, optimizer, cache, feature-identity,
+  dataset-state, no-evaluation, no-checkpoint, synchronization, and cleanup
+  evidence before accepting a profile.
+- Kept three effects separate: frozen-vision-feature mechanism savings, raw
+  cycle-0-inclusive training throughput, and throughput after charging the
+  one-time preload cost over 22 cycles.
+- Interpreted the full-dataset-preload result together with the earlier matched GPU/CPU vision-setting study, which
+  established that moving frozen vision from GPU to CPU improved training-cycle
+  time by `7.328%` while lazy caching had not shown a throughput benefit.
+
+### Key findings
+
+- The accepted eight-profile matrix contained 176 complete rollout cycles,
+  11,264 valid responses, and 352 optimizer completions. Every preloaded cycle was a
+  perfect two-cache hit, and every no-cache cycle performed the expected uncached CPU
+  work.
+- Perfect preloading reduced rollout time by `61.806%`, mean service RTT by
+  `97.724%`, request bytes by `99.824%`, and serialization time by `71.158%`.
+  The cache and ID-only representation path therefore work as designed.
+- The raw paired training-cycle speedup was only `+0.324%`, with a 95% confidence
+  interval from `-4.100%` to `+4.748%`. This does not demonstrate an
+  end-to-end speedup.
+- Mean preload time was `8.660052 s`. Charging it over 22 cycles produced a
+  mean speedup of `-2.889%`, with a 95% confidence interval from `-7.340%` to
+  `+1.562%`.
+- Weight-update time was effectively unchanged at `+0.110%`. Training and
+  weight synchronization remained on the training critical path, while the
+  representation work was largely hidden or off that path.
+- The earlier lazy-cache result was not neutral because of cold fill. Even
+  perfect residency did not move prompts32_samples2 training throughput, so additional cache
+  engineering is not justified as a prompts32_samples2 training-speed optimization.
+- Three repeats needed 126, 55, and 24 cycles to recover preload time,
+  while repeat_4 had no break-even because the preloaded setting was slower. The conditional mean of
+  `68.33` cycles is descriptive only; the mixed signs and confidence interval
+  prohibit an unconditional break-even claim.
+
+### What failed or required correction
+
+- The scientific hypothesis that perfect cache residency would improve the
+  complete prompts32_samples2 training cycle was rejected. Large component-level reductions were
+  real but did not identify the system bottleneck.
+- The first full attempt encountered an intermittent RCCL bind collision on
+  port `11963` during the first lazy weight broadcast after process-group
+  creation. Initialization success alone was not a sufficient liveness gate;
+  the attempt was rejected rather than partially analyzed.
+- A later attempt ended when a fallible monitoring command ran in the Slurm
+  allocation's controlling shell under error-exit behavior while its expected
+  log file did not yet exist. Losing that shell terminated the allocation, so
+  monitoring must run from a separate shell or explicitly tolerate absent
+  startup artifacts.
+- Pooling 176 cycles as independent replicates would have overstated
+  confidence. The four matched repeats are the experimental units; cycles are
+  repeated observations within each run.
+- Reporting only steady-state cache latency would have hidden the one-time
+  preload charge. Reporting only amortized throughput would have hidden the
+  large frozen-vision-feature mechanism improvement.
+
+### Open questions
+
+- Does CPU vision offload produce a larger complete-cycle gain with a heavier
+  frozen visual tower or a workload where rollout demand actually paces the
+  actor?
+- Can the existing cache become throughput-relevant under a deliberately
+  rollout-bound workload, without changing its correctness contract?
+- Which part of the actor path should be studied next: train compute, weight
+  conversion, collective synchronization, or SGLang weight application?
+  This is a bottleneck-localization question, not a reason to redefine async
+  weight update as the CPU-vision contribution.
+- Is dataset preloading useful enough as a correctness and upper-bound experiment
+  to keep permanently, despite not being an adopted training optimization?
+- Should the first-broadcast RCCL failure become a full process-group health
+  gate with bounded whole-group recreation, rather than relying on successful
+  initialization alone?
+
+### Reusable lessons
+
+- Optimize the measured critical path, not the largest byte count or the
+  component with the largest isolated speedup.
+- Treat CPU offload and caching as separate claims. CPU offload has a supported
+  prompts32_samples2 training-cycle gain; caching has a supported frozen-vision-feature gain but no
+  supported prompts32_samples2 training-cycle gain.
+- For cache experiments, prove residency and identity, zero eviction, exact
+  hit/miss accounting, unchanged dataset state, and absence of hidden
+  generation or training before interpreting timing.
+- Report mechanism, raw end-to-end, and amortized end-to-end results
+  separately. A successful subsystem optimization need not improve the whole
+  asynchronous system.
+- Use complete matched runs as experimental units and preserve rejected runs
+  as failure evidence rather than selectively reusing their completed cycles.
+- Keep the Slurm allocation control shell boring and durable. Run observation
+  commands elsewhere so monitoring cannot terminate the workload it observes.
+
+### Knowledge-capture decision
+
+- Updated the existing `model-integration` skill with the
+  mechanism-versus-critical-path gate, the full-dataset-preload protocol,
+  raw-versus-preload-inclusive speedup reporting, and the matched-run statistical
+  boundary instead of creating another narrow project-local skill.
+- Added troubleshooting entries for the post-initialization lazy-broadcast
+  RCCL bind failure and for accidental allocation loss caused by monitoring in
+  the controlling shell. The RCCL entry treats the explicit partial-weight
+  warning as model-state contamination and requires complete reload rather than
+  a local request retry.
+
+Inputs:
+
+- `training_reports/2026-08-25-qwen3-vl-compare-vision-settings.md`
+- `training_reports/2026-08-26-qwen3-vl-preload-all-vision-features.md`
+- `benchmark_results/cpu_vision/full_dataset_preload_retry2_20260827_081348/full_dataset_preload_analysis.json`

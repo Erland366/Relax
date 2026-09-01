@@ -29,6 +29,60 @@ def build_service_config(role: str, config: Namespace) -> Namespace:
     return Namespace(**{key: value.value if isinstance(value, Enum) else value for key, value in vars(config).items()})
 
 
+def _rollout_engine_count(config: Namespace) -> int:
+    rollout_num_gpus = int(getattr(config, "rollout_num_gpus", 0))
+    rollout_num_gpus_per_engine = int(
+        getattr(config, "rollout_num_gpus_per_engine", rollout_num_gpus or 1)
+    )
+    return rollout_num_gpus // rollout_num_gpus_per_engine if rollout_num_gpus else 1
+
+
+def _validate_automatic_vision_device(config: Namespace) -> None:
+    if getattr(config, "vision_device_mode", "fixed") != "automatic":
+        return
+    if getattr(config, "vision_encoder_device", "gpu") != "cpu":
+        raise ValueError("Automatic vision-device choice requires vision_encoder_device='cpu'")
+    if getattr(config, "sglang_model_impl", "").lower() != "transformers":
+        raise ValueError("Automatic vision-device choice requires sglang_model_impl='transformers'")
+    if getattr(config, "skip_gpu_vision_encoder", False):
+        raise ValueError("Automatic vision-device choice requires GPU vision weights")
+    if getattr(config, "preload_vision_features", False):
+        raise ValueError("Automatic vision-device choice cannot preload all vision features")
+    if getattr(config, "partial_rollout", False):
+        raise ValueError("Automatic vision-device choice does not support partial_rollout")
+    if getattr(config, "max_staleness", 0) != 0:
+        raise ValueError("Automatic vision-device choice requires max_staleness=0")
+    if getattr(config, "rollout_shuffle", False):
+        raise ValueError("Automatic vision-device choice requires rollout_shuffle=False")
+    if getattr(config, "dynamic_sampling_filter_path", None):
+        raise ValueError("Automatic vision-device choice does not support dynamic sampling")
+    rollout_batch_size = getattr(config, "rollout_batch_size", None)
+    over_sampling_batch_size = getattr(config, "over_sampling_batch_size", None)
+    if (
+        rollout_batch_size is not None
+        and over_sampling_batch_size is not None
+        and over_sampling_batch_size != rollout_batch_size
+    ):
+        raise ValueError(
+            "Automatic vision-device choice requires over_sampling_batch_size=rollout_batch_size"
+        )
+    if not getattr(config, "freeze_vision_model", False) or not getattr(
+        config, "freeze_vision_projection", False
+    ):
+        raise ValueError(
+            "Automatic vision-device choice requires freeze_vision_model and freeze_vision_projection"
+        )
+    plan = getattr(config, "vision_device_plan", None)
+    if not plan:
+        raise ValueError("Automatic vision-device choice requires vision_device_plan")
+    from relax.engine.rollout.vision_device import load_vision_device_plan
+
+    load_vision_device_plan(
+        plan,
+        minimum_gap=getattr(config, "vision_device_minimum_gap", None),
+    )
+
+
 def build_service_runtime_env(role: str, config: Namespace, runtime_env: Optional[dict]) -> Optional[dict]:
     service_runtime_env = {"env_vars": {}} if runtime_env is None else deepcopy(runtime_env)
 
@@ -37,10 +91,12 @@ def build_service_runtime_env(role: str, config: Namespace, runtime_env: Optiona
 
     if role == "rollout" and getattr(config, "sglang_model_impl", "").lower() == "transformers":
         service_runtime_env["env_vars"]["RELAX_SGLANG_BLOCK_MEGATRON_IMPORTS"] = "1"
-    if role == "rollout" and getattr(config, "vision_encoder_backend", "disabled") == "pytorch":
+    if role == "rollout" and getattr(config, "vision_encoder_device", "gpu") == "cpu":
         service_runtime_env["env_vars"]["RELAX_SGLANG_QWEN3_VL_PRECOMPUTED_VISION"] = "1"
-        if getattr(config, "vision_encoder_omit_gpu_weights", False):
-            service_runtime_env["env_vars"]["RELAX_SGLANG_QWEN3_VL_OMIT_GPU_WEIGHTS"] = "1"
+        if getattr(config, "skip_gpu_vision_encoder", False):
+            service_runtime_env["env_vars"]["RELAX_SGLANG_QWEN3_VL_SKIP_GPU_VISION_ENCODER"] = "1"
+    if role == "rollout":
+        _validate_automatic_vision_device(config)
 
     cache_max_bytes = int(getattr(config, "sglang_vision_feature_cache_max_bytes", 0))
     if cache_max_bytes < 0:
@@ -48,9 +104,26 @@ def build_service_runtime_env(role: str, config: Namespace, runtime_env: Optiona
             "sglang_vision_feature_cache_max_bytes must be non-negative, "
             f"got {cache_max_bytes}"
         )
+    if role == "rollout" and getattr(config, "preload_vision_features", False):
+        vision_encoder_cache_max_bytes = int(getattr(config, "vision_encoder_cache_max_bytes", 0))
+        if vision_encoder_cache_max_bytes <= 0:
+            raise ValueError(
+                "Preloading vision features requires a positive vision_encoder_cache_max_bytes"
+            )
+        if cache_max_bytes <= 0:
+            raise ValueError(
+                "Preloading vision features requires a positive sglang_vision_feature_cache_max_bytes"
+            )
+        if not getattr(config, "rollout_global_dataset", False):
+            raise ValueError("Preloading vision features requires rollout_global_dataset=True")
+        if getattr(config, "use_streaming_dataset", False):
+            raise ValueError("Preloading vision features requires use_streaming_dataset=False")
+        engine_count = _rollout_engine_count(config)
+        if engine_count != 1:
+            raise ValueError(f"Preloading vision features requires one SGLang rollout engine; got {engine_count}")
     if role == "rollout" and cache_max_bytes > 0:
-        if getattr(config, "vision_encoder_backend", "disabled") != "pytorch":
-            raise ValueError("SGLang vision feature caching requires vision_encoder_backend='pytorch'")
+        if getattr(config, "vision_encoder_device", "gpu") != "cpu":
+            raise ValueError("SGLang vision feature caching requires vision_encoder_device='cpu'")
         if getattr(config, "sglang_model_impl", "").lower() != "transformers":
             raise ValueError("SGLang vision feature caching requires sglang_model_impl='transformers'")
         tokenizer_worker_num = int(getattr(config, "sglang_tokenizer_worker_num", 1))
@@ -59,11 +132,7 @@ def build_service_runtime_env(role: str, config: Namespace, runtime_env: Optiona
                 "Process-local SGLang vision feature caching requires sglang_tokenizer_worker_num=1; "
                 f"got {tokenizer_worker_num}"
             )
-        rollout_num_gpus = int(getattr(config, "rollout_num_gpus", 0))
-        rollout_num_gpus_per_engine = int(
-            getattr(config, "rollout_num_gpus_per_engine", rollout_num_gpus or 1)
-        )
-        engine_count = rollout_num_gpus // rollout_num_gpus_per_engine if rollout_num_gpus else 1
+        engine_count = _rollout_engine_count(config)
         if engine_count > 1 and getattr(config, "sglang_router_policy", "") != "consistent_hashing":
             raise ValueError(
                 "Multi-engine SGLang vision feature caching requires feature-sticky consistent_hashing routing"

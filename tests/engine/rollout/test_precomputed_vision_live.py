@@ -186,7 +186,7 @@ async def test_generate_uses_vision_handle_and_sends_json_precomputed_image_data
         partial_rollout=False,
         mask_offpolicy_in_partial_rollout=False,
         sglang_speculative_algorithm=None,
-        vision_encoder_backend="pytorch",
+        vision_encoder_device="cpu",
     )
     sample = rollout_module.Sample(
         prompt="look",
@@ -318,7 +318,7 @@ async def test_generate_republishes_inline_once_after_typed_sglang_feature_cache
         partial_rollout=False,
         mask_offpolicy_in_partial_rollout=False,
         sglang_speculative_algorithm=None,
-        vision_encoder_backend="pytorch",
+        vision_encoder_device="cpu",
     )
     first = rollout_module.Sample(
         prompt="look",
@@ -516,7 +516,7 @@ async def test_generate_group_uses_one_sglang_parallel_request_and_maps_outputs(
         use_opd=False,
         use_rollout_routing_replay=False,
         use_slime_router=False,
-        vision_encoder_backend="pytorch",
+        vision_encoder_device="cpu",
     )
     multimodal_inputs = {"images": ["raw-image"], "videos": [], "audio": []}
     group = [
@@ -665,7 +665,7 @@ async def test_generate_precomputed_group_reuses_cached_feature_and_republishes_
         use_opd=False,
         use_rollout_routing_replay=False,
         use_slime_router=False,
-        vision_encoder_backend="pytorch",
+        vision_encoder_device="cpu",
     )
 
     def new_group():
@@ -818,7 +818,7 @@ async def test_generate_native_image_group_uses_one_sglang_parallel_request_and_
         use_opd=False,
         use_rollout_routing_replay=False,
         use_slime_router=False,
-        vision_encoder_backend="disabled",
+        vision_encoder_device="gpu",
     )
     multimodal_inputs = {"images": ["raw-image"], "videos": [], "audio": []}
     group = [

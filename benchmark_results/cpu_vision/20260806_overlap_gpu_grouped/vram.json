@@ -1,0 +1,53 @@
+{
+  "baseline_total_used_bytes": 52543488,
+  "command": [
+    "env",
+    "HIP_VISIBLE_DEVICES=0,1,2,3",
+    "NUM_ROLLOUT=20",
+    "ENABLE_EVAL=0",
+    "SAVE_CHECKPOINTS=0",
+    "bash",
+    "scripts/debug/qwen3_vl_visual_xor_refinement_fully_async_4gpus.sh"
+  ],
+  "devices": {
+    "carprompts8_samples8": {
+      "baseline_used_bytes": 13135872,
+      "final_used_bytes": 13135872,
+      "peak_delta_bytes": 3227549696,
+      "peak_used_bytes": 3240685568,
+      "total_bytes": 68702699520
+    },
+    "carprompts16_samples4": {
+      "baseline_used_bytes": 13135872,
+      "final_used_bytes": 13135872,
+      "peak_delta_bytes": 2717122560,
+      "peak_used_bytes": 2730258432,
+      "total_bytes": 68702699520
+    },
+    "carprompts32_samples2": {
+      "baseline_used_bytes": 13135872,
+      "final_used_bytes": 13135872,
+      "peak_delta_bytes": 8269668352,
+      "peak_used_bytes": 8282804224,
+      "total_bytes": 68702699520
+    },
+    "carprompts64_samples1": {
+      "baseline_used_bytes": 13135872,
+      "final_used_bytes": 13135872,
+      "peak_delta_bytes": 7936688128,
+      "peak_used_bytes": 7949824000,
+      "total_bytes": 68702699520
+    }
+  },
+  "duration_seconds": 1005.2788875335827,
+  "exit_code": 0,
+  "final_total_used_bytes": 52543488,
+  "finished_at": "2026-08-06T08:48:10.621054+00:00",
+  "label": "gpu-grouped-20-rollouts",
+  "peak_simultaneous_total_delta_bytes": 22077968384,
+  "peak_simultaneous_total_used_bytes": 22130511872,
+  "sample_count": 1230,
+  "sample_interval_seconds": 0.5,
+  "schema_version": 1,
+  "started_at": "2026-08-06T08:31:25.342159+00:00"
+}

@@ -232,7 +232,7 @@
       "action_probability_absolute_delta": 0.0,
       "feature_id": "ae3779b8f2088df0431779448f1a83586d69d71096bcd18686b3d17a1a406414",
       "generated_token_match": true,
-      "native": {
+      "gpu": {
         "action_a_logprob": -0.5239084959030151,
         "action_a_probability": 0.5926665999540697,
         "action_b_logprob": -0.8989084959030151,

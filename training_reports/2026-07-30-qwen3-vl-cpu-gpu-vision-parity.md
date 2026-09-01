@@ -1,7 +1,7 @@
 # Retrospective: Qwen3-VL CPU/GPU Vision Parity
 
 - **Date:** 2026-07-30
-- **Status:** Local Hugging Face gate and live GPU-resident Relax smoke passed
+- **Status:** Local Hugging Face gate and live GPU-vision Relax smoke passed
 - **Scope:** Frozen Qwen3-VL visual tower, final projection, three DeepStack
   projections, and downstream language-model logits
 - **Artifact:**
@@ -10,7 +10,7 @@
 ## Objective
 
 Determine whether features produced by the frozen PyTorch CPU vision service
-are equivalent to the native Hugging Face GPU visual path closely enough to
+are equivalent to the Hugging Face GPU vision path closely enough to
 replace GPU vision computation. Separate:
 
 1. structural or semantic integration errors;
@@ -56,7 +56,7 @@ deepstack_visual_embeds_2
 It also compared the full next-token vocabulary distribution after running:
 
 ```text
-native GPU image forward
+GPU image forward
     versus
 CPU precomputed features -> GPU language-only forward
 ```
@@ -69,7 +69,7 @@ not image-preprocessor parity.
 
 ### Attempt 1: Run the original eight-image parity command
 
-Model loading and native visual execution succeeded, but the precomputed
+Model loading and GPU vision execution succeeded, but the precomputed
 language path failed before comparison:
 
 ```text
@@ -291,9 +291,9 @@ inherited `PATH` state exists.
 4. Use close fraction plus maximum absolute error, not close fraction alone.
 5. Preserve full-vocabulary response checks for the local Hugging Face gate.
 6. Do not describe this artifact as SGLang/Megatron parity.
-7. The live GPU-resident two-cycle Relax path has now succeeded. Keep
-   GPU-weight omission as a separate measured gate rather than inferring it
-   from resident-mode success.
+7. The live GPU-vision two-cycle Relax path has now succeeded. Keep
+   skipping the GPU encoder as a separate measured gate rather than inferring it
+   from success with the GPU encoder kept.
 
 ## Open questions
 
@@ -301,7 +301,7 @@ inherited `PATH` state exists.
    sampled-token log probabilities when policy version, prompt, and tokens are
    held fixed?
 2. Does the live path preserve the same final and DeepStack routing after the
-   GPU visual modules are omitted?
+   GPU visual modules are skipped?
 3. Are the current feature thresholds stable across more than eight images,
    multiple MI210s, repeated runs, and future PyTorch/Transformers versions?
 4. Does explicitly selecting the checkpoint's slow image processor change the
@@ -318,17 +318,17 @@ inherited `PATH` state exists.
 ## Next steps
 
 - [x] Run the two-cycle, four-GPU Relax smoke with CPU vision enabled and GPU
-      visual weights still resident. See
+      GPU visual weights still allocated. See
       `training_reports/2026-07-30-qwen3-vl-cpu-vision-two-cycle-smoke.md`.
 - [ ] Hold `feature_id`, `vision_revision`, policy version, prompt, and sampled
       tokens fixed while comparing SGLang and Megatron diagnostics.
-- [ ] Repeat the two-cycle smoke with GPU visual weights omitted only after the
-      resident path passes.
+- [ ] Repeat the two-cycle smoke with GPU visual weights skipped only after the
+      GPU-encoder-kept path passes.
 - [ ] Extend parity artifacts with runtime/backend metadata and write a failed
       artifact before raising.
-- [ ] Run a larger calibration set before treating the current feature
+- [ ] Run a larger parity set before treating the current feature
       thresholds as portable beyond this checkpoint and node class.
-- [ ] Compare native GPU vision, CPU-resident vision, and CPU-omitted vision
+- [ ] Compare GPU vision, CPU vision with the GPU encoder kept, and CPU vision with the GPU encoder skipped
       for VRAM and end-to-end throughput.
 
 ## Reusable knowledge proposal
@@ -341,7 +341,7 @@ parity ladder” to its validation checklist:
 2. cross-device representation distribution;
 3. downstream full-logit behavior;
 4. live rollout/training sampled-token behavior; and
-5. omission-mode repeat.
+5. repeat with the GPU encoder skipped.
 
 Per the retrospective workflow, that skill should not be modified without
 explicit user approval. A troubleshooting entry for the Transformers 5.3

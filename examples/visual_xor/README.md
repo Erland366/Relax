@@ -250,7 +250,7 @@ set `VISION_ENCODER_NUM_CPUS` explicitly for scaling experiments on a
 CPU-rich allocation. It is Qwen3-VL image-only and requires context and
 pipeline parallel sizes of one.
 
-The recipe defaults to one CPU replica and keeps GPU-weight omission disabled.
+The recipe defaults to one CPU replica and keeps the GPU vision encoder.
 Set `ENABLE_EVAL=0` on either fully asynchronous refinement launcher for a
 training-only profiling run. This explicitly removes every evaluation config
 and interval; `ENABLE_EVAL=1` remains the default and preserves the established
@@ -267,7 +267,7 @@ python -m examples.visual_xor.validate_cpu_vision_parity \
 ```
 
 Only after that artifact passes should a run set
-`VISION_ENCODER_OMIT_GPU_WEIGHTS=1`. In omission mode, Megatron does not
+`SKIP_GPU_VISION_ENCODER=1`. When the GPU encoder is skipped, Megatron does not
 construct its visual tower and SGLang replaces the meta-device visual module
 before GPU materialization; raw-image fallbacks fail loudly. The local
 checkpoint's theoretical BF16 parameter reduction is 51.66 MiB per full GPU
@@ -290,13 +290,13 @@ python -m examples.visual_xor.validate_sglang_cpu_vision_parity \
   --base-gpu-id 0
 ```
 
-This uses one SGLang server with resident visual weights, sends each fixed
-image through native GPU vision and CPU-precomputed vision, flushes the cache
+This uses one SGLang server that keeps its GPU visual weights, sends each fixed
+image through GPU vision and CPU-precomputed vision, flushes the cache
 between paths, and compares the generated token plus exact A/B next-token
 log-probabilities. With `--parallel-samples 8`, it also tests one precomputed
-request and one native raw-image request returning eight ordered outputs and
+request and one GPU raw-image request returning eight ordered outputs and
 records their scalar-equivalent versus actual request bytes. The precomputed
-grouped gate is strictly score-matched. Native grouped branches must pass their
+grouped gate is strictly score-matched. GPU grouped branches must pass their
 own score, margin, and probability gates; matching generated tokens alone is
 not a pass. The command installs nothing and shuts down the server before
 writing the artifact.
@@ -340,12 +340,12 @@ a 64-sample rollout sent about 185 MB for only eight unique features. Actual
 CPU encoding took 49-54 seconds for the 128 unique evaluation images; the
 other 640 requests were cache hits.
 
-Relax now uses SGLang native parallel sampling for a narrow eligible group:
-CPU-precomputed Qwen3-VL or processor-backed native image-only Qwen3-VL,
+Relax now uses SGLang GPU parallel sampling for a narrow eligible group:
+CPU-precomputed Qwen3-VL or processor-backed GPU image-only Qwen3-VL,
 multiple fresh pending samples, one shared prompt and media object, round-robin
 routing (or any routing policy when exactly one SGLang engine exists),
 stochastic inference, the built-in generator, and no partial rollout, routing
-replay, or Slime middleware. Native grouping runs the processor and raw-media
+replay, or Slime middleware. GPU grouping runs the processor and raw-media
 encoding once per prompt group while retaining tokenizer prompt IDs for
 SGLang and processor-expanded IDs/features for Megatron. One
 request carries `sampling_params.n=N_SAMPLES_PER_PROMPT`, and Relax maps the
@@ -365,7 +365,7 @@ nested-list evaluation from 768 requests and 2.233 GB to 384 requests and
 
 Relax then replaced nested numeric features with contiguous BF16 bytes encoded
 as base64 inside the same JSON envelope. The packed live parity gate matched
-all eight native-GPU outputs; maximum A/B log-probability delta remained
+all eight GPU outputs; maximum A/B log-probability delta remained
 `1.43e-6`. In the matched two-rollout run, evaluation traffic fell again to
 268.9 MB (75.93% below grouped nested JSON, 87.96% below the original scalar
 path). Each 64-sample rollout sent 5.60 MB, both rollouts and all four optimizer
@@ -375,19 +375,19 @@ deferred until the remaining cross-request traffic is proven to be the next
 bottleneck; do not scale CPU replicas yet. See
 [the packed-transport report](../../training_reports/2026-08-04-qwen3-vl-packed-cpu-vision-transport.md),
 [the parallel-sampling report](../../training_reports/2026-08-03-qwen3-vl-sglang-parallel-sampling.md)
-and [the corrected performance report](../../training_reports/2026-08-01-qwen3-vl-corrected-three-mode-performance.md).
+and [the corrected performance report](../../training_reports/2026-08-01-qwen3-vl-gpu-cpu-vision-performance.md).
 
 The 2026-08-06 matched steady-state experiment then disabled evaluation and
 forced the CPU cache to evict every feature. The one-replica CPU producer still
 completed each steady 64-sample rollout in 4.79 seconds and filled the
-staleness window, while the actor cycle averaged 26.83 seconds and waited only
-0.238 seconds for data. Relative to native grouped GPU vision, omission reduced
-actor compute by 13.68%, complete actor-cycle time by 9.67%, and simultaneous
+staleness window, while the training-cycle averaged 26.83 seconds and waited only
+0.238 seconds for data. Relative to grouped GPU vision, skipping the GPU encoder reduced
+actor compute by 13.68%, complete training-cycle time by 9.67%, and simultaneous
 four-card peak VRAM by 738.03 MiB. The 5.60 MB packed request was 383.5 times
-the native raw-image request, but transport did not pace this training run.
+the GPU raw-image request, but transport did not pace this training run.
 Defer a registry and CPU replica scaling until a larger workload actually
-starves the actor. The native grouped performance run is qualified because its
-64/64 generated tokens matched scalar native, but its strict branch-score gate
+starves the actor. The GPU grouped performance run is qualified because its
+64/64 generated tokens matched scalar GPU, but its strict branch-score gate
 did not pass. See
 [the steady-state overlap report](../../training_reports/2026-08-06-qwen3-vl-cpu-vision-steady-state-overlap.md).
 
@@ -396,28 +396,28 @@ same workload:
 
 ```bash
 python -m examples.visual_xor.monitor_rocm_vram \
-  --output benchmark_results/cpu_vision/native_gpu_vram.json \
-  --label native-gpu -- \
+  --output benchmark_results/cpu_vision/gpu_vram.json \
+  --label gpu -- \
   env HIP_VISIBLE_DEVICES=0,1,2,3 NUM_ROLLOUT=2 EVAL_INTERVAL=4 \
     SAVE_CHECKPOINTS=0 \
     bash scripts/debug/qwen3_vl_visual_xor_refinement_fully_async_4gpus.sh
 
 python -m examples.visual_xor.monitor_rocm_vram \
-  --output benchmark_results/cpu_vision/cpu_resident_vram.json \
-  --label cpu-resident -- \
+  --output benchmark_results/cpu_vision/cpu_vram.json \
+  --label cpu -- \
   env HIP_VISIBLE_DEVICES=0,1,2,3 NUM_ROLLOUT=2 EVAL_INTERVAL=4 \
-    VISION_ENCODER_OMIT_GPU_WEIGHTS=0 SAVE_CHECKPOINTS=0 \
+    SKIP_GPU_VISION_ENCODER=0 SAVE_CHECKPOINTS=0 \
     bash scripts/debug/qwen3_vl_visual_xor_refinement_fully_async_cpu_vision_4gpus.sh
 
 python -m examples.visual_xor.monitor_rocm_vram \
-  --output benchmark_results/cpu_vision/cpu_omitted_vram.json \
-  --label cpu-omitted -- \
+  --output benchmark_results/cpu_vision/cpu_skip_gpu_encoder_vram.json \
+  --label cpu-skip-gpu-encoder -- \
   env HIP_VISIBLE_DEVICES=0,1,2,3 NUM_ROLLOUT=2 EVAL_INTERVAL=4 \
-    VISION_ENCODER_OMIT_GPU_WEIGHTS=1 SAVE_CHECKPOINTS=0 \
+    SKIP_GPU_VISION_ENCODER=1 SAVE_CHECKPOINTS=0 \
     bash scripts/debug/qwen3_vl_visual_xor_refinement_fully_async_cpu_vision_4gpus.sh
 ```
 
-The native launcher freezes its GPU-resident visual tower and projector for
+The GPU launcher freezes its GPU visual tower and projector for
 this comparison. Otherwise its gradients and optimizer state would make the
 actor-side VRAM result incomparable with the frozen CPU modes. The monitor
 records baseline, final, per-device peak, peak delta, and simultaneous total
@@ -426,16 +426,16 @@ actor-forward.
 
 The first 2026-07-31 four-MI210 comparison completed all three modes. Omitting the
 GPU visual weights reduced the simultaneous four-card peak by 155.73 MiB
-relative to the otherwise identical CPU-resident mode. Its evaluation cache
+relative to the otherwise identical CPU with GPU encoder kept mode. Its evaluation cache
 served 768 requests with 128 encodes, 640 hits, an 83.33% hit rate, and no
-evictions. Both CPU modes were about 1.53 times the native launcher wall time
+evictions. Both CPU modes were about 1.53 times the GPU launcher wall time
 on the one-core vision service. Both originally remained near chance because
 SGLang's generic transformers wrapper did not consume its parsed precomputed
-embedding field. After the DeepStack adapter fix, an omitted-weight run scored
+embedding field. After the DeepStack adapter fix, a GPU-encoder-skipped run scored
 `0.69921875` held out and the deterministic eight-image SGLang gate matched
 every token with maximum action-margin delta `1.043081283569336e-07`.
 Megatron/SGLang sampled-token differences stayed below `5e-7`. See
-[the three-mode report](../../training_reports/2026-07-31-qwen3-vl-vision-three-mode-vram.md)
+[the GPU/CPU VRAM report](../../training_reports/2026-07-31-qwen3-vl-gpu-cpu-vision-vram.md)
 for the historical per-device table and
 [the live parity report](../../training_reports/2026-07-31-qwen3-vl-live-precomputed-deepstack-parity.md)
 for the corrected semantic evidence.
@@ -445,8 +445,8 @@ larger than the source PNG. Multiple CPU replicas also have independent
 caches, so the same image can be encoded once per replica. Compare end-to-end
 time, cache metrics, and the provided CPU scaling artifact before treating the
 path as an optimization. See
-[Frozen CPU Vision Encoder](../../docs/draft/frozen_cpu_vision_encoder.md) for
-the exact tensor contract, parity and capacity commands, omission behavior,
+[Frozen CPU Vision Encoder](../../docs/draft/run_frozen_vision_encoder_on_cpu.md) for
+the exact tensor contract, parity and capacity commands, GPU-encoder skipping behavior,
 and staged limitations.
 
 ## Run the harder discovery benchmark without checkpoints

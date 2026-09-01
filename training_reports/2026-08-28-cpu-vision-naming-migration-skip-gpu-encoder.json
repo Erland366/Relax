@@ -1,0 +1,1376 @@
+{
+  "all_numeric_values_preserved": true,
+  "applied": true,
+  "artifact_root": "/vast/users/qirong.ho/erland/Python_project/Relax-rocm-megatron_root/Relax-rocm-megatron_after_fix_profiled_20260610/benchmark_results/cpu_vision",
+  "file_count": 169,
+  "files": [
+    {
+      "content_replacements": [],
+      "new_path": "20260728_local_smoke/scaling.json",
+      "new_sha256": "7bd17c21c658e7790fd6823136d5a94592e22409b1e999552a2a52664998ad1c",
+      "numeric_values_preserved": true,
+      "old_path": "20260728_local_smoke/scaling.json",
+      "old_sha256": "7bd17c21c658e7790fd6823136d5a94592e22409b1e999552a2a52664998ad1c"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260730_hf_gpu_cpu_parity/parity.json",
+      "new_sha256": "2d1c3db63cf67f3396649147a6cddf1ff8d98774ea432630b2bdfc408723490e",
+      "numeric_values_preserved": true,
+      "old_path": "20260730_hf_gpu_cpu_parity/parity.json",
+      "old_sha256": "2d1c3db63cf67f3396649147a6cddf1ff8d98774ea432630b2bdfc408723490e"
+    },
+    {
+      "content_replacements": [
+        "VISION_ENCODER_OMIT_GPU_WEIGHTS->SKIP_GPU_VISION_ENCODER"
+      ],
+      "new_path": "20260731_gpu_cpu_vision_two_cycle/cpu_skip_gpu_encoder_vram.json",
+      "new_sha256": "b92cc82b457c60f38c05808acc13d4cf6ef7ff44e682134fe50f97914c81da97",
+      "numeric_values_preserved": true,
+      "old_path": "20260731_gpu_cpu_vision_two_cycle/cpu_skip_gpu_encoder_vram.json",
+      "old_sha256": "3601137e44fd9f5476033e3cc2ed226f3f493c40fd05381d71fb69720f39eaec"
+    },
+    {
+      "content_replacements": [
+        "VISION_ENCODER_OMIT_GPU_WEIGHTS->SKIP_GPU_VISION_ENCODER"
+      ],
+      "new_path": "20260731_gpu_cpu_vision_two_cycle/cpu_vram.json",
+      "new_sha256": "417e516cb05a33a509626661207a54019c6adf16f16556e829e571ebc9a08022",
+      "numeric_values_preserved": true,
+      "old_path": "20260731_gpu_cpu_vision_two_cycle/cpu_vram.json",
+      "old_sha256": "a774a6b0f4c1b38e40b0ec2ad67a72b8aa71c0d756d036e48e3da6af03fac0c6"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260731_gpu_cpu_vision_two_cycle/gpu_vram.json",
+      "new_sha256": "5053b55b35acdfc99d0109a9e3381c5f8679ede27839e1eb4bdf3da485ac1ba1",
+      "numeric_values_preserved": true,
+      "old_path": "20260731_gpu_cpu_vision_two_cycle/gpu_vram.json",
+      "old_sha256": "5053b55b35acdfc99d0109a9e3381c5f8679ede27839e1eb4bdf3da485ac1ba1"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260731_sglang_live_parity/parity.json",
+      "new_sha256": "6f6ec43dd343adfd538f497bbe072104b1810339726a9164b0174dfcec6054e4",
+      "numeric_values_preserved": true,
+      "old_path": "20260731_sglang_live_parity/parity.json",
+      "old_sha256": "6f6ec43dd343adfd538f497bbe072104b1810339726a9164b0174dfcec6054e4"
+    },
+    {
+      "content_replacements": [
+        "VISION_ENCODER_OMIT_GPU_WEIGHTS->SKIP_GPU_VISION_ENCODER"
+      ],
+      "new_path": "20260801_gpu_cpu_vision_performance/cpu_skip_gpu_encoder_vram.json",
+      "new_sha256": "e1875157dd4484d8a93caed5cf558bd3c664d3f1cab2ad7c1df730da362eb882",
+      "numeric_values_preserved": true,
+      "old_path": "20260801_gpu_cpu_vision_performance/cpu_skip_gpu_encoder_vram.json",
+      "old_sha256": "d8894922d66223b6f2ae2c0975266c1ee95bf43844465257becbed706120507a"
+    },
+    {
+      "content_replacements": [
+        "VISION_ENCODER_OMIT_GPU_WEIGHTS->SKIP_GPU_VISION_ENCODER"
+      ],
+      "new_path": "20260801_gpu_cpu_vision_performance/cpu_vram.json",
+      "new_sha256": "c5b4822ba39deb29c895b4397d8e137c13b25d8b39d8062b9317a40d7a319e70",
+      "numeric_values_preserved": true,
+      "old_path": "20260801_gpu_cpu_vision_performance/cpu_vram.json",
+      "old_sha256": "d1cefbc680523ecd3dab1feb7e008b0495ca3ee5f7f35ab643c679e416d85ae7"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260801_gpu_cpu_vision_performance/gpu_vram.json",
+      "new_sha256": "bd2dacf61063e90f06a05a6dbd7575e230902597939378d59bed2fb9b623cebd",
+      "numeric_values_preserved": true,
+      "old_path": "20260801_gpu_cpu_vision_performance/gpu_vram.json",
+      "old_sha256": "bd2dacf61063e90f06a05a6dbd7575e230902597939378d59bed2fb9b623cebd"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260801_gpu_cpu_vision_performance/gpu_vram_retry1.json",
+      "new_sha256": "3defbd2b6afd4e48c3e07d482f3ba00dbe73d23b97ab3ecb6ac0507a521bf5c7",
+      "numeric_values_preserved": true,
+      "old_path": "20260801_gpu_cpu_vision_performance/gpu_vram_retry1.json",
+      "old_sha256": "3defbd2b6afd4e48c3e07d482f3ba00dbe73d23b97ab3ecb6ac0507a521bf5c7"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260803_sglang_parallel_n8/cpu_skip_gpu_encoder_two_rollout_vram.json",
+      "new_sha256": "a34471f6d602eafc5a10d3f0de99cc0ce8081a34c067daa7e65bd49ed5e3a0bf",
+      "numeric_values_preserved": true,
+      "old_path": "20260803_sglang_parallel_n8/cpu_skip_gpu_encoder_two_rollout_vram.json",
+      "old_sha256": "a34471f6d602eafc5a10d3f0de99cc0ce8081a34c067daa7e65bd49ed5e3a0bf"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260803_sglang_parallel_n8/probe.json",
+      "new_sha256": "35882f318d2781da5033b5f17533bbe15df73bb4eb3ec09a29a92760dc28a1b5",
+      "numeric_values_preserved": true,
+      "old_path": "20260803_sglang_parallel_n8/probe.json",
+      "old_sha256": "35882f318d2781da5033b5f17533bbe15df73bb4eb3ec09a29a92760dc28a1b5"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260804_eval_grouped_json/cpu_skip_gpu_encoder_eval_grouped_json_retry1_vram.json",
+      "new_sha256": "6320b53f6b4bc207a5729cbcfb44586d38bf1fa307951574c14d6abdef5a1ed5",
+      "numeric_values_preserved": true,
+      "old_path": "20260804_eval_grouped_json/cpu_skip_gpu_encoder_eval_grouped_json_retry1_vram.json",
+      "old_sha256": "6320b53f6b4bc207a5729cbcfb44586d38bf1fa307951574c14d6abdef5a1ed5"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260804_eval_grouped_json/cpu_skip_gpu_encoder_eval_grouped_json_vram.json",
+      "new_sha256": "4b687ce01900f21db19713084852b649ede94857ed0897977fe6b684c2e043e8",
+      "numeric_values_preserved": true,
+      "old_path": "20260804_eval_grouped_json/cpu_skip_gpu_encoder_eval_grouped_json_vram.json",
+      "old_sha256": "4b687ce01900f21db19713084852b649ede94857ed0897977fe6b684c2e043e8"
+    },
+    {
+      "content_replacements": [
+        "VISION_ENCODER_OMIT_GPU_WEIGHTS->SKIP_GPU_VISION_ENCODER"
+      ],
+      "new_path": "20260804_packed_transport/cpu_skip_gpu_encoder_packed_two_rollout_vram.json",
+      "new_sha256": "1defe4b1a805a079ca5e2c14adb240375dcb380545a97a39902322530fade9ca",
+      "numeric_values_preserved": true,
+      "old_path": "20260804_packed_transport/cpu_skip_gpu_encoder_packed_two_rollout_vram.json",
+      "old_sha256": "e5a1e48c4054e14524c2e4012b4929434a7eb906777c4ddc498d92c4273e3330"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260804_packed_transport/serialization.json",
+      "new_sha256": "0e60aaa6caae01d58e7f34832638158115b050a401f6fee6ecf906f9765ce4f2",
+      "numeric_values_preserved": true,
+      "old_path": "20260804_packed_transport/serialization.json",
+      "old_sha256": "0e60aaa6caae01d58e7f34832638158115b050a401f6fee6ecf906f9765ce4f2"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260804_packed_transport/sglang_live_parity.json",
+      "new_sha256": "1832ec9277f2ab3577ead95334e3a3eb004b6b2fbb9be9464d2b96d0d712679b",
+      "numeric_values_preserved": true,
+      "old_path": "20260804_packed_transport/sglang_live_parity.json",
+      "old_sha256": "1832ec9277f2ab3577ead95334e3a3eb004b6b2fbb9be9464d2b96d0d712679b"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260806_gpu_grouped_n8/probe.json",
+      "new_sha256": "80a99ea7a7d6be648e3f308743088a8697d663e68dc9ad97575142d33e28c438",
+      "numeric_values_preserved": true,
+      "old_path": "20260806_gpu_grouped_n8/probe.json",
+      "old_sha256": "80a99ea7a7d6be648e3f308743088a8697d663e68dc9ad97575142d33e28c438"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260806_overlap_cpu_skip_gpu_encoder_no_cache/timeline.json",
+      "new_sha256": "dd3839248553a6b7d1ac408fe3e30ce9ab49b04ba5c09e27a147cf3fd22f84a5",
+      "numeric_values_preserved": true,
+      "old_path": "20260806_overlap_cpu_skip_gpu_encoder_no_cache/timeline.json",
+      "old_sha256": "dd3839248553a6b7d1ac408fe3e30ce9ab49b04ba5c09e27a147cf3fd22f84a5"
+    },
+    {
+      "content_replacements": [
+        "VISION_ENCODER_OMIT_GPU_WEIGHTS->SKIP_GPU_VISION_ENCODER"
+      ],
+      "new_path": "20260806_overlap_cpu_skip_gpu_encoder_no_cache/vram.json",
+      "new_sha256": "b7a412eb84e4771a694d9526f0b94d0f502c5a1daaac9d300f78a1d98bcbf330",
+      "numeric_values_preserved": true,
+      "old_path": "20260806_overlap_cpu_skip_gpu_encoder_no_cache/vram.json",
+      "old_sha256": "b8f8b6d8066053e0b4bc2b777bfb1794d35bda23bbd968486129582f58444f89"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260806_overlap_gpu_grouped/timeline.json",
+      "new_sha256": "cce192a1dafbf66894032f7544911d4e34625fd9c2f64d78892adb76f57bf854",
+      "numeric_values_preserved": true,
+      "old_path": "20260806_overlap_gpu_grouped/timeline.json",
+      "old_sha256": "cce192a1dafbf66894032f7544911d4e34625fd9c2f64d78892adb76f57bf854"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "20260806_overlap_gpu_grouped/vram.json",
+      "new_sha256": "12458b49bb58e640444efed4d92e85617f04ed2062aeb7794714b3ceec4c2a42",
+      "numeric_values_preserved": true,
+      "old_path": "20260806_overlap_gpu_grouped/vram.json",
+      "old_sha256": "12458b49bb58e640444efed4d92e85617f04ed2062aeb7794714b3ceec4c2a42"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_20260827_074743/cpu-topology.txt",
+      "new_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_20260827_074743/cpu-topology.txt",
+      "old_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_20260827_074743/driver.log",
+      "new_sha256": "df3e3545ebccc4a42557382436725dd6932ffbfe3a09854ebe386f4a16db087f",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_20260827_074743/driver.log",
+      "old_sha256": "df3e3545ebccc4a42557382436725dd6932ffbfe3a09854ebe386f4a16db087f"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_20260827_074743/git-head.txt",
+      "new_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_20260827_074743/git-head.txt",
+      "old_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_20260827_074743/git-status.txt",
+      "new_sha256": "4c0c2ab6436d0d42c8301825dca248666bec11a21b9f9d4ef05c4b15f3449498",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_20260827_074743/git-status.txt",
+      "old_sha256": "4c0c2ab6436d0d42c8301825dca248666bec11a21b9f9d4ef05c4b15f3449498"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_20260827_074743/input-sha256.txt",
+      "new_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_20260827_074743/input-sha256.txt",
+      "old_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_20260827_074743/manifest.tsv",
+      "new_sha256": "d6ca96b3ffd34155b28bfe5cec3e166dd9763007c49a736efa61e7709e7b26f2",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_20260827_074743/manifest.tsv",
+      "old_sha256": "d6ca96b3ffd34155b28bfe5cec3e166dd9763007c49a736efa61e7709e7b26f2"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_20260827_074743/repeat_1_full_dataset.console.log",
+      "new_sha256": "9aa8c28e7f656c6e0868cd9435e1b4d3acfe9dd9eeace6659fce427dcc4ce7a3",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_20260827_074743/repeat_1_full_dataset.console.log",
+      "old_sha256": "9aa8c28e7f656c6e0868cd9435e1b4d3acfe9dd9eeace6659fce427dcc4ce7a3"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_20260827_074743/repeat_1_full_dataset.internal.log",
+      "new_sha256": "1a396f2d0af8c223c31f5c6214f2f9f46535ba4f8e203597157d84c38869bbdc",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_20260827_074743/repeat_1_full_dataset.internal.log",
+      "old_sha256": "1a396f2d0af8c223c31f5c6214f2f9f46535ba4f8e203597157d84c38869bbdc"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_20260827_074743/repeat_1_none.console.log",
+      "new_sha256": "36c91ef86a8f5820aba3198bc0ab4c2105b048e67ebd2cddb2cbdb677a104f41",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_20260827_074743/repeat_1_none.console.log",
+      "old_sha256": "36c91ef86a8f5820aba3198bc0ab4c2105b048e67ebd2cddb2cbdb677a104f41"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_20260827_074743/repeat_1_none.internal.log",
+      "new_sha256": "48b4646cb218939c6c5eeda89871b72decb702e81c13c874f8d4b8946f08a3f2",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_20260827_074743/repeat_1_none.internal.log",
+      "old_sha256": "48b4646cb218939c6c5eeda89871b72decb702e81c13c874f8d4b8946f08a3f2"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_20260827_074743/vram-before.csv",
+      "new_sha256": "b5b6ca376a6b9b652314b8aa913baf4922db3b1eed185df44052219115a9d83b",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_20260827_074743/vram-before.csv",
+      "old_sha256": "b5b6ca376a6b9b652314b8aa913baf4922db3b1eed185df44052219115a9d83b"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/cpu-topology.txt",
+      "new_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_foreground_20260827_074149/cpu-topology.txt",
+      "old_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/git-head.txt",
+      "new_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_foreground_20260827_074149/git-head.txt",
+      "old_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/git-status.txt",
+      "new_sha256": "4c0c2ab6436d0d42c8301825dca248666bec11a21b9f9d4ef05c4b15f3449498",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_foreground_20260827_074149/git-status.txt",
+      "old_sha256": "4c0c2ab6436d0d42c8301825dca248666bec11a21b9f9d4ef05c4b15f3449498"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/input-sha256.txt",
+      "new_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_foreground_20260827_074149/input-sha256.txt",
+      "old_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/manifest.tsv",
+      "new_sha256": "f1f06eaeae7ee0abf99130e7edbf44204e5245618197ccfde85aaccb973930b1",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_foreground_20260827_074149/manifest.tsv",
+      "old_sha256": "f1f06eaeae7ee0abf99130e7edbf44204e5245618197ccfde85aaccb973930b1"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/repeat_1_none.console.log",
+      "new_sha256": "108feef679ad1238e0eb438a2f5e0bfcae681b98510c2425d82a0b1370e00833",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_foreground_20260827_074149/repeat_1_none.console.log",
+      "old_sha256": "108feef679ad1238e0eb438a2f5e0bfcae681b98510c2425d82a0b1370e00833"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/repeat_1_none.internal.log",
+      "new_sha256": "de33a83f6b3665849956f4d5f7c1fe4d80c2f1d9097551f1ccfea0f596da0551",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_foreground_20260827_074149/repeat_1_none.internal.log",
+      "old_sha256": "de33a83f6b3665849956f4d5f7c1fe4d80c2f1d9097551f1ccfea0f596da0551"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_foreground_20260827_074149/vram-before.csv",
+      "new_sha256": "b5b6ca376a6b9b652314b8aa913baf4922db3b1eed185df44052219115a9d83b",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_foreground_20260827_074149/vram-before.csv",
+      "old_sha256": "b5b6ca376a6b9b652314b8aa913baf4922db3b1eed185df44052219115a9d83b"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/cpu-topology.txt",
+      "new_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/cpu-topology.txt",
+      "old_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/full_dataset_preload_analysis.json",
+      "new_sha256": "ec378dae861dd1eacaf725aec20d1fa98695d094bfe91c02ab56987207128c49",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/full_dataset_preload_analysis.json",
+      "old_sha256": "ec378dae861dd1eacaf725aec20d1fa98695d094bfe91c02ab56987207128c49"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/git-head.txt",
+      "new_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/git-head.txt",
+      "old_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/git-status.txt",
+      "new_sha256": "4c0c2ab6436d0d42c8301825dca248666bec11a21b9f9d4ef05c4b15f3449498",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/git-status.txt",
+      "old_sha256": "4c0c2ab6436d0d42c8301825dca248666bec11a21b9f9d4ef05c4b15f3449498"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/input-sha256.txt",
+      "new_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/input-sha256.txt",
+      "old_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/manifest.tsv",
+      "new_sha256": "b92403eed6ac91cac039b29b1128638b92c3a0a5b96e9031cb2fe79ef2e5e9ff",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/manifest.tsv",
+      "old_sha256": "b92403eed6ac91cac039b29b1128638b92c3a0a5b96e9031cb2fe79ef2e5e9ff"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_1_full_dataset.console.log",
+      "new_sha256": "6f86b437e683b64b6d249782b134f0a2791de2c19eb1377013dbc6abcb9cb9e4",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_1_full_dataset.console.log",
+      "old_sha256": "6f86b437e683b64b6d249782b134f0a2791de2c19eb1377013dbc6abcb9cb9e4"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_1_full_dataset.internal.log",
+      "new_sha256": "a10f79b88c0aface3f14b178d85ace574402cb610776f04a7f7d6c48dbf3aac9",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_1_full_dataset.internal.log",
+      "old_sha256": "a10f79b88c0aface3f14b178d85ace574402cb610776f04a7f7d6c48dbf3aac9"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_1_none.console.log",
+      "new_sha256": "e5d3af90d44ad6204fd0564d2ed345a51235a93a24731c4397c0dc06fe612980",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_1_none.console.log",
+      "old_sha256": "e5d3af90d44ad6204fd0564d2ed345a51235a93a24731c4397c0dc06fe612980"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_1_none.internal.log",
+      "new_sha256": "b8cd676f5268b4378e69a498627216717639bfd9ba0368526af7c6931ba00132",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_1_none.internal.log",
+      "old_sha256": "b8cd676f5268b4378e69a498627216717639bfd9ba0368526af7c6931ba00132"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_1_preload.json",
+      "new_sha256": "8fec33dcd1eef00026bab0079516aa0cf589a2fe3b38d2f4a17d6811556600ec",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_1_preload.json",
+      "old_sha256": "8fec33dcd1eef00026bab0079516aa0cf589a2fe3b38d2f4a17d6811556600ec"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_2_full_dataset.console.log",
+      "new_sha256": "950a2a830afbb96b25a712b90525a43c27106b02ff1237f91e438f0498f2abd0",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_2_full_dataset.console.log",
+      "old_sha256": "950a2a830afbb96b25a712b90525a43c27106b02ff1237f91e438f0498f2abd0"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_2_full_dataset.internal.log",
+      "new_sha256": "2fe70202ff3b806bffd38a97faf347a5195ff299f575b531f59447541fd31df1",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_2_full_dataset.internal.log",
+      "old_sha256": "2fe70202ff3b806bffd38a97faf347a5195ff299f575b531f59447541fd31df1"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_2_none.console.log",
+      "new_sha256": "b41c04b638179fb0c661a647f95a3b3ba18fd1da4a8fef838deca1b7bf4005c6",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_2_none.console.log",
+      "old_sha256": "b41c04b638179fb0c661a647f95a3b3ba18fd1da4a8fef838deca1b7bf4005c6"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_2_none.internal.log",
+      "new_sha256": "c8cced77a7964a3e19382917ca6f54dd17ab89761876c76841976a4aad6c17a8",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_2_none.internal.log",
+      "old_sha256": "c8cced77a7964a3e19382917ca6f54dd17ab89761876c76841976a4aad6c17a8"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_2_preload.json",
+      "new_sha256": "a7cbea13fcadffee8ecb72251e5a34419a2f4519b5424902112deeaa21940335",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_2_preload.json",
+      "old_sha256": "a7cbea13fcadffee8ecb72251e5a34419a2f4519b5424902112deeaa21940335"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_3_full_dataset.console.log",
+      "new_sha256": "9b9d12c537fa7aac1e314e42b8db66693278986e30cb83356611893190fc319a",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_3_full_dataset.console.log",
+      "old_sha256": "9b9d12c537fa7aac1e314e42b8db66693278986e30cb83356611893190fc319a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_3_full_dataset.internal.log",
+      "new_sha256": "d31fb7c2df2a6b7929743a24a4226934f95cdbfd8125dc095d6aec1d293c2ce3",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_3_full_dataset.internal.log",
+      "old_sha256": "d31fb7c2df2a6b7929743a24a4226934f95cdbfd8125dc095d6aec1d293c2ce3"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_3_none.console.log",
+      "new_sha256": "5083f3a0383e14f1c7254315d37ed0953a9c197b8cefea8c618e0bd2e0cbe7f2",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_3_none.console.log",
+      "old_sha256": "5083f3a0383e14f1c7254315d37ed0953a9c197b8cefea8c618e0bd2e0cbe7f2"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_3_none.internal.log",
+      "new_sha256": "05e7dd894fdd274bc9b327cc4cc64f48d40394b51dd6b26c7a1dd0cd0cf5d665",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_3_none.internal.log",
+      "old_sha256": "05e7dd894fdd274bc9b327cc4cc64f48d40394b51dd6b26c7a1dd0cd0cf5d665"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_3_preload.json",
+      "new_sha256": "c0b647f31a9a2e98a04e60201cba6dd2f2ea85747080c4b5ce16ba230b3dae93",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_3_preload.json",
+      "old_sha256": "c0b647f31a9a2e98a04e60201cba6dd2f2ea85747080c4b5ce16ba230b3dae93"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_4_full_dataset.console.log",
+      "new_sha256": "aaca8573eab0d89372087e886fe7f92c551a940684cf9213f5ddd0c01f670996",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_4_full_dataset.console.log",
+      "old_sha256": "aaca8573eab0d89372087e886fe7f92c551a940684cf9213f5ddd0c01f670996"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_4_full_dataset.internal.log",
+      "new_sha256": "457ab8e0742875df70f1e28ff9cbdd2efd0d800cd2b2ee166a180b9b376ce767",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_4_full_dataset.internal.log",
+      "old_sha256": "457ab8e0742875df70f1e28ff9cbdd2efd0d800cd2b2ee166a180b9b376ce767"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_4_none.console.log",
+      "new_sha256": "358d5866690681895c1997d64ba027e4a217a6f87101b86c4f9288aef92c435a",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_4_none.console.log",
+      "old_sha256": "358d5866690681895c1997d64ba027e4a217a6f87101b86c4f9288aef92c435a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_4_none.internal.log",
+      "new_sha256": "fb7e78411d9cf217cdb484fc61d01624e4cc8cd215f513144da4aa0140707b24",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_4_none.internal.log",
+      "old_sha256": "fb7e78411d9cf217cdb484fc61d01624e4cc8cd215f513144da4aa0140707b24"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/repeat_4_preload.json",
+      "new_sha256": "5911d4d34434a018d2ed88141cd91085e72df3ca204a4c4953d9d485752238cd",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/repeat_4_preload.json",
+      "old_sha256": "5911d4d34434a018d2ed88141cd91085e72df3ca204a4c4953d9d485752238cd"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/vram-after.csv",
+      "new_sha256": "4075376bc6315f19e81234291cd816a73a3bec4791f703cec89fcb05df2e2ce9",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/vram-after.csv",
+      "old_sha256": "4075376bc6315f19e81234291cd816a73a3bec4791f703cec89fcb05df2e2ce9"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry2_20260827_081348/vram-before.csv",
+      "new_sha256": "4075376bc6315f19e81234291cd816a73a3bec4791f703cec89fcb05df2e2ce9",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry2_20260827_081348/vram-before.csv",
+      "old_sha256": "4075376bc6315f19e81234291cd816a73a3bec4791f703cec89fcb05df2e2ce9"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry_20260827_081032/cpu-topology.txt",
+      "new_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry_20260827_081032/cpu-topology.txt",
+      "old_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry_20260827_081032/git-head.txt",
+      "new_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry_20260827_081032/git-head.txt",
+      "old_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry_20260827_081032/git-status.txt",
+      "new_sha256": "4c0c2ab6436d0d42c8301825dca248666bec11a21b9f9d4ef05c4b15f3449498",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry_20260827_081032/git-status.txt",
+      "old_sha256": "4c0c2ab6436d0d42c8301825dca248666bec11a21b9f9d4ef05c4b15f3449498"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry_20260827_081032/input-sha256.txt",
+      "new_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry_20260827_081032/input-sha256.txt",
+      "old_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry_20260827_081032/manifest.tsv",
+      "new_sha256": "f1f06eaeae7ee0abf99130e7edbf44204e5245618197ccfde85aaccb973930b1",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry_20260827_081032/manifest.tsv",
+      "old_sha256": "f1f06eaeae7ee0abf99130e7edbf44204e5245618197ccfde85aaccb973930b1"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry_20260827_081032/repeat_1_none.console.log",
+      "new_sha256": "5eef02ede90f1655b3d1386368158ea5c8cdb0082098af8a97bd314b8102451b",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry_20260827_081032/repeat_1_none.console.log",
+      "old_sha256": "5eef02ede90f1655b3d1386368158ea5c8cdb0082098af8a97bd314b8102451b"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry_20260827_081032/repeat_1_none.internal.log",
+      "new_sha256": "13a8a9114d12db2df0f23f1bf8cb8dc181f645934b234d72eda7ed466a6d18b4",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry_20260827_081032/repeat_1_none.internal.log",
+      "old_sha256": "13a8a9114d12db2df0f23f1bf8cb8dc181f645934b234d72eda7ed466a6d18b4"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "full_dataset_preload_retry_20260827_081032/vram-before.csv",
+      "new_sha256": "b5b6ca376a6b9b652314b8aa913baf4922db3b1eed185df44052219115a9d83b",
+      "numeric_values_preserved": true,
+      "old_path": "full_dataset_preload_retry_20260827_081032/vram-before.csv",
+      "old_sha256": "b5b6ca376a6b9b652314b8aa913baf4922db3b1eed185df44052219115a9d83b"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/cpu_vision_demand.json",
+      "new_sha256": "5932a06dc7ef5c80c7c10b0c7f67c2218a66dcdd1295dc92e8259b1f0cfb6df5",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/cpu_vision_demand.json",
+      "old_sha256": "5932a06dc7ef5c80c7c10b0c7f67c2218a66dcdd1295dc92e8259b1f0cfb6df5"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/cpu_vision_demand_prompts16_samples4.console.log",
+      "new_sha256": "5ea001432abe41307300e4c0625b6263d591bacd326cf2100ed5e3d5239c8862",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/cpu_vision_demand_prompts16_samples4.console.log",
+      "old_sha256": "5ea001432abe41307300e4c0625b6263d591bacd326cf2100ed5e3d5239c8862"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/cpu_vision_demand_prompts32_samples2.console.log",
+      "new_sha256": "65f833897099861da3470d3bc6ddb62c2d383e15b2610f3ad9bdc2f584d1526a",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/cpu_vision_demand_prompts32_samples2.console.log",
+      "old_sha256": "65f833897099861da3470d3bc6ddb62c2d383e15b2610f3ad9bdc2f584d1526a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/cpu_vision_demand_prompts64_samples1.console.log",
+      "new_sha256": "570e2e1334e356110257540e09a6bce7a9067f162d912689f5c0d52f947a1295",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/cpu_vision_demand_prompts64_samples1.console.log",
+      "old_sha256": "570e2e1334e356110257540e09a6bce7a9067f162d912689f5c0d52f947a1295"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/cpu_vision_demand_prompts8_samples8.console.log",
+      "new_sha256": "44ca857b9a60f417e5a2f62b13ce4b9b07877b92ad4205983c86da3e420d607e",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/cpu_vision_demand_prompts8_samples8.console.log",
+      "old_sha256": "44ca857b9a60f417e5a2f62b13ce4b9b07877b92ad4205983c86da3e420d607e"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/hf_gpu_cpu_parity.json",
+      "new_sha256": "2deea6e2fd510024508065501838890df33234d7434d7d2ae7e361d75ce32d66",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/hf_gpu_cpu_parity.json",
+      "old_sha256": "2deea6e2fd510024508065501838890df33234d7434d7d2ae7e361d75ce32d66"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/hf_gpu_cpu_parity.log",
+      "new_sha256": "2e66f28101a3f7c687ab16c5a5493c1a294ee6cb9f87cb0a9795169160899a09",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/hf_gpu_cpu_parity.log",
+      "old_sha256": "2e66f28101a3f7c687ab16c5a5493c1a294ee6cb9f87cb0a9795169160899a09"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/manifest.tsv",
+      "new_sha256": "984d0142b486246ac2925ae687384effa63f9bcbb3a3396232cddb3823e56305",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/manifest.tsv",
+      "old_sha256": "984d0142b486246ac2925ae687384effa63f9bcbb3a3396232cddb3823e56305"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/prompts16_samples4.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/prompts16_samples4.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/prompts32_samples2.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/prompts32_samples2.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/prompts64_samples1.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/prompts64_samples1.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/prompts8_samples8.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/prompts8_samples8.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/sglang_gpu_cpu_parity.json",
+      "new_sha256": "49f0ac99a9b29b8ec9fc1fffb1e9758bded1fe6463bfd310bedfa35a5575cd05",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/sglang_gpu_cpu_parity.json",
+      "old_sha256": "49f0ac99a9b29b8ec9fc1fffb1e9758bded1fe6463bfd310bedfa35a5575cd05"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_141944_cpu_vision_demand/sglang_gpu_cpu_parity.log",
+      "new_sha256": "d1f80071b976355a205371539a5d19659467fc11a7c50c4aa53847dc7a9cc137",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_141944_cpu_vision_demand/sglang_gpu_cpu_parity.log",
+      "old_sha256": "d1f80071b976355a205371539a5d19659467fc11a7c50c4aa53847dc7a9cc137"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142801_cpu_vision_scaling/cpu_vision_scaling.json",
+      "new_sha256": "c7027f3c98f6ab9e2f1ce901fea408e14a5eef937cdc5a402e75c6f552c677f3",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142801_cpu_vision_scaling/cpu_vision_scaling.json",
+      "old_sha256": "c7027f3c98f6ab9e2f1ce901fea408e14a5eef937cdc5a402e75c6f552c677f3"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142802_cpu_worker_layouts/manifest.tsv",
+      "new_sha256": "090882f65a88f97af33e3df97bab47be5e0d1576c87b7ec668fe436d1111e7f2",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142802_cpu_worker_layouts/manifest.tsv",
+      "old_sha256": "090882f65a88f97af33e3df97bab47be5e0d1576c87b7ec668fe436d1111e7f2"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142802_cpu_worker_layouts/replicas1_threads4.console.log",
+      "new_sha256": "17e82657f37dc7dee5541e7a9940c1d5c57fb9752a06d319f67026c54ed1f79c",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142802_cpu_worker_layouts/replicas1_threads4.console.log",
+      "old_sha256": "17e82657f37dc7dee5541e7a9940c1d5c57fb9752a06d319f67026c54ed1f79c"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142802_cpu_worker_layouts/replicas1_threads4.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142802_cpu_worker_layouts/replicas1_threads4.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/manifest.tsv",
+      "new_sha256": "f41cf166ee7b779ef2b69140582c30a091b5a87346e3663827da7a3dfb7ecf2d",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_cpu_worker_layouts/manifest.tsv",
+      "old_sha256": "f41cf166ee7b779ef2b69140582c30a091b5a87346e3663827da7a3dfb7ecf2d"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas1_threads4.console.log",
+      "new_sha256": "de4d562667537d631f21ec225318854d2f013d6cc4081b86c681b0e92ecff44a",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_cpu_worker_layouts/replicas1_threads4.console.log",
+      "old_sha256": "de4d562667537d631f21ec225318854d2f013d6cc4081b86c681b0e92ecff44a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas1_threads4.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_cpu_worker_layouts/replicas1_threads4.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas1_threads4_demand.json",
+      "new_sha256": "97139419e160e0c0dda8d4070fd4d1a83c1458d9175d3b67765cd10451f26954",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_cpu_worker_layouts/replicas1_threads4_demand.json",
+      "old_sha256": "97139419e160e0c0dda8d4070fd4d1a83c1458d9175d3b67765cd10451f26954"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas2_threads2.console.log",
+      "new_sha256": "e5ccd3f2d2d29db4a829342fd0f9a0b1f54068b423f4ae4b91c84b3140c0cbcb",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_cpu_worker_layouts/replicas2_threads2.console.log",
+      "old_sha256": "e5ccd3f2d2d29db4a829342fd0f9a0b1f54068b423f4ae4b91c84b3140c0cbcb"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas2_threads2.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_cpu_worker_layouts/replicas2_threads2.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas2_threads2_demand.json",
+      "new_sha256": "5c4ff40f2e31f6ce0f1de4f8838e53d6b9840e9e6e40d3c88446a96ffa870704",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_cpu_worker_layouts/replicas2_threads2_demand.json",
+      "old_sha256": "5c4ff40f2e31f6ce0f1de4f8838e53d6b9840e9e6e40d3c88446a96ffa870704"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas4_threads1.console.log",
+      "new_sha256": "19c4cf5e7f267c58e098dccf2ac368d3f76969d8f6f449a71c617c905aec61ee",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_cpu_worker_layouts/replicas4_threads1.console.log",
+      "old_sha256": "19c4cf5e7f267c58e098dccf2ac368d3f76969d8f6f449a71c617c905aec61ee"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas4_threads1.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_cpu_worker_layouts/replicas4_threads1.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142804_cpu_worker_layouts/replicas4_threads1_demand.json",
+      "new_sha256": "7521b77b221c6f459e14e2779424333d7622f3463a1bc54a3835bcbd5e67501f",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142804_cpu_worker_layouts/replicas4_threads1_demand.json",
+      "old_sha256": "7521b77b221c6f459e14e2779424333d7622f3463a1bc54a3835bcbd5e67501f"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142805_vision_cache_reuse/cpu_and_sglang_cache.console.log",
+      "new_sha256": "b5cfeabc579c477bac14825afdede449771df3f773b51ed533cca74cf74e3edc",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142805_vision_cache_reuse/cpu_and_sglang_cache.console.log",
+      "old_sha256": "b5cfeabc579c477bac14825afdede449771df3f773b51ed533cca74cf74e3edc"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142805_vision_cache_reuse/cpu_and_sglang_cache.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142805_vision_cache_reuse/cpu_and_sglang_cache.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142805_vision_cache_reuse/cpu_cache_only.console.log",
+      "new_sha256": "d2bba4ed9b16f52d32e7b09b2686a37c35db515c9d6c70c8a795d79fcc52d7d2",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142805_vision_cache_reuse/cpu_cache_only.console.log",
+      "old_sha256": "d2bba4ed9b16f52d32e7b09b2686a37c35db515c9d6c70c8a795d79fcc52d7d2"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142805_vision_cache_reuse/cpu_cache_only.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142805_vision_cache_reuse/cpu_cache_only.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142805_vision_cache_reuse/manifest.tsv",
+      "new_sha256": "46858f19aedbdcbdb1a37a6286dae115b1cdb9de09466fb5b901a83ec95e645a",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142805_vision_cache_reuse/manifest.tsv",
+      "old_sha256": "46858f19aedbdcbdb1a37a6286dae115b1cdb9de09466fb5b901a83ec95e645a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142809_vision_cache_reuse/cpu_and_sglang_cache.console.log",
+      "new_sha256": "bbac50fe9a9fb1fea0197c85f09e9948cf837ae2c1231390d187b00093e48dff",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142809_vision_cache_reuse/cpu_and_sglang_cache.console.log",
+      "old_sha256": "bbac50fe9a9fb1fea0197c85f09e9948cf837ae2c1231390d187b00093e48dff"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142809_vision_cache_reuse/cpu_and_sglang_cache.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142809_vision_cache_reuse/cpu_and_sglang_cache.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142809_vision_cache_reuse/cpu_cache_only.console.log",
+      "new_sha256": "7d1ae173bb0bdd545662494ce01b77c702cfd2d7c0cd51ee66f08b6e155d1662",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142809_vision_cache_reuse/cpu_cache_only.console.log",
+      "old_sha256": "7d1ae173bb0bdd545662494ce01b77c702cfd2d7c0cd51ee66f08b6e155d1662"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142809_vision_cache_reuse/cpu_cache_only.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142809_vision_cache_reuse/cpu_cache_only.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142809_vision_cache_reuse/manifest.tsv",
+      "new_sha256": "43d9df2641f191e7deff4cdf2773f90012c0a622229e490b031dc06005394259",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142809_vision_cache_reuse/manifest.tsv",
+      "old_sha256": "43d9df2641f191e7deff4cdf2773f90012c0a622229e490b031dc06005394259"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142817_vision_cache_reuse/cpu_and_sglang_cache.console.log",
+      "new_sha256": "e16cbd1dc0a2f6dd5b709dfcf8c84861321e9ede1f68beee4ed773f1ed901f4f",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142817_vision_cache_reuse/cpu_and_sglang_cache.console.log",
+      "old_sha256": "e16cbd1dc0a2f6dd5b709dfcf8c84861321e9ede1f68beee4ed773f1ed901f4f"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142817_vision_cache_reuse/cpu_and_sglang_cache.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142817_vision_cache_reuse/cpu_and_sglang_cache.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142817_vision_cache_reuse/cpu_cache_only.console.log",
+      "new_sha256": "d07924d4065d03de2423c87be38d050ad2a5bef3c5bf719a48a48d43df7eba03",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142817_vision_cache_reuse/cpu_cache_only.console.log",
+      "old_sha256": "d07924d4065d03de2423c87be38d050ad2a5bef3c5bf719a48a48d43df7eba03"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142817_vision_cache_reuse/cpu_cache_only.started",
+      "new_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142817_vision_cache_reuse/cpu_cache_only.started",
+      "old_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142817_vision_cache_reuse/manifest.tsv",
+      "new_sha256": "7cdbbc55ba55f422700d892a1d092becd0d02ef1f91b1ef9641bc7d43b6e22c6",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142817_vision_cache_reuse/manifest.tsv",
+      "old_sha256": "7cdbbc55ba55f422700d892a1d092becd0d02ef1f91b1ef9641bc7d43b6e22c6"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_142817_vision_cache_reuse/vision_cache_reuse.json",
+      "new_sha256": "7b7b42ca4aeeedc5f5006ca90ea519251a04416a2b3372b25df446f24bd31155",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_142817_vision_cache_reuse/vision_cache_reuse.json",
+      "old_sha256": "7b7b42ca4aeeedc5f5006ca90ea519251a04416a2b3372b25df446f24bd31155"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/cpu-topology.txt",
+      "new_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/cpu-topology.txt",
+      "old_sha256": "6effbfaeb1df3f4a167dcaa27463cd02ed46c48b7a293fe2078258c4236bd6f0"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/git-head.txt",
+      "new_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/git-head.txt",
+      "old_sha256": "9b3f13b20ee0f2c83a161dac672327d0511f7e97f1c6e51608b0555bc45cc496"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/git-status.txt",
+      "new_sha256": "2fa8ec1369ffe63d71c4ff455d85725d653ccb4b31e9dbb1fc6c39cd8ca9bcd2",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/git-status.txt",
+      "old_sha256": "2fa8ec1369ffe63d71c4ff455d85725d653ccb4b31e9dbb1fc6c39cd8ca9bcd2"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/hf_gpu_cpu_parity.json",
+      "new_sha256": "57583e699cf39782ad61cb473acb1df35dfbd46b31b09bbdd6224b19e8c555b1",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/hf_gpu_cpu_parity.json",
+      "old_sha256": "57583e699cf39782ad61cb473acb1df35dfbd46b31b09bbdd6224b19e8c555b1"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/hf_gpu_cpu_parity.log",
+      "new_sha256": "89e0503452dca1704938bab948944c53d503512ba8f61acade37bd4089b24f2a",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/hf_gpu_cpu_parity.log",
+      "old_sha256": "89e0503452dca1704938bab948944c53d503512ba8f61acade37bd4089b24f2a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/input-sha256.txt",
+      "new_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/input-sha256.txt",
+      "old_sha256": "fd09951e3633c0f830f826c7817c115cc1392c51caffb3d9a13439cf4119706a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/manifest.tsv",
+      "new_sha256": "1e53e3d7b3674dee4dda19681ffcbb65e4cd5ae28e481ca76d20c103b2d51c46",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/manifest.tsv",
+      "old_sha256": "1e53e3d7b3674dee4dda19681ffcbb65e4cd5ae28e481ca76d20c103b2d51c46"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_1_cpu_and_sglang_cache.console.log",
+      "new_sha256": "384442dc0002689183c02ec2fbc36da6ef6228ae920e21a5770cc1b8ccafca17",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_1_cpu_and_sglang_cache.console.log",
+      "old_sha256": "384442dc0002689183c02ec2fbc36da6ef6228ae920e21a5770cc1b8ccafca17"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_1_cpu_and_sglang_cache.internal.log",
+      "new_sha256": "16519ea5d3254401a8a638496b20022019eb3b30bd9ccb8f13c192fb06da0aa2",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_1_cpu_and_sglang_cache.internal.log",
+      "old_sha256": "16519ea5d3254401a8a638496b20022019eb3b30bd9ccb8f13c192fb06da0aa2"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_1_cpu_cache.console.log",
+      "new_sha256": "27d32a5f32921be6eeeb67c438d2d1f104e986693de3ad96c89cb126c929b7ce",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_1_cpu_cache.console.log",
+      "old_sha256": "27d32a5f32921be6eeeb67c438d2d1f104e986693de3ad96c89cb126c929b7ce"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_1_cpu_cache.internal.log",
+      "new_sha256": "2b5c31c843498d0e630ba5419ee8433cb54816fe15c1682a5aa775bd271c000c",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_1_cpu_cache.internal.log",
+      "old_sha256": "2b5c31c843498d0e630ba5419ee8433cb54816fe15c1682a5aa775bd271c000c"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_1_cpu_no_caches.console.log",
+      "new_sha256": "871c774b8cf1566b9c8891ba69f528db39a23bb1700325f2fdb1bf18a640c2e6",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_1_cpu_no_caches.console.log",
+      "old_sha256": "871c774b8cf1566b9c8891ba69f528db39a23bb1700325f2fdb1bf18a640c2e6"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_1_cpu_no_caches.internal.log",
+      "new_sha256": "d11c9fe3d7025460a3952064b9465c08273e3b516857c46d8432006e52ec753d",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_1_cpu_no_caches.internal.log",
+      "old_sha256": "d11c9fe3d7025460a3952064b9465c08273e3b516857c46d8432006e52ec753d"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_1_gpu.console.log",
+      "new_sha256": "d478844435e1359a9f272925011812ccdd06351a709339c68a69425454b4919a",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_1_gpu.console.log",
+      "old_sha256": "d478844435e1359a9f272925011812ccdd06351a709339c68a69425454b4919a"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_1_gpu.internal.log",
+      "new_sha256": "963245f9229cffb4598a1498981d056e083adfe1141b54288763ef5ced36a057",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_1_gpu.internal.log",
+      "old_sha256": "963245f9229cffb4598a1498981d056e083adfe1141b54288763ef5ced36a057"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_2_cpu_and_sglang_cache.console.log",
+      "new_sha256": "45e2c4477de3fb4091dcfa70ddcba4cfe4be5f55e1480231da22da5c275f3716",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_2_cpu_and_sglang_cache.console.log",
+      "old_sha256": "45e2c4477de3fb4091dcfa70ddcba4cfe4be5f55e1480231da22da5c275f3716"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_2_cpu_and_sglang_cache.internal.log",
+      "new_sha256": "a168e7d6010d496cf7ebfb5b382a116d55b22dbb657d5f328732153b608a4886",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_2_cpu_and_sglang_cache.internal.log",
+      "old_sha256": "a168e7d6010d496cf7ebfb5b382a116d55b22dbb657d5f328732153b608a4886"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_2_cpu_cache.console.log",
+      "new_sha256": "5261317e5ecfc9c5f27f6ef89b8b99afe33cc570301e405bdf731f5d1749d7ee",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_2_cpu_cache.console.log",
+      "old_sha256": "5261317e5ecfc9c5f27f6ef89b8b99afe33cc570301e405bdf731f5d1749d7ee"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_2_cpu_cache.internal.log",
+      "new_sha256": "4325f8ae2f977be147d4754488ae720cd283f8face344d5f501702dc11bd3b7c",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_2_cpu_cache.internal.log",
+      "old_sha256": "4325f8ae2f977be147d4754488ae720cd283f8face344d5f501702dc11bd3b7c"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_2_cpu_no_caches.console.log",
+      "new_sha256": "175a34bd40c260d2346aa37e497633fc16b2ee23229911367b4f2d54e86deebe",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_2_cpu_no_caches.console.log",
+      "old_sha256": "175a34bd40c260d2346aa37e497633fc16b2ee23229911367b4f2d54e86deebe"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_2_cpu_no_caches.internal.log",
+      "new_sha256": "8047833d91a733541a30c2e20c1e18d85212abfa6afa7ec07e59180cfe6db768",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_2_cpu_no_caches.internal.log",
+      "old_sha256": "8047833d91a733541a30c2e20c1e18d85212abfa6afa7ec07e59180cfe6db768"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_2_gpu.console.log",
+      "new_sha256": "94a240ad461e9f0d00b26ed1a7c078fbb0367719cd6052d3bdb31fa3f5f24b11",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_2_gpu.console.log",
+      "old_sha256": "94a240ad461e9f0d00b26ed1a7c078fbb0367719cd6052d3bdb31fa3f5f24b11"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_2_gpu.internal.log",
+      "new_sha256": "282df2c93cf44e099ce50fe8744cf5ec110f0bc390191c17623193648ef6c325",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_2_gpu.internal.log",
+      "old_sha256": "282df2c93cf44e099ce50fe8744cf5ec110f0bc390191c17623193648ef6c325"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_3_cpu_and_sglang_cache.console.log",
+      "new_sha256": "6c2254f87743f6bddce260cac748f8910ba0ea3acb67b2b27ffdc3f4d28de1c2",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_3_cpu_and_sglang_cache.console.log",
+      "old_sha256": "6c2254f87743f6bddce260cac748f8910ba0ea3acb67b2b27ffdc3f4d28de1c2"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_3_cpu_and_sglang_cache.internal.log",
+      "new_sha256": "08f031f4c6a3bc54fec1fb96606cca34bd4312215397f681f7783693f6f389f5",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_3_cpu_and_sglang_cache.internal.log",
+      "old_sha256": "08f031f4c6a3bc54fec1fb96606cca34bd4312215397f681f7783693f6f389f5"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_3_cpu_cache.console.log",
+      "new_sha256": "03c38c5233d4cfac46c58750f2b40ca62b90af691d54cdd7c70bf8c5cbf1cac9",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_3_cpu_cache.console.log",
+      "old_sha256": "03c38c5233d4cfac46c58750f2b40ca62b90af691d54cdd7c70bf8c5cbf1cac9"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_3_cpu_cache.internal.log",
+      "new_sha256": "2f850e20e5a9cd64145dc2178820fcecfdce70cc62bc3f19b76a417c457d61f4",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_3_cpu_cache.internal.log",
+      "old_sha256": "2f850e20e5a9cd64145dc2178820fcecfdce70cc62bc3f19b76a417c457d61f4"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_3_cpu_no_caches.console.log",
+      "new_sha256": "76522d1135ee0fedbe59c549cbb7295662f04158981e54643a509e7bc778c28d",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_3_cpu_no_caches.console.log",
+      "old_sha256": "76522d1135ee0fedbe59c549cbb7295662f04158981e54643a509e7bc778c28d"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_3_cpu_no_caches.internal.log",
+      "new_sha256": "9cb017ac45cd5ef36bcc4301047562d61963076edc97ff92091cb731bc87910f",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_3_cpu_no_caches.internal.log",
+      "old_sha256": "9cb017ac45cd5ef36bcc4301047562d61963076edc97ff92091cb731bc87910f"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_3_gpu.console.log",
+      "new_sha256": "5066ca972be6991a33564b2f93d75b9fdfcf746ffdd87e374459de1a45820f24",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_3_gpu.console.log",
+      "old_sha256": "5066ca972be6991a33564b2f93d75b9fdfcf746ffdd87e374459de1a45820f24"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_3_gpu.internal.log",
+      "new_sha256": "0e359cdd5f30c37e714787e730ef9e4442856d49291bbeaa3a0fd5a6742483bb",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_3_gpu.internal.log",
+      "old_sha256": "0e359cdd5f30c37e714787e730ef9e4442856d49291bbeaa3a0fd5a6742483bb"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_4_cpu_and_sglang_cache.console.log",
+      "new_sha256": "223afb5831414f5ec4c27c58e57e079c0d4afc2dea281dc26db8a6d4a474babf",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_4_cpu_and_sglang_cache.console.log",
+      "old_sha256": "223afb5831414f5ec4c27c58e57e079c0d4afc2dea281dc26db8a6d4a474babf"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_4_cpu_and_sglang_cache.internal.log",
+      "new_sha256": "31bff1cffa198d251a6d600d38ff54870b7605a4f4727b005cde148d59bc0dcf",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_4_cpu_and_sglang_cache.internal.log",
+      "old_sha256": "31bff1cffa198d251a6d600d38ff54870b7605a4f4727b005cde148d59bc0dcf"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_4_cpu_cache.console.log",
+      "new_sha256": "6b070b30a312e553c887ecf0ee611a9155043c48f63dbc28c3bcb60d95fcdda0",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_4_cpu_cache.console.log",
+      "old_sha256": "6b070b30a312e553c887ecf0ee611a9155043c48f63dbc28c3bcb60d95fcdda0"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_4_cpu_cache.internal.log",
+      "new_sha256": "afca081a487f3ffbc7a599c8bb62557281249aa96ab3b21b2cd6c40a8b716b6f",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_4_cpu_cache.internal.log",
+      "old_sha256": "afca081a487f3ffbc7a599c8bb62557281249aa96ab3b21b2cd6c40a8b716b6f"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_4_cpu_no_caches.console.log",
+      "new_sha256": "79761df3f19b497d6d70480aa3a22183e3822f90460891ecb32c502823629dcd",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_4_cpu_no_caches.console.log",
+      "old_sha256": "79761df3f19b497d6d70480aa3a22183e3822f90460891ecb32c502823629dcd"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_4_cpu_no_caches.internal.log",
+      "new_sha256": "8417059a75b77ae80ecd0785be2af2832cc2354a02ed00a7c4be84064c8ebd8e",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_4_cpu_no_caches.internal.log",
+      "old_sha256": "8417059a75b77ae80ecd0785be2af2832cc2354a02ed00a7c4be84064c8ebd8e"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_4_gpu.console.log",
+      "new_sha256": "c0447057912b27f2315e4ea1b51614353430ccaf8134228cbdc357a20fca90bb",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_4_gpu.console.log",
+      "old_sha256": "c0447057912b27f2315e4ea1b51614353430ccaf8134228cbdc357a20fca90bb"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/repeat_4_gpu.internal.log",
+      "new_sha256": "830bfbafebef8b2c5f16e05470771e45771789eb9555320cf9b0f303391a9ebf",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/repeat_4_gpu.internal.log",
+      "old_sha256": "830bfbafebef8b2c5f16e05470771e45771789eb9555320cf9b0f303391a9ebf"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/sglang_gpu_cpu_parity.json",
+      "new_sha256": "8c4af499e86b356279f5b13d8e0ef9ee52eca032b68fd25daed6a862df7584a6",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/sglang_gpu_cpu_parity.json",
+      "old_sha256": "8c4af499e86b356279f5b13d8e0ef9ee52eca032b68fd25daed6a862df7584a6"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/sglang_gpu_cpu_parity.log",
+      "new_sha256": "e6ee291a720bc994bde5dd14e5864eb940571de1705fd5575fddf289816300f4",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/sglang_gpu_cpu_parity.log",
+      "old_sha256": "e6ee291a720bc994bde5dd14e5864eb940571de1705fd5575fddf289816300f4"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/slurm-job.txt",
+      "new_sha256": "63160a10af67458ff0f68c04842178aeca0014855edbe7d3085f76448db7ea7f",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/slurm-job.txt",
+      "old_sha256": "63160a10af67458ff0f68c04842178aeca0014855edbe7d3085f76448db7ea7f"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/vision_settings.json",
+      "new_sha256": "b3d63b0911f32f973e31ce82d451bc05cd04cb006baa59ffc96a9ea07f8c838d",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/vision_settings.json",
+      "old_sha256": "b3d63b0911f32f973e31ce82d451bc05cd04cb006baa59ffc96a9ea07f8c838d"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/vram-after.csv",
+      "new_sha256": "aa2e244c991a53eb329eb6f1faae1673aa6c4c61f1ec7905857ed60b73f2fa08",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/vram-after.csv",
+      "old_sha256": "aa2e244c991a53eb329eb6f1faae1673aa6c4c61f1ec7905857ed60b73f2fa08"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "slurm_154079_vision_settings/vram-before.csv",
+      "new_sha256": "aa2e244c991a53eb329eb6f1faae1673aa6c4c61f1ec7905857ed60b73f2fa08",
+      "numeric_values_preserved": true,
+      "old_path": "slurm_154079_vision_settings/vram-before.csv",
+      "old_sha256": "aa2e244c991a53eb329eb6f1faae1673aa6c4c61f1ec7905857ed60b73f2fa08"
+    },
+    {
+      "content_replacements": [
+        "vision placement metadata->vision workload metadata"
+      ],
+      "new_path": "vision_workload_validation.parquet",
+      "new_sha256": "4087eddc59a156d6983def2069641bd5b57139ec4d4006772c7df6be53198ce4",
+      "numeric_values_preserved": true,
+      "old_path": "vision_workload_validation.parquet",
+      "old_sha256": "4087eddc59a156d6983def2069641bd5b57139ec4d4006772c7df6be53198ce4"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "vision_workload_validation_cycles.json",
+      "new_sha256": "0a9e9d991c2d576ee72e5b3eb5ec4aaf33a693fe66db026c4a491a4a28428028",
+      "numeric_values_preserved": true,
+      "old_path": "vision_workload_validation_cycles.json",
+      "old_sha256": "0a9e9d991c2d576ee72e5b3eb5ec4aaf33a693fe66db026c4a491a4a28428028"
+    },
+    {
+      "content_replacements": [],
+      "new_path": "vision_workload_validation_manifest.json",
+      "new_sha256": "536fb7e9512bdda339006f5c229249881f6ae8a438be0ffb45b1d27fa6a0b658",
+      "numeric_values_preserved": true,
+      "old_path": "vision_workload_validation_manifest.json",
+      "old_sha256": "536fb7e9512bdda339006f5c229249881f6ae8a438be0ffb45b1d27fa6a0b658"
+    }
+  ],
+  "migration": "cpu-vision-direct-names-2026-08-28",
+  "schema_version": 1
+}

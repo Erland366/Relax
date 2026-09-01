@@ -23,19 +23,21 @@ def validate_cpu_capacity(
     affinity_cpu_ids: Iterable[int],
     physical_core_keys: Iterable[PhysicalCoreKey],
     reserved_vit_cpus: int,
+    min_affinity_cpus: int = MIN_SCHEDULER_AFFINITY_CPUS,
+    min_physical_cores: int = MIN_DISTINCT_PHYSICAL_CORES,
 ) -> None:
     """Validate the scheduler allocation and CPU reservation for a capacity run."""
     affinity_cpu_count = len(set(affinity_cpu_ids))
-    if affinity_cpu_count < MIN_SCHEDULER_AFFINITY_CPUS:
+    if affinity_cpu_count < min_affinity_cpus:
         raise ValueError(
-            f"CPU-vision capacity mode requires at least {MIN_SCHEDULER_AFFINITY_CPUS} "
+            f"CPU-vision capacity mode requires at least {min_affinity_cpus} "
             f"scheduler-affinity CPUs; found {affinity_cpu_count}"
         )
 
     physical_core_count = len(set(physical_core_keys))
-    if physical_core_count < MIN_DISTINCT_PHYSICAL_CORES:
+    if physical_core_count < min_physical_cores:
         raise ValueError(
-            f"CPU-vision capacity mode requires at least {MIN_DISTINCT_PHYSICAL_CORES} "
+            f"CPU-vision capacity mode requires at least {min_physical_cores} "
             f"distinct physical cores; found {physical_core_count}"
         )
 
@@ -68,6 +70,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vision-encoder-num-replicas", required=True, type=_positive_integer)
     parser.add_argument("--vision-encoder-num-cpus", required=True, type=_positive_integer)
+    parser.add_argument("--min-affinity-cpus", type=_positive_integer, default=MIN_SCHEDULER_AFFINITY_CPUS)
+    parser.add_argument("--min-physical-cores", type=_positive_integer, default=MIN_DISTINCT_PHYSICAL_CORES)
     return parser
 
 
@@ -82,6 +86,8 @@ def main() -> None:
             affinity_cpu_ids=affinity_cpu_ids,
             physical_core_keys=physical_core_keys,
             reserved_vit_cpus=reserved_vit_cpus,
+            min_affinity_cpus=args.min_affinity_cpus,
+            min_physical_cores=args.min_physical_cores,
         )
     except (OSError, ValueError) as error:
         parser.error(str(error))

@@ -60,8 +60,10 @@ This file documents error patterns encountered and their solutions.
 | Step-0 `dapo` reward stalls inside the Ray reward-worker pool | The run reaches `Actor training step 0/200` and rollout generation, but the Megatron actor only logs `start to get rollout_id: 0 data from transfer queue for train with mcore.` and then dies much later with `ActorDiedError`, while `RolloutManager` only logs `RewardExecutor: created 16 RewardWorker actors` before a long silent gap | `dapo` is a small local string/regex reward, but it was still being dispatched through the generic `RewardWorker` actor pool. On the MI210 step-0 path, that turned a cheap per-sample reward into extra Ray actor RPCs and left rollout blocked before it could transfer `train_0` to the actor | Keep `dapo` on a local in-process path using `asyncio.to_thread` and reserve the Ray reward-worker pool for the heavier/thread-unsafe reward types. Revalidate from a clean Ray cluster so the 5-minute timeout window no longer wedges at `RewardExecutor: created ... RewardWorker actors` |
 | Qwen3-VL precomputed features fail MRoPE construction | SGLang receives a short tokenizer prompt but a visual grid/features produced from a longer processor-expanded sequence, then fails while building multimodal rotary positions | The precomputed path bypasses SGLang's raw-image processor but still sends tokenizer-only IDs, so prompt positions no longer match the expanded visual placeholder span | Send processor-expanded prompt IDs with precomputed image features and keep tokenizer-only IDs for raw-image/text paths; verify the prompt length, visual grid, and feature-token count together |
 | Megatron precomputed Qwen3-VL DeepStack streams are missing | Evaluation and rollout complete, but actor-forward fails because the batch contains `deepstack_visual_embeds_0..N` while the model wrapper expects one ordered `deepstack_visual_embeds` container | The transport preserves streams as numbered fields, but the Megatron model-instance boundary does not assemble them according to `deepstack_visual_indexes` | Assemble numbered streams in configured index order before the original model forward; reject missing indexes and mixed numbered/tuple inputs explicitly |
-| SGLang parses but ignores precomputed multimodal embeddings | CPU feature encoding, caching, transport, rollout, and training all complete, yet live CPU behavior remains at chance or develops an action bias despite standalone native/precomputed logit parity | SGLang's generic transformers multimodal wrapper parses `item.precomputed_embeddings`, but its normal forward only gathers raw `item.feature` values and never injects the precomputed final and DeepStack streams into the language model | Add an explicit all-precomputed prefill adapter at the language-model boundary, preserve the native/decode paths, reject mixed representations, and require deterministic live native-versus-precomputed logit parity before performance testing |
-| CPU vision cache hits but rollout remains slow | CPU cache hit rate is high and backend encode work is modest, yet rollout/evaluation is much slower than native and SGLang may log transient router send warnings | The CPU cache avoids encoder execution only; scalar branching and nested numeric JSON can still multiply downstream feature transport | Measure raw/on-wire bytes and timing; group eligible branches, use stateless packed BF16, and consider a bounded binary/ID registry only if remaining cross-request traffic still dominates |
+| SGLang parses but ignores precomputed multimodal embeddings | CPU feature encoding, caching, transport, rollout, and training all complete, yet live CPU behavior remains at chance or develops an action bias despite standalone GPU/CPU-precomputed logit parity | SGLang's generic transformers multimodal wrapper parses `item.precomputed_embeddings`, but its normal forward only gathers raw `item.feature` values and never injects the precomputed final and DeepStack streams into the language model | Add an explicit all-precomputed prefill adapter at the language-model boundary, preserve the raw-image/decode paths, reject mixed representations, and require deterministic live GPU-versus-CPU-precomputed logit parity before performance testing |
+| CPU vision cache hits but rollout remains slow | CPU cache hit rate is high and backend encode work is modest, yet rollout/evaluation is much slower than GPU and SGLang may log transient router send warnings | The CPU cache avoids encoder execution only; scalar branching and nested numeric JSON can still multiply downstream feature transport | Measure raw/on-wire bytes and timing; group eligible branches, use stateless packed BF16, and consider a bounded binary/ID registry only if remaining cross-request traffic still dominates |
+| RCCL bind collision appears on the first lazy weight broadcast | SGLang accepts process-group initialization, but the first distributed weight update returns `400`, reports `Call to bind failed : Address already in use`, and warns that model weights are partially updated | Group initialization did not exercise the first collective, and the selected rendezvous port collided when the lazy RCCL broadcast actually bound its sockets; initialization-only retries cannot recover a contaminated model runner | Reject the profile, discard the partially updated model state, destroy the complete actor/SGLang update group, choose a fresh port, reload one complete weight snapshot, and require a successful real broadcast before resuming generation |
+| Monitoring exits the Slurm allocation control shell | A GPU run disappears without a training traceback and its artifact directory contains only startup or partial-profile files | A fallible observation command ran in the shell that owned the interactive allocation under error-exit behavior; a missing startup log returned nonzero, exited the shell, and Slurm terminated the allocation | Keep the allocation-owning shell durable; run monitoring from another shell or tmux client and explicitly tolerate files that do not exist yet |
 
 ## Qwen3-VL precomputed features fail MRoPE construction
 
@@ -179,12 +181,12 @@ The precomputed-feature path appears healthy at every structural level:
 - SGLang accepts the requests;
 - rollout, transfer queue, Megatron actor-forward, optimizer updates, and
   weight synchronization complete; and
-- GPU visual weights can be omitted without a runtime error.
+- The GPU vision encoder can be skipped without a runtime error.
 
-Despite this, a task with a passing standalone native-versus-precomputed logit
+Despite this, a task with a passing standalone GPU-versus-CPU-precomputed logit
 comparison falls to chance or develops a large action bias only in live
-SGLang. In the Qwen3-VL visual-XOR case, the historical CPU-omitted evaluation
-scored `0.5000` with action-A rate `0.7148`, while native GPU vision scored
+SGLang. In the Qwen3-VL visual-XOR case, the historical CPU with GPU encoder skipped evaluation
+scored `0.5000` with action-A rate `0.7148`, while GPU vision scored
 `0.6816` with action-A rate `0.4980`.
 
 ### Cause
@@ -212,8 +214,8 @@ language-model boundary.
    positions.
 5. Call the language model with the matching visual-position mask and ordered
    `deepstack_visual_embeds`.
-6. Preserve the established native-image and decode paths, and fail explicitly
-   for mixed native/precomputed batches rather than selecting one silently.
+6. Preserve the established GPU-image and decode paths, and fail explicitly
+   for mixed GPU/CPU-precomputed batches rather than selecting one silently.
 7. Run the fixed-input live parity probe before interpreting stochastic reward
    or starting performance benchmarks.
 
@@ -231,9 +233,9 @@ payload produced -> transported -> parsed -> injected into model -> logits match
 ```
 
 Do not infer the last two gates from cache hits, request success, model-weight
-omission, or a completed RL cycle. Freeze the checkpoint, prompt,
+skipping the GPU encoder, or a completed RL cycle. Freeze the checkpoint, prompt,
 processor-expanded token sequence, image, sampling configuration, and policy
-version; then compare native and precomputed outputs inside the actual live
+version; then compare GPU and CPU-precomputed outputs inside the actual live
 backend.
 
 ### Related
@@ -256,7 +258,7 @@ backend.
 
 The frozen CPU vision service reports a high hit rate and relatively little
 backend encode time, but precomputed-feature evaluation or rollout remains
-substantially slower than native GPU vision. SGLang may also emit intermittent
+substantially slower than GPU vision. SGLang may also emit intermittent
 router messages such as:
 
 ```text
@@ -295,14 +297,14 @@ sizes.
    response cardinality.
 6. Replace nested numeric features with stateless contiguous BF16 bytes in the
    existing JSON envelope. Validate dtype, shape, exact byte count, BF16 bit
-   identity, the early SGLang processor seam, native-media bypass, and live
-   native-versus-precomputed parity.
+   identity, the early SGLang processor seam, GPU-media bypass, and live
+   GPU-versus-CPU-precomputed parity.
 7. Re-measure cross-request traffic. Only if it remains material, register each
    immutable feature once in a bounded SGLang-side registry using `feature_id`
    plus `vision_revision`, binary or shared-memory upload, and ID-only repeated
    generation requests.
 8. A registry must fail explicitly on missing IDs, revision/shape mismatches,
-   wrong-engine routing, and eviction. Rerun native, resident, and omitted modes
+   wrong-engine routing, and eviction. Rerun GPU, CPU with GPU encoder kept, and CPU with GPU encoder skipped modes
    under the same workload.
 
 ### Prevention
@@ -317,9 +319,141 @@ transport has been removed or shown not to dominate.
 
 - Skill: `model-integration`
 - Performance report:
-  `training_reports/2026-08-01-qwen3-vl-corrected-three-mode-performance.md`
+  `training_reports/2026-08-01-qwen3-vl-gpu-cpu-vision-performance.md`
 - Packed-transport report:
   `training_reports/2026-08-04-qwen3-vl-packed-cpu-vision-transport.md`
+- Retrospective: `references/experiment-log.md`
+
+## RCCL bind collision appears on the first lazy weight broadcast
+
+**Added:** 2026-08-27
+**Domain:** research
+
+### Symptom
+
+The SGLang endpoint accepts custom process-group initialization:
+
+```text
+POST /init_weights_update_group HTTP/1.1" 200 OK
+```
+
+The first lazy distributed weight update then fails:
+
+```text
+Failed to update parameter online: NCCL error ... unhandled system error
+ncclSystemError: System call ... failed
+Call to bind failed : Address already in use. The full weights of the
+ModelRunner are partially updated. Please discard the whole weights.
+POST /update_weights_from_distributed HTTP/1.1" 400 Bad Request
+```
+
+Rollout health requests may continue to return `200`, while the actor stops
+making progress and rollout waits for old transfer-queue partitions to drain.
+That health traffic does not make the partially updated policy usable.
+
+### Cause
+
+The update-group initialization request created the logical group but did not
+prove that its first RCCL collective could bind and communicate successfully.
+In the observed run, the first lazy broadcast on port `11963` encountered an
+intermittent bind collision. The existing bounded retries covered group
+initialization, not the first tensor collective. Once SGLang reports a partial
+weight update, retrying only the failed request cannot restore a known model
+state.
+
+### Solution
+
+1. Confirm the ordering: successful group initialization, followed by the
+   first update failure and an explicit partial-model warning.
+2. Mark the current profile invalid immediately. Do not analyze later health
+   traffic or completed cycles from that profile as a successful run.
+3. Stop generation and discard the affected SGLang model runner. Destroy the
+   complete actor/SGLang update group rather than retrying the remaining
+   tensors on the existing group.
+4. Select a fresh rendezvous port, recreate both sides of the group, and load
+   one complete actor weight snapshot from the beginning.
+5. Require one successful real weight broadcast plus a generation-health probe
+   before releasing rollout. If whole-group recreation is not implemented,
+   reject the profile and restart its owned Ray/SGLang runtime.
+
+### Prevention
+
+Extend future update-group health and retry logic through the first real
+collective. Treat every distributed weight update as atomic from the policy's
+point of view: an error after any tensor begins updating contaminates the
+rollout model and requires complete reload. Record the selected port and check
+same-user listeners when the collision recurs; do not infer safety from the
+initialization endpoint alone.
+
+### Related
+
+- Skill: `model-integration`
+- Rejected log:
+  `benchmark_results/cpu_vision/full_dataset_preload_20260827_074743/repeat_1_full_dataset.console.log`
+- Accepted rerun and decision:
+  `training_reports/2026-08-26-qwen3-vl-preload-all-vision-features.md`
+- Retrospective: `references/experiment-log.md`
+
+## Monitoring exits the Slurm allocation control shell
+
+**Added:** 2026-08-27
+**Domain:** research
+
+### Symptom
+
+An interactive Slurm allocation and all of its GPU processes disappear without
+a corresponding training exception. The experiment directory contains only
+provenance and a partial profile, for example `B0_U`, and lacks the remaining
+matrix entries and final analysis artifact.
+
+The triggering observation command attempted to inspect `driver.log` before
+that file existed and returned nonzero. Because it ran in the allocation's
+controlling shell under error-exit behavior, the shell exited and Slurm tore
+down the allocation.
+
+### Cause
+
+For an interactive `srun --pty` allocation, the controlling shell is part of
+the allocation lifetime. A monitoring command is not read-only with respect to
+that lifetime when its failure can terminate the shell. Startup artifacts are
+eventually created, so an absent log is normal transient state rather than a
+reason to exit the allocation.
+
+### Solution
+
+1. Keep the allocation-owning shell alive and use it only to start or stop the
+   intended workload.
+2. Run `tail`, `rg`, process inspection, and artifact checks from another login
+   shell or a separate tmux client attached to the node.
+3. Guard startup files explicitly before reading them:
+
+```bash
+if [[ -f "${ARTIFACT_DIR}/driver.log" ]]; then
+  tail -n 80 "${ARTIFACT_DIR}/driver.log"
+fi
+```
+
+4. When a search legitimately permits no matches, handle that status locally
+   rather than allowing it to escape into the allocation-control shell.
+5. Before accepting a run after any shell interruption, require the complete
+   manifest, all expected profiles, the checked analysis artifact, lifecycle
+   markers, and owned-runtime cleanup.
+
+### Prevention
+
+Treat observation commands as fallible. Separate allocation ownership from
+monitoring, and never depend on a not-yet-created file in an unguarded command
+under `set -e`. Keep foreground validation bounded, then run the full study in
+the documented tmux or batch flow so a disconnected client does not own the
+training lifetime.
+
+### Related
+
+- Incomplete artifact:
+  `benchmark_results/cpu_vision/full_dataset_preload_retry_20260827_081032`
+- Execution discipline: `AGENTS.md#execution-discipline`
+- Accepted rerun and decision:
+  `training_reports/2026-08-26-qwen3-vl-preload-all-vision-features.md`
 - Retrospective: `references/experiment-log.md`
 
 ## Qwen3 mock overnight judged healthy before first checkpoint

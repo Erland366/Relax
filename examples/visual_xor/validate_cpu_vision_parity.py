@@ -1,4 +1,4 @@
-"""Validate local Qwen3-VL CPU vision features against the native GPU path."""
+"""Validate local Qwen3-VL CPU vision features against the GPU path."""
 
 import argparse
 import io
@@ -115,7 +115,7 @@ def _positive_int(value: str) -> int:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the explicit inputs needed for a reproducible local parity run."""
     parser = argparse.ArgumentParser(
-        description="Compare Qwen3-VL native GPU vision with frozen CPU precomputed features."
+        description="Compare Qwen3-VL GPU vision with frozen CPU-precomputed features."
     )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--dataset", required=True)
@@ -221,7 +221,7 @@ def _feature_streams(features: Qwen3VLFrozenVisionFeatures) -> dict[str, torch.T
     return streams
 
 
-def _native_gpu_features(
+def _gpu_features(
     model: Any,
     *,
     pixel_values: torch.Tensor,
@@ -255,7 +255,7 @@ def run_local_hf_parity(
     device: str,
     num_images: int,
 ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
-    """Run deterministic native-GPU versus frozen-CPU Qwen3-VL parity."""
+    """Run deterministic GPU-encoded versus CPU-precomputed Qwen3-VL parity."""
     from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
     checkpoint_path = Path(checkpoint)
@@ -306,7 +306,7 @@ def run_local_hf_parity(
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
         )
-        gpu_features = _native_gpu_features(
+        gpu_features = _gpu_features(
             model,
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
@@ -318,7 +318,7 @@ def run_local_hf_parity(
 
         gpu_inputs = _to_device_inputs(cpu_inputs, requested_device)
         with torch.inference_mode():
-            native_output = model(**gpu_inputs, use_cache=False, logits_to_keep=1)
+            gpu_output = model(**gpu_inputs, use_cache=False, logits_to_keep=1)
             precomputed_output = forward_with_precomputed_qwen3_vl_features(
                 model,
                 {
@@ -328,7 +328,7 @@ def run_local_hf_parity(
                 },
                 cpu_features,
             )
-        reference_logits.append(native_output.logits[:, -1, :].detach().to(device="cpu", dtype=torch.float64))
+        reference_logits.append(gpu_output.logits[:, -1, :].detach().to(device="cpu", dtype=torch.float64))
         candidate_logits.append(precomputed_output[:, -1, :].detach().to(device="cpu", dtype=torch.float64))
         feature_ids.append(cpu_features.feature_id)
 

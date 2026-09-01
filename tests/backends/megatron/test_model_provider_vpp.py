@@ -155,8 +155,8 @@ def _bridge_args(**overrides):
         "freeze_language_model": False,
         "freeze_vision_model": False,
         "freeze_vision_projection": False,
-        "vision_encoder_backend": "disabled",
-        "vision_encoder_omit_gpu_weights": False,
+        "vision_encoder_device": "gpu",
+        "skip_gpu_vision_encoder": False,
         "vision_dp_when_tp": False,
         "calculate_per_token_loss": False,
         "num_layers": 8,
@@ -182,7 +182,7 @@ def test_bridge_provider_receives_virtual_pipeline_size(monkeypatch):
     assert provider.calls == [{"pre_process": True, "post_process": False, "vp_stage": 1}]
 
 
-def test_bridge_omit_mode_disables_encoder_before_finalize_and_installs_parameterless_sentinel(monkeypatch):
+def test_bridge_skip_gpu_encoder_mode_installs_parameterless_guard(monkeypatch):
     class Model(torch.nn.Module):
         image_token_id = 99
 
@@ -218,8 +218,8 @@ def test_bridge_omit_mode_disables_encoder_before_finalize_and_installs_paramete
     module, provider = _load_model_provider(monkeypatch, provider=Provider())
     model_provider = module.get_model_provider_func(
         _bridge_args(
-            vision_encoder_backend="pytorch",
-            vision_encoder_omit_gpu_weights=True,
+            vision_encoder_device="cpu",
+            skip_gpu_vision_encoder=True,
             freeze_vision_model=True,
             freeze_vision_projection=True,
             pipeline_model_parallel_size=1,
@@ -234,7 +234,7 @@ def test_bridge_omit_mode_disables_encoder_before_finalize_and_installs_paramete
     assert provider.add_encoder_at_provide is False
     assert model.vision_model is not None
     assert list(model.vision_model.parameters()) == []
-    with pytest.raises(RuntimeError, match="omitted.*precomputed"):
+    with pytest.raises(RuntimeError, match="GPU vision encoder was skipped; provide precomputed"):
         model.vision_model(
             hidden_states=torch.empty((16, 1)),
             grid_thw=torch.tensor([[1, 4, 4]], dtype=torch.int64),
@@ -253,13 +253,13 @@ def test_bridge_omit_mode_disables_encoder_before_finalize_and_installs_paramete
     assert all(actual is expected for actual, expected in zip(output[1], deepstack, strict=True))
 
 
-def test_bridge_resident_mode_keeps_encoder_enabled_and_model_unchanged(monkeypatch):
-    resident_vision = torch.nn.Linear(2, 2)
+def test_bridge_keep_gpu_encoder_mode_keeps_encoder_enabled_and_model_unchanged(monkeypatch):
+    gpu_vision = torch.nn.Linear(2, 2)
 
     class Model(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            self.vision_model = resident_vision
+            self.vision_model = gpu_vision
 
         def forward(self, *args, **kwargs):
             return self.vision_model(*args, **kwargs)
@@ -283,8 +283,8 @@ def test_bridge_resident_mode_keeps_encoder_enabled_and_model_unchanged(monkeypa
     module, provider = _load_model_provider(monkeypatch, provider=Provider())
     model_provider = module.get_model_provider_func(
         _bridge_args(
-            vision_encoder_backend="pytorch",
-            vision_encoder_omit_gpu_weights=False,
+            vision_encoder_device="cpu",
+            skip_gpu_vision_encoder=False,
             pipeline_model_parallel_size=1,
             virtual_pipeline_model_parallel_size=None,
         ),
@@ -294,8 +294,8 @@ def test_bridge_resident_mode_keeps_encoder_enabled_and_model_unchanged(monkeypa
     provided = model_provider(pre_process=True, post_process=True)
 
     assert provider.add_encoder_at_finalize is True
-    assert provided.vision_model is resident_vision
-    assert list(provided.vision_model.parameters()) == list(resident_vision.parameters())
+    assert provided.vision_model is gpu_vision
+    assert list(provided.vision_model.parameters()) == list(gpu_vision.parameters())
 
 
 def test_wrapper_derives_vp_stage_from_parallel_state(monkeypatch):

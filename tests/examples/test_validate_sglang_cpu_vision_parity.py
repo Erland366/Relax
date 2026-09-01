@@ -65,7 +65,7 @@ def test_extract_next_token_result_rejects_incomplete_sglang_metadata(response, 
 
 def test_compare_sglang_results_builds_passing_raw_artifact(tmp_path):
     output = tmp_path / "nested" / "sglang-parity.json"
-    native = [
+    GPU = [
         parity_cli.extract_next_token_result(
             _response(generated_token_id=32, a_logprob=-0.25, b_logprob=-1.5),
             action_a_token_id=32,
@@ -82,7 +82,7 @@ def test_compare_sglang_results_builds_passing_raw_artifact(tmp_path):
 
     artifact = parity_cli.write_sglang_parity_artifact(
         output,
-        native_results=native,
+        gpu_results=GPU,
         precomputed_results=precomputed,
         sample_ids=["sample-1"],
         feature_ids=["feature-1"],
@@ -97,12 +97,12 @@ def test_compare_sglang_results_builds_passing_raw_artifact(tmp_path):
     assert artifact["summary"]["max_action_margin_absolute_delta"] == pytest.approx(0.002)
     assert artifact["samples"][0]["sample_id"] == "sample-1"
     assert artifact["samples"][0]["feature_id"] == "feature-1"
-    assert artifact["samples"][0]["native"] == native[0]
+    assert artifact["samples"][0]["gpu"] == GPU[0]
     assert artifact["samples"][0]["precomputed"] == precomputed[0]
 
 
 def test_compare_sglang_results_fails_on_generated_token_or_margin_divergence(tmp_path):
-    native = [
+    GPU = [
         parity_cli.extract_next_token_result(
             _response(generated_token_id=32, a_logprob=-0.1, b_logprob=-2.0),
             action_a_token_id=32,
@@ -119,7 +119,7 @@ def test_compare_sglang_results_fails_on_generated_token_or_margin_divergence(tm
 
     artifact = parity_cli.write_sglang_parity_artifact(
         tmp_path / "sglang-parity.json",
-        native_results=native,
+        gpu_results=GPU,
         precomputed_results=precomputed,
         sample_ids=["sample-1"],
         feature_ids=["feature-1"],
@@ -135,7 +135,7 @@ def test_compare_sglang_results_rejects_misaligned_inputs(tmp_path):
     with pytest.raises(ValueError, match="same non-zero length"):
         parity_cli.write_sglang_parity_artifact(
             tmp_path / "sglang-parity.json",
-            native_results=[{}],
+            gpu_results=[{}],
             precomputed_results=[],
             sample_ids=["sample-1"],
             feature_ids=["feature-1"],
@@ -181,7 +181,7 @@ def test_summarize_parallel_sampling_rejects_wrong_response_count():
         )
 
 
-def test_live_probe_groups_and_reports_native_and_precomputed_parallel_sampling(tmp_path, monkeypatch):
+def test_live_probe_groups_and_reports_gpu_and_precomputed_parallel_sampling(tmp_path, monkeypatch):
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()
     dataset = tmp_path / "eval.parquet"
@@ -227,7 +227,7 @@ def test_live_probe_groups_and_reports_native_and_precomputed_parallel_sampling(
     precomputed_module = ModuleType("relax.engine.rollout.precomputed_vision")
     precomputed_module.serialize_sglang_precomputed_image_data = lambda value: {"format": "packed"}
     processing_module = ModuleType("relax.utils.data.processing_utils")
-    processing_module.encode_image_for_rollout_engine = lambda image: {"format": "native"}
+    processing_module.encode_image_for_rollout_engine = lambda image: {"format": "gpu"}
     for name, module in {
         "torch": torch_module,
         "transformers": transformers_module,
@@ -275,8 +275,8 @@ def test_live_probe_groups_and_reports_native_and_precomputed_parallel_sampling(
 
     grouped_requests = [request for request in requests if request["sampling_params"].get("n") == 3]
     assert len(grouped_requests) == 2
-    assert {request["image_data"][0]["format"] for request in grouped_requests} == {"native", "packed"}
-    for artifact_key in ("native_parallel_sampling", "parallel_sampling"):
+    assert {request["image_data"][0]["format"] for request in grouped_requests} == {"gpu", "packed"}
+    for artifact_key in ("gpu_parallel_sampling", "parallel_sampling"):
         comparison = artifact[artifact_key]
         assert comparison["passed"] is True
         assert comparison["summary"]["generation_requests"] == 1

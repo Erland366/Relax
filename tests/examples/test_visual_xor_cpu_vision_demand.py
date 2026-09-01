@@ -30,11 +30,11 @@ def _write_cycle(log_path, cycle, *, unique_images, requests, step_time, wait_ra
         )
 
 
-def test_analyze_e1_demand_uses_paired_steady_cycles_and_reports_accounting(tmp_path):
-    from examples.visual_xor.analyze_cpu_vision_demand import analyze_e1_demand, write_demand_artifact
+def test_measure_cpu_vision_demand_uses_paired_steady_cycles_and_reports_accounting(tmp_path):
+    from examples.visual_xor.measure_cpu_vision_demand import measure_cpu_vision_demand, write_demand_artifact
 
-    d2_log = tmp_path / "e1_d2.console.log"
-    d3_log = tmp_path / "e1_d3.console.log"
+    d2_log = tmp_path / "cpu_vision_demand_d2.console.log"
+    d3_log = tmp_path / "cpu_vision_demand_d3.console.log"
     for cycle in range(4):
         _write_cycle(
             d2_log,
@@ -53,21 +53,21 @@ def test_analyze_e1_demand_uses_paired_steady_cycles_and_reports_accounting(tmp_
             wait_ratio=0.01,
         )
 
-    result = analyze_e1_demand(
-        {"D2": d2_log, "D3": d3_log},
+    result = measure_cpu_vision_demand(
+        {"prompts32_samples2": d2_log, "prompts64_samples1": d3_log},
         first_steady_cycle=2,
         expected_steady_cycles=2,
-        saturation_profile="D2",
+        required_high_demand_setting="prompts32_samples2",
         actor_wait_threshold=0.05,
     )
 
     assert result["peak_unique_images_per_second"] == pytest.approx(6.4)
     assert result["capacity_target_images_per_second"] == pytest.approx(8.0)
-    assert result["saturation_profile_reached_actor_wait_gate"] is False
-    assert result["profiles"]["D2"]["peak_unique_images_per_second"] == pytest.approx(4.0)
-    assert result["profiles"]["D2"]["exact_request_accounting"] is True
-    assert result["profiles"]["D3"]["exact_request_accounting"] is False
-    assert result["profiles"]["D3"]["extra_requests"] == 1
+    assert result["required_high_demand_setting_reached_actor_wait_gate"] is False
+    assert result["profiles"]["prompts32_samples2"]["peak_unique_images_per_second"] == pytest.approx(4.0)
+    assert result["profiles"]["prompts32_samples2"]["exact_request_accounting"] is True
+    assert result["profiles"]["prompts64_samples1"]["exact_request_accounting"] is False
+    assert result["profiles"]["prompts64_samples1"]["extra_requests"] == 1
 
     output_path = tmp_path / "demand.json"
     artifact = write_demand_artifact(output_path, result)
@@ -75,10 +75,10 @@ def test_analyze_e1_demand_uses_paired_steady_cycles_and_reports_accounting(tmp_
     assert json.loads(output_path.read_text()) == artifact
 
 
-def test_analyze_e1_demand_fails_when_a_steady_actor_cycle_is_missing(tmp_path):
-    from examples.visual_xor.analyze_cpu_vision_demand import analyze_e1_demand
+def test_measure_cpu_vision_demand_fails_when_a_steady_training_cycle_is_missing(tmp_path):
+    from examples.visual_xor.measure_cpu_vision_demand import measure_cpu_vision_demand
 
-    log_path = tmp_path / "e1_d2.console.log"
+    log_path = tmp_path / "cpu_vision_demand_d2.console.log"
     _write_cycle(log_path, 2, unique_images=32, requests=32, step_time=10.0, wait_ratio=0.01)
     with log_path.open("a") as output:
         output.write(
@@ -94,10 +94,10 @@ def test_analyze_e1_demand_fails_when_a_steady_actor_cycle_is_missing(tmp_path):
         )
 
     with pytest.raises(ValueError, match="paired steady cycles"):
-        analyze_e1_demand(
-            {"D2": log_path},
+        measure_cpu_vision_demand(
+            {"prompts32_samples2": log_path},
             first_steady_cycle=2,
             expected_steady_cycles=2,
-            saturation_profile="D2",
+            required_high_demand_setting="prompts32_samples2",
             actor_wait_threshold=0.05,
         )

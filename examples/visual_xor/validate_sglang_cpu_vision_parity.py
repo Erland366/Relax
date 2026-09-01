@@ -1,4 +1,4 @@
-"""Compare live SGLang native and CPU-precomputed Qwen3-VL next-token scores."""
+"""Compare live SGLang GPU and CPU-precomputed Qwen3-VL next-token scores."""
 
 import argparse
 import json
@@ -38,7 +38,7 @@ def _nonnegative_int(value: str) -> int:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the explicit inputs needed for a reproducible live SGLang probe."""
     parser = argparse.ArgumentParser(
-        description="Compare native GPU vision and CPU-precomputed Qwen3-VL scores in one SGLang server."
+        description="Compare GPU vision and CPU-precomputed Qwen3-VL scores in one SGLang server."
     )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--dataset", required=True)
@@ -134,7 +134,7 @@ def _extract_next_token_results(
 def write_sglang_parity_artifact(
     output: str | Path,
     *,
-    native_results: Sequence[Mapping[str, Any]],
+    gpu_results: Sequence[Mapping[str, Any]],
     precomputed_results: Sequence[Mapping[str, Any]],
     sample_ids: Sequence[str],
     feature_ids: Sequence[str],
@@ -142,13 +142,13 @@ def write_sglang_parity_artifact(
 ) -> dict[str, Any]:
     """Write raw per-sample scores plus explicit deterministic parity gates."""
     lengths = {
-        len(native_results),
+        len(gpu_results),
         len(precomputed_results),
         len(sample_ids),
         len(feature_ids),
     }
     if lengths == {0} or len(lengths) != 1:
-        raise ValueError("native, precomputed, sample ID, and feature ID inputs must have the same non-zero length")
+        raise ValueError("GPU, precomputed, sample ID, and feature ID inputs must have the same non-zero length")
 
     samples = []
     generated_token_matches = 0
@@ -156,24 +156,24 @@ def write_sglang_parity_artifact(
     action_logprob_deltas = []
     action_margin_deltas = []
     action_probability_deltas = []
-    for sample_id, feature_id, native, precomputed in zip(
+    for sample_id, feature_id, GPU, precomputed in zip(
         sample_ids,
         feature_ids,
-        native_results,
+        gpu_results,
         precomputed_results,
         strict=True,
     ):
-        generated_token_match = native["generated_token_id"] == precomputed["generated_token_id"]
-        text_match = native["text"] == precomputed["text"]
+        generated_token_match = GPU["generated_token_id"] == precomputed["generated_token_id"]
+        text_match = GPU["text"] == precomputed["text"]
         generated_token_matches += int(generated_token_match)
         text_matches += int(text_match)
         per_action_deltas = {
-            "action_a": abs(native["action_a_logprob"] - precomputed["action_a_logprob"]),
-            "action_b": abs(native["action_b_logprob"] - precomputed["action_b_logprob"]),
+            "action_a": abs(GPU["action_a_logprob"] - precomputed["action_a_logprob"]),
+            "action_b": abs(GPU["action_b_logprob"] - precomputed["action_b_logprob"]),
         }
         action_logprob_deltas.extend(per_action_deltas.values())
-        action_margin_delta = abs(native["action_margin"] - precomputed["action_margin"])
-        action_probability_delta = abs(native["action_a_probability"] - precomputed["action_a_probability"])
+        action_margin_delta = abs(GPU["action_margin"] - precomputed["action_margin"])
+        action_probability_delta = abs(GPU["action_a_probability"] - precomputed["action_a_probability"])
         action_margin_deltas.append(action_margin_delta)
         action_probability_deltas.append(action_probability_delta)
         samples.append(
@@ -185,7 +185,7 @@ def write_sglang_parity_artifact(
                 "action_logprob_absolute_delta": per_action_deltas,
                 "action_margin_absolute_delta": action_margin_delta,
                 "action_probability_absolute_delta": action_probability_delta,
-                "native": dict(native),
+                "gpu": dict(GPU),
                 "precomputed": dict(precomputed),
             }
         )
@@ -438,7 +438,7 @@ def run_sglang_parity(
     base_gpu_id: int,
     parallel_samples: int,
 ) -> dict[str, Any]:
-    """Run native and precomputed requests against the same live SGLang model."""
+    """Run GPU and precomputed requests against the same live SGLang model."""
     import torch
     from transformers import AutoProcessor
 
@@ -473,15 +473,15 @@ def run_sglang_parity(
     cpu_backend = build_qwen3_vl_cpu_vision_backend(checkpoint_path)
 
     os.environ["RELAX_SGLANG_QWEN3_VL_PRECOMPUTED_VISION"] = "1"
-    os.environ.pop("RELAX_SGLANG_QWEN3_VL_OMIT_GPU_WEIGHTS", None)
+    os.environ.pop("RELAX_SGLANG_QWEN3_VL_SKIP_GPU_VISION_ENCODER", None)
     server_process = launch_server_process(
         _server_args(checkpoint_path, host=host, port=port, base_gpu_id=base_gpu_id)
     )
     server_url = f"http://{host}:{port}"
-    native_results = []
-    native_scalar_request_body_bytes = []
-    native_parallel_results = []
-    native_parallel_request_body_bytes = []
+    gpu_results = []
+    gpu_scalar_request_body_bytes = []
+    gpu_parallel_results = []
+    gpu_parallel_request_body_bytes = []
     precomputed_results = []
     scalar_request_body_bytes = []
     parallel_results = []
@@ -490,52 +490,52 @@ def run_sglang_parity(
     try:
         for image in images:
             prompt, model_inputs = _build_prompt_and_inputs(processor, image)
-            native_payload = {
+            gpu_payload = {
                 "input_ids": processor.tokenizer.encode(prompt, add_special_tokens=False),
                 "image_data": [encode_image_for_rollout_engine(image)],
                 "sampling_params": {"max_new_tokens": 1, "temperature": 0.0},
                 "return_logprob": True,
                 "token_ids_logprob": [action_a_token_id, action_b_token_id],
             }
-            native_response, native_scalar_body_bytes = _post_generate(server_url, native_payload)
-            if not isinstance(native_response, dict):
+            gpu_response, gpu_scalar_body_bytes = _post_generate(server_url, gpu_payload)
+            if not isinstance(gpu_response, dict):
                 raise TypeError(
-                    f"SGLang scalar native request must return an object, got {type(native_response).__name__}"
+                    f"SGLang scalar GPU request must return an object, got {type(gpu_response).__name__}"
                 )
-            native_results.append(
+            gpu_results.append(
                 extract_next_token_result(
-                    native_response,
+                    gpu_response,
                     action_a_token_id=action_a_token_id,
                     action_b_token_id=action_b_token_id,
                 )
             )
-            native_scalar_request_body_bytes.append(native_scalar_body_bytes)
+            gpu_scalar_request_body_bytes.append(gpu_scalar_body_bytes)
             _flush_cache(server_url)
             if parallel_samples > 1:
-                native_parallel_payload = _with_parallel_sampling(native_payload, parallel_samples)
-                native_parallel_response, native_parallel_body_bytes = _post_generate(
-                    server_url, native_parallel_payload
+                gpu_parallel_payload = _with_parallel_sampling(gpu_payload, parallel_samples)
+                gpu_parallel_response, gpu_parallel_body_bytes = _post_generate(
+                    server_url, gpu_parallel_payload
                 )
-                if not isinstance(native_parallel_response, list):
+                if not isinstance(gpu_parallel_response, list):
                     raise TypeError(
-                        "SGLang parallel native request must return a list, "
-                        f"got {type(native_parallel_response).__name__}"
+                        "SGLang parallel GPU request must return a list, "
+                        f"got {type(gpu_parallel_response).__name__}"
                     )
-                if len(native_parallel_response) != parallel_samples:
+                if len(gpu_parallel_response) != parallel_samples:
                     raise ValueError(
-                        "SGLang parallel native response count mismatch: "
-                        f"expected {parallel_samples}, got {len(native_parallel_response)}"
+                        "SGLang parallel GPU response count mismatch: "
+                        f"expected {parallel_samples}, got {len(gpu_parallel_response)}"
                     )
-                if any(not isinstance(branch, Mapping) for branch in native_parallel_response):
-                    raise TypeError("SGLang parallel native response branches must be objects")
-                native_parallel_results.append(
+                if any(not isinstance(branch, Mapping) for branch in gpu_parallel_response):
+                    raise TypeError("SGLang parallel GPU response branches must be objects")
+                gpu_parallel_results.append(
                     _extract_next_token_results(
-                        native_parallel_response,
+                        gpu_parallel_response,
                         action_a_token_id=action_a_token_id,
                         action_b_token_id=action_b_token_id,
                     )
                 )
-                native_parallel_request_body_bytes.append(native_parallel_body_bytes)
+                gpu_parallel_request_body_bytes.append(gpu_parallel_body_bytes)
                 _flush_cache(server_url)
 
             features = cpu_backend.encode(
@@ -590,7 +590,7 @@ def run_sglang_parity(
 
     artifact = write_sglang_parity_artifact(
         output,
-        native_results=native_results,
+        gpu_results=gpu_results,
         precomputed_results=precomputed_results,
         sample_ids=sample_ids,
         feature_ids=feature_ids,
@@ -609,11 +609,11 @@ def run_sglang_parity(
         },
     )
     if parallel_samples > 1:
-        native_parallel_sampling = summarize_sglang_parallel_sampling(
-            scalar_results=native_results,
-            parallel_results=native_parallel_results,
-            scalar_request_body_bytes=native_scalar_request_body_bytes,
-            parallel_request_body_bytes=native_parallel_request_body_bytes,
+        gpu_parallel_sampling = summarize_sglang_parallel_sampling(
+            scalar_results=gpu_results,
+            parallel_results=gpu_parallel_results,
+            scalar_request_body_bytes=gpu_scalar_request_body_bytes,
+            parallel_request_body_bytes=gpu_parallel_request_body_bytes,
             parallel_samples=parallel_samples,
         )
         parallel_sampling = summarize_sglang_parallel_sampling(
@@ -623,9 +623,9 @@ def run_sglang_parity(
             parallel_request_body_bytes=parallel_request_body_bytes,
             parallel_samples=parallel_samples,
         )
-        artifact["native_parallel_sampling"] = native_parallel_sampling
+        artifact["gpu_parallel_sampling"] = gpu_parallel_sampling
         artifact["parallel_sampling"] = parallel_sampling
-        artifact["passed"] = artifact["passed"] and native_parallel_sampling["passed"] and parallel_sampling["passed"]
+        artifact["passed"] = artifact["passed"] and gpu_parallel_sampling["passed"] and parallel_sampling["passed"]
         Path(output).write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
     return artifact
 
